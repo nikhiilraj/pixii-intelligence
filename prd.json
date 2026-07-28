@@ -1,0 +1,208 @@
+[
+  {
+    "id": "US-001",
+    "title": "Walking skeleton — backend, frontend, database, CI",
+    "description": "An engineer clones the repo, runs one command, and gets a working stack: a FastAPI backend connected to Postgres, a Next.js frontend that reads from it, and CI that runs typecheck, lint and tests on push. The frontend shows a status page reporting backend reachability and database connectivity. Pin Python to 3.12 explicitly (system default is 3.14). Postgres runs via Docker Compose; the Docker daemon is installed but not running, and Homebrew postgresql@17 is an available fallback. Alembic is wired with an initial empty migration so every later schema change is versioned. Secrets come from the environment; a committed .env.example documents every variable by name and no .env is ever committed.",
+    "acceptanceCriteria": [
+      "One documented command starts backend, frontend and database locally",
+      "Frontend status page shows live backend and database connectivity",
+      "Alembic initialised and an empty baseline migration applies cleanly",
+      ".env.example lists every required variable; .gitignore excludes .env",
+      "CI runs backend typecheck + lint + tests and frontend typecheck + lint on push",
+      "slice tests green"
+    ],
+    "priority": 1,
+    "passes": false
+  },
+  {
+    "id": "US-002",
+    "title": "Corpus ingest from Zernio with paging and failure detection",
+    "description": "An operator triggers ingest and every post Pixii has published is pulled in with its real metrics, visible as a list in the dashboard. Ingest pages with limit=50 because larger values silently return an empty list with HTTP 200; a span over 90 days does the same. Re-running ingest updates existing posts instead of duplicating them. An unexpected empty response is treated as a failure and reported, never as an empty account — this is the exact failure mode that let a wrong assumption survive in the previous tooling. Posts store their platform, content, publish time, media references, external flag and full metric set.",
+    "acceptanceCriteria": [
+      "Ingest pages with limit=50 and retrieves all available posts across pages",
+      "Re-running ingest updates existing posts rather than creating duplicates",
+      "An unexpected empty response is surfaced as a failure, not an empty result",
+      "Posts persist platform, content, published_at, media refs, isExternal and all metrics",
+      "Frontend lists ingested posts with their metrics",
+      "slice tests green"
+    ],
+    "priority": 2,
+    "passes": false
+  },
+  {
+    "id": "US-003",
+    "title": "Media download and single-post detail view",
+    "description": "An operator opens any post and sees its full text, its image or video, its metrics and its publication details on one page. Post media is downloaded from Zernio and stored locally so visual patterns can be studied offline and referenced by the template library. Media download failures degrade gracefully — the post is still usable without its media.",
+    "acceptanceCriteria": [
+      "Post media downloads and is stored locally, keyed to its post",
+      "A media download failure does not fail the ingest of that post",
+      "Post detail page shows full text, media, all metrics and publication details",
+      "slice tests green"
+    ],
+    "priority": 3,
+    "passes": false
+  },
+  {
+    "id": "US-004",
+    "title": "Template library — model, versioning, lifecycle and editor",
+    "description": "A strategist creates, edits, approves and retires templates in the dashboard. A template has a stable identity, a kind (hook, structure or visual), typed slots, provenance, a lifecycle status and a version. Editing an approved template creates a new version rather than mutating it, so performance already attributed to the earlier version stays attached to it. Retiring preserves history. A template in proposed state cannot be used for generation. This slice also lets a strategist author a template by hand, which is how supplied design specs enter the library later without reopening the design.",
+    "acceptanceCriteria": [
+      "Templates persist with kind, slots, provenance, status and version",
+      "Editing an approved template creates a new version and leaves the prior version intact",
+      "Retiring a template preserves it and its historical attribution",
+      "A proposed template cannot be selected for generation",
+      "Strategist can author, edit, approve and retire templates in the UI",
+      "slice tests green"
+    ],
+    "priority": 4,
+    "passes": false
+  },
+  {
+    "id": "US-005",
+    "title": "Hook template extraction from the winning posts",
+    "description": "A strategist runs extraction and receives 5-10 candidate hook patterns proposed from the corpus, ranked by engaged actions (likes + comments + shares + saves), each showing its slots, its tone, and the specific posts that support it. Nothing enters the library without explicit approval, and every proposal shows its evidence so the abstraction can be checked. Extraction runs against the 27 available LinkedIn posts; creator posts supplied later are absorbed through manual corpus ingest without changing this flow.",
+    "acceptanceCriteria": [
+      "Extraction proposes candidate hook templates with slots, tone and source posts",
+      "Proposals are ranked using engaged actions as the primary measure",
+      "Every proposal shows the corpus posts it was derived from",
+      "A proposal only enters the library on explicit approval",
+      "slice tests green"
+    ],
+    "priority": 5,
+    "passes": false
+  },
+  {
+    "id": "US-006",
+    "title": "Post structure templates for offer-reward and deep-research",
+    "description": "A strategist has two working post structures defined as ordered beginning/middle/end sections with per-section guidance, each declaring which hook kinds pair with it. Both are derived from the corpus and reviewed. This is what gives a draft a shape to follow rather than a vibe.",
+    "acceptanceCriteria": [
+      "Structure templates persist ordered sections with per-section guidance",
+      "offer-reward and deep-research structures exist and are approved",
+      "Each structure declares its compatible hook kinds",
+      "Compatible hooks are surfaced when a structure is selected",
+      "slice tests green"
+    ],
+    "priority": 6,
+    "passes": false
+  },
+  {
+    "id": "US-007",
+    "title": "Visual templates with the html renderer",
+    "description": "A strategist previews a visual template filled with real values and gets a 1080x1350 image matching the brand exactly. Visual templates declare renderer: html or ai. This slice delivers the html path, where typographic frames render deterministically through Cloudflare Browser Rendering with a local headless-browser fallback. At least one template reproduces the established brand layout: cream background, oversized ghosted figure, bold headline, Pixii mark. The html path was verified live on 2026-07-29 and renders exact typography, which is precisely where AI image generation fails.",
+    "acceptanceCriteria": [
+      "Visual templates persist typed slots and a declared renderer",
+      "An html template renders at 1080x1350 with all slot values present and correct",
+      "Renderer selection follows the template's declaration",
+      "A strategist can preview a filled visual template in the UI",
+      "slice tests green"
+    ],
+    "priority": 7,
+    "passes": false
+  },
+  {
+    "id": "US-008",
+    "title": "Visual templates with the ai renderer",
+    "description": "A strategist previews an ai-renderer visual template and gets generated scene or lifestyle imagery, produced from a prompt skeleton plus a style reference that holds it to the brand. This is the second renderer behind the same interface, used where imagery rather than typography is the point. Azure image generation credentials are configured across five regions but have not been exercised live — this slice verifies them first.",
+    "acceptanceCriteria": [
+      "An ai template persists a prompt skeleton and a style reference",
+      "Image generation produces an image at the expected dimensions",
+      "A generation failure is surfaced with its reason rather than producing a blank result",
+      "Both renderers are reachable through one interface, selected by template declaration",
+      "slice tests green"
+    ],
+    "priority": 8,
+    "passes": false
+  },
+  {
+    "id": "US-009",
+    "title": "Directed generation — idea to reviewable draft with lineage",
+    "description": "An operator supplies an idea, topic or source link and gets a complete draft: hook, body and visual, grounded in real corpus exemplars so it reads like Pixii rather than like a language model. The system suggests suitable hook and structure templates and the operator can override any suggestion. Text and visual can be regenerated independently. The draft is stamped at creation with the hook, structure and visual template ids and the versions used, and the operator can see that lineage while reviewing. Nothing leaves the system in this slice.",
+    "acceptanceCriteria": [
+      "An idea produces a draft with hook, body and visual",
+      "Suggested templates are shown and any suggestion can be overridden",
+      "Generation is grounded in corpus exemplars",
+      "Text and visual regenerate independently",
+      "Every draft carries hook, structure and visual template ids with their versions",
+      "Lineage is visible to the operator during review",
+      "slice tests green"
+    ],
+    "priority": 9,
+    "passes": false
+  },
+  {
+    "id": "US-010",
+    "title": "Publish to Zernio as a draft with lineage in metadata",
+    "description": "An operator approves a draft and it appears in Zernio as a draft, never published. Lineage identifiers are written into Zernio's own post metadata as well as the local database, so attribution survives loss of local records. The Zernio post id returned at creation is persisted as the join key. A retry uses the same request id and cannot create a duplicate post. Push failures surface their reason so they can be fixed and retried. This slice must also determine whether the create response's _id matches the analytics payload's _id or its latePostId, since the two differ, and record the finding.",
+    "acceptanceCriteria": [
+      "An approved draft reaches Zernio in draft state and is not published",
+      "Lineage identifiers are present in the outgoing Zernio post metadata",
+      "The Zernio post id from the create response is persisted locally",
+      "A retry with the same request id does not create a second post",
+      "A push failure is surfaced with its reason",
+      "The create-time id is confirmed against the analytics payload and the finding recorded",
+      "slice tests green"
+    ],
+    "priority": 10,
+    "passes": false
+  },
+  {
+    "id": "US-011",
+    "title": "Scheduled analytics sync joined to lineage",
+    "description": "Metrics refresh on a schedule without manual work and attach to the correct posts, and every generated post's performance is automatically attributed to the templates that produced it. Metric history is retained rather than overwritten so a post's engagement accumulation over time is visible. Posts that arrive without lineage — everything historical, and anything Monte writes outside the app — are included in post-level analytics and excluded from template aggregates.",
+    "acceptanceCriteria": [
+      "A scheduled job refreshes post metrics without manual intervention",
+      "Metrics attach to the correct post via the confirmed join key",
+      "Metric snapshots are retained as history rather than overwritten",
+      "Posts without lineage appear in post-level views and are excluded from template aggregates",
+      "Engaged actions is computed as likes + comments + shares + saves",
+      "slice tests green"
+    ],
+    "priority": 11,
+    "passes": false
+  },
+  {
+    "id": "US-012",
+    "title": "Dashboard — post explorer",
+    "description": "An analyst opens one view containing every post with its metrics, filters by channel, date range, post type and template, sorts by any metric, and sees performance charted over time. Posts rank by engaged actions by default, with impressions and engagement rate available as secondary measures. The page is readable on a laptop without horizontal scrolling; wide content scrolls within its own container.",
+    "acceptanceCriteria": [
+      "All posts appear in one view with their metrics",
+      "Filtering by channel, date range, post type and template works",
+      "Sorting by any metric works, defaulting to engaged actions",
+      "Performance over time is charted",
+      "The page has no horizontal body scroll at laptop width",
+      "slice tests green"
+    ],
+    "priority": 12,
+    "passes": false
+  },
+  {
+    "id": "US-013",
+    "title": "Template scoreboard with sample counts and thin-sample flags",
+    "description": "An analyst sees what each hook, structure and visual template has actually done, with its sample count shown beside every aggregate and thin samples visibly flagged, and can click through to the posts behind any number to verify it. The scoreboard deliberately does not rank templates against each other: with roughly three samples per template against a measured 12.7x variance, a ranking would be fitting noise while looking quantitative.",
+    "acceptanceCriteria": [
+      "Each template shows its aggregate performance and its sample count together",
+      "Aggregates below the configured threshold are visibly flagged as insufficient",
+      "Every aggregate links through to the posts behind it",
+      "No automatic ranking or selection of templates is presented",
+      "slice tests green"
+    ],
+    "priority": 13,
+    "passes": false
+  },
+  {
+    "id": "US-014",
+    "title": "Autonomous generation run",
+    "description": "A scheduled run produces drafts without an operator, drawing topics from configured sources so unattended output is grounded in something real. Each run respects a cap on drafts so a scheduling fault cannot flood the queue. Autonomous drafts are clearly marked so they are reviewed with appropriate scrutiny, and they carry lineage exactly as directed drafts do. A failed run notifies rather than failing silently.",
+    "acceptanceCriteria": [
+      "A scheduled run produces drafts without operator involvement",
+      "Topics are drawn from configured sources",
+      "The per-run draft cap is enforced",
+      "Autonomous drafts are marked as such and carry full lineage",
+      "A failed run notifies rather than failing silently",
+      "slice tests green",
+      "full suite green"
+    ],
+    "priority": 14,
+    "passes": false
+  }
+]
