@@ -1,11 +1,19 @@
-from fastapi import FastAPI
+from typing import Annotated
+
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
+from sqlmodel import Session, desc, select
 
 from app.config import settings
-from app.db import engine
+from app.corpus import ingest_posts
+from app.db import engine, get_session
+from app.models.post import Post
+from app.zernio import ZernioClient, ZernioResponseError
 
 app = FastAPI(title="Pixii Intelligence", version="0.1.0")
+
+SessionDep = Annotated[Session, Depends(get_session)]
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,3 +46,32 @@ def health() -> dict:
         "database": database_reachable(),
         "credentials": settings.configured(),
     }
+
+
+@app.get("/posts")
+def list_posts(session: SessionDep, limit: int = 200) -> list[Post]:
+    """The corpus, ranked by the primary success measure."""
+    statement = select(Post).order_by(desc(Post.engaged_actions)).limit(limit)
+    return list(session.exec(statement).all())
+
+
+@app.post("/corpus/ingest")
+def trigger_ingest(session: SessionDep) -> dict:
+    """Pull every post and its metrics from Zernio into the corpus.
+
+    Safe to re-run: posts are upserted on Zernio's own id, and metrics move as posts
+    accumulate engagement.
+    """
+    client = ZernioClient()
+    try:
+        payloads = client.fetch_posts()
+    except ZernioResponseError as exc:
+        # A silently-empty response must not read as "no posts" — it means the request
+        # was rejected in a way the API does not report as an error.
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    finally:
+        client.close()
+
+    result = ingest_posts(session, payloads)
+    session.commit()
+    return {"fetched": len(payloads), "created": result.created, "updated": result.updated}

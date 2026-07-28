@@ -152,3 +152,31 @@ Learned:
   revisit if the warning becomes an error.
 - Compose uses `restart: unless-stopped` so a Docker Desktop restart does not silently kill
   long unattended runs.
+
+### US-002 — Corpus ingest from Zernio (done 2026-07-29)
+
+Delivered: `app/zernio.py` (paging client, `ZernioResponseError`), `app/models/post.py`,
+`app/corpus.py` (`ingest_posts` upsert), `GET /posts` and `POST /corpus/ingest`, migration
+`b3784bcd19d0`, and a `/posts` page ranking the corpus by engaged actions.
+
+18 tests green, ruff and mypy clean. Verified live against the real API: first ingest
+created 50, second created 0 and updated 50. Top of the ranking reproduces the corpus
+exactly — 185, 139, 48, 26, 20 — and the 6691-impression post with 11 reactions correctly
+does not appear in the top five, which is the whole point of the metric choice.
+
+Learned:
+- **The empty-response guard keys on the missing `pagination` object**, not on a zero-length
+  post list. A genuinely empty account still returns `pagination`; a rejected request does
+  not. That distinction is what makes the failure detectable at all.
+- Alembic's `script.py.mako` needed `from sqlalchemy.dialects import postgresql` added —
+  autogenerate emits `postgresql.JSONB` for JSONB columns but does not import it, so the
+  first migration with a JSON column fails with `NameError`. The template is now patched, so
+  later migrations inherit the fix.
+- Ruff's `B008` fires on FastAPI's `Depends()` in argument defaults. Resolved with
+  `SessionDep = Annotated[Session, Depends(get_session)]` — the modern FastAPI idiom, and it
+  satisfies the rule rather than suppressing it. **Reuse `SessionDep` for new endpoints.**
+- Tests use a transaction-rollback `session` fixture (`tests/conftest.py`) against the
+  migrated database, and `app.dependency_overrides[get_session]` to give the API that same
+  session. Remember to clear the override at the end of an API test.
+- httpx `MockTransport` is how the Zernio client is tested without a network call. Follow
+  this pattern for the Azure and Cloudflare adapters.
