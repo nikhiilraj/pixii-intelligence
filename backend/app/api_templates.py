@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException
+import httpx
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 from sqlmodel import col, select
 
-from app.deps import LLMDep, SessionDep
+from app.deps import HtmlRendererDep, LLMDep, SessionDep
 from app.extraction import (
     DEFAULT_SAMPLE_SIZE,
     ExtractionError,
@@ -12,6 +13,7 @@ from app.extraction import (
 )
 from app.llm import LLMResponseError
 from app.models.template import Template, TemplateKind, TemplateStatus
+from app.rendering import MissingSlotValue, UnsupportedRenderer, render_visual
 from app.templates import (
     RetiredTemplateError,
     approve,
@@ -118,6 +120,33 @@ def extract_structures(
     for proposal in proposals:
         session.refresh(proposal)
     return proposals
+
+
+@router.post("/{template_id}/preview")
+def preview_visual(
+    session: SessionDep,
+    renderer: HtmlRendererDep,
+    template_id: int,
+    values: dict[str, str],
+) -> Response:
+    """Render a visual template with real values and return the image."""
+    template = _load(session, template_id)
+    if template.kind is not TemplateKind.VISUAL:
+        raise HTTPException(status_code=400, detail="only visual templates render")
+    try:
+        image = render_visual(template, values, renderer)
+    except MissingSlotValue as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except UnsupportedRenderer as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
+    except httpx.HTTPStatusError as exc:
+        # The rendering service failing is not this service failing. Report which it was
+        # and what it said, so "rate limited, retry" is distinguishable from "broken".
+        raise HTTPException(
+            status_code=502,
+            detail=f"rendering service returned {exc.response.status_code}",
+        ) from exc
+    return Response(content=image, media_type="image/png")
 
 
 @router.get("/{template_id}/compatible-hooks")

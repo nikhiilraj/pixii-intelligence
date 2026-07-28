@@ -145,3 +145,37 @@ class _FakeLLM:
 
     def complete_json(self, system: str, user: str) -> dict:
         return self.response
+
+
+def test_a_failing_render_service_is_reported_as_upstream_not_as_our_crash(session):
+    """A 429 from the renderer must not surface as an opaque 500."""
+    import httpx
+
+    from app.deps import get_html_renderer
+    from app.models.template import Template, TemplateKind
+
+    template = Template(
+        family_id="f",
+        kind=TemplateKind.VISUAL,
+        name="stat-hero",
+        body={"renderer": "html", "html": "<b>{headline}</b>"},
+    )
+    session.add(template)
+    session.flush()
+
+    class RateLimited:
+        def screenshot(self, html: str, width: int, height: int) -> bytes:
+            raise httpx.HTTPStatusError(
+                "429", request=httpx.Request("POST", "https://x.test"),
+                response=httpx.Response(429),
+            )
+
+    app.dependency_overrides[get_html_renderer] = lambda: RateLimited()
+
+    response = client_with(session).post(
+        f"/templates/{template.id}/preview", json={"headline": "hi"}
+    )
+
+    assert response.status_code == 502
+    assert "429" in response.json()["detail"]
+    app.dependency_overrides.clear()

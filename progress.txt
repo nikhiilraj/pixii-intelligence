@@ -305,3 +305,35 @@ Learned:
   only the opening (`HOOK_CHARS = 220`). Different questions need different windows.
 - `GET /{id}/compatible-hooks` 400s on a non-structure rather than returning an empty list —
   an empty list would read as "no pairings" instead of "wrong kind of thing".
+
+### US-007 — Visual templates with the html renderer (done 2026-07-29)
+
+Delivered: `app/rendering.py` (`fill`, `CloudflareRenderer`, `render_visual`),
+`get_html_renderer`/`HtmlRendererDep`, `POST /templates/{id}/preview` returning image/png,
+a preview button on `/templates`, and a real `stat-hero` template reproducing the brand
+layout (cream field, ghosted figure, orange cross, bold headline, Pixii mark).
+
+90 tests green, whole gate clean. Verified live: 1080x1350 PNG at HTTP 200; missing slot
+422; non-visual template 400; an `ai`-renderer template 501 (dispatch follows the
+declaration); an escaped `<script>` value rendered as visible text with the layout intact.
+
+**Decisions worth knowing before building on this:**
+- **Visual templates carry their HTML as data, not a component name.** The spec sketch said
+  "component identifier"; a markup string in `body.html` is lazier and strictly better here —
+  a new visual template needs no code and no deploy, it versions like any other template,
+  and a designer can edit the CSS directly in the editor.
+- **`str.format()` cannot be used to fill slots.** CSS is full of braces —
+  `.card { color: red }` — and format() chokes on them. `fill()` does targeted replacement
+  and then scans for leftovers with a deliberately narrow `{snake_name}` pattern.
+- **Slot values are escaped; template chrome is trusted.** That is the trust boundary:
+  chrome is authored by the team, values will come from a language model.
+- **A leftover placeholder raises rather than rendering.** Shipping an image with a literal
+  `{headline}` in it is worse than failing.
+
+Learned:
+- **Cloudflare Browser Rendering rate-limits (429) under rapid successive calls.** It first
+  surfaced as an opaque 500; the preview route now maps upstream `httpx.HTTPStatusError` to
+  502 naming the upstream status, so "rate limited, retry" is distinguishable from "broken".
+  **Later slices that render in a loop must pace themselves or handle 429.**
+- The preview UI fills slots from each slot's own `example`, so a preview shows what the
+  template author considered representative rather than lorem text.

@@ -37,6 +37,36 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
   const [editing, setEditing] = useState<Template | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [preview, setPreview] = useState<{ id: number; url: string } | null>(null);
+
+  async function renderPreview(template: Template) {
+    setBusy(true);
+    setError(null);
+    try {
+      // Slot examples are what the template author wrote down as representative, so
+      // they are the honest default for a preview.
+      const values = Object.fromEntries(
+        template.slots.map((slot) => [
+          String(slot.name),
+          String(slot.example ?? slot.name ?? ""),
+        ]),
+      );
+      const res = await fetch(`${API_BASE}/templates/${template.id}/preview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(values),
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail.detail ?? `preview failed (${res.status})`);
+      }
+      setPreview({ id: template.id, url: URL.createObjectURL(await res.blob()) });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "preview failed");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function send(path: string, init: RequestInit) {
     setBusy(true);
@@ -165,6 +195,15 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
                         approve
                       </button>
                     )}
+                    {t.kind === "visual" && (
+                      <button
+                        onClick={() => renderPreview(t)}
+                        disabled={busy}
+                        className="underline opacity-70 hover:opacity-100"
+                      >
+                        preview
+                      </button>
+                    )}
                     {t.status !== "retired" && (
                       <button
                         onClick={() => send(`/templates/${t.id}/retire`, { method: "POST" })}
@@ -180,6 +219,14 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
                   <p className="mt-1 text-xs opacity-50">
                     from {t.provenance.length} post{t.provenance.length === 1 ? "" : "s"}
                   </p>
+                )}
+                {preview?.id === t.id && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={preview.url}
+                    alt={`Preview of ${t.name}`}
+                    className="mt-2 w-full max-w-xs rounded border border-black/10 dark:border-white/15"
+                  />
                 )}
                 <pre className="mt-2 overflow-x-auto rounded bg-black/5 p-2 text-xs dark:bg-white/10">
                   {JSON.stringify(t.body, null, 2)}

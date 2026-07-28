@@ -6,6 +6,7 @@ from sqlmodel import Session
 
 from app.db import get_session
 from app.llm import LLM, AzureChat
+from app.rendering import CloudflareRenderer, HtmlRenderer
 
 # Every route takes the session this way. Declaring it as an annotated alias rather than
 # a `Depends()` default keeps FastAPI's idiom without tripping ruff's B008.
@@ -22,3 +23,15 @@ def get_llm() -> Iterator[LLM]:
 
 
 LLMDep = Annotated[LLM, Depends(get_llm)]
+
+
+def get_html_renderer() -> Iterator[HtmlRenderer]:
+    """The HTML-to-image renderer, as a dependency so tests can substitute a fake."""
+    renderer = CloudflareRenderer()
+    try:
+        yield renderer
+    finally:
+        renderer.close()
+
+
+HtmlRendererDep = Annotated[HtmlRenderer, Depends(get_html_renderer)]
