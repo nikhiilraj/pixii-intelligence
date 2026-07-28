@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlmodel import desc, select
 
+from app.api_drafts import router as drafts_router
 from app.api_templates import router as templates_router
 from app.config import settings
 from app.corpus import ingest_posts
@@ -20,6 +21,7 @@ settings.media_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/media", StaticFiles(directory=settings.media_dir), name="media")
 
 app.include_router(templates_router)
+app.include_router(drafts_router)
 
 app.add_middleware(
     CORSMiddleware,

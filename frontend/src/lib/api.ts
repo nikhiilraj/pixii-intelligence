@@ -38,6 +38,22 @@ export type Template = {
   notes: string;
 };
 
+export type LineageEntry = { family: string; version: number; name: string } | null;
+
+export type Draft = {
+  id: number;
+  idea: string;
+  mode: string;
+  hook_text: string;
+  body_text: string;
+  full_text: string;
+  visual_values: Record<string, string>;
+  visual_error: string | null;
+  visual_png: string | null;
+  zernio_post_id: string | null;
+  lineage: { hook: LineageEntry; structure: LineageEntry; visual: LineageEntry };
+};
+
 export async function getJson<T>(path: string): Promise<T | null> {
   try {
     const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });

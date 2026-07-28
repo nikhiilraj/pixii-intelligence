@@ -372,3 +372,37 @@ Learned:
 - Pillow 12 moved the resampling constants: `Image.Resampling.LANCZOS`, not `Image.LANCZOS`.
 - `Image.open()` returns `ImageFile`, and `.resize()` returns `Image` — reassigning to the
   same name fails mypy. Bind the resized result to a new name.
+
+### US-009 — Directed generation with lineage (done 2026-07-29)
+
+Delivered: `app/models/draft.py` (migration `1bbaa40f8b8c`), `app/generation.py`
+(`suggest_templates`, `generate_draft`, `regenerate_text`, `regenerate_visual`),
+`app/api_drafts.py`, and a `/studio` page showing the draft, its visual and its lineage.
+
+118 tests green. Verified live end to end: suggestion picked `open-question-then-tested` for
+a "we tested 40 listings" idea with a coherent reason; the draft came back in Monte's voice
+(lowercase, fragment-heavy) and rendered a brand-exact visual. Lineage recorded as
+`(family, version)` for all three templates. `zernio_post_id` stays None — nothing published.
+
+**The defect this slice surfaced, and the rule that came out of it:**
+The first live draft filled `left_image_url` / `right_image_url` with prose — "image CTR",
+"keyword repetition". Cloudflare rendered the page, the `<img>` tags silently failed, and the
+result was a brand-correct image with **two empty boxes and `visual_error: None`**. A
+success-shaped wrong answer, which is worse than an error.
+
+- **Slots now declare a `type`.** Only `text`/`number`/untyped are offered to the model, and
+  any value it volunteers for another type is discarded (`_written_values`). An unfilled
+  `image_url` then raises `MissingSlotValue`, which surfaces as `visual_error` — loud, not
+  silent. **Any new visual template with an image slot must set `"type": "image_url"`.**
+- There is no asset picker in V1, so image-slot templates cannot complete unattended. The
+  live library gained `stat-card`, a text-only brand card, so a draft always gets a visual.
+
+**Other decisions worth knowing:**
+- **Lineage keys on `(family, version)`, never a row id.** A test asserts a later edit of the
+  hook leaves the draft's recorded version untouched.
+- **A failed visual never costs the words.** `_draw_visual` catches everything, records why,
+  and leaves the text intact — the prose is the expensive part.
+- Exemplars come from the chosen hook's own `provenance`, so a draft is grounded in the posts
+  that actually justify the pattern rather than the corpus at large.
+- A suggestion naming a template that does not exist falls back to the first approved one
+  rather than failing the request.
