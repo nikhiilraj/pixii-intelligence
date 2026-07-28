@@ -524,3 +524,36 @@ Learned:
   threshold it is applying — change the setting and the explanation changes with it.
 - Link-through reuses the `template_family` filter from US-012, so "show me the posts behind
   this number" is one hop and needs no new endpoint.
+
+### US-014 — Autonomous generation run (done 2026-07-29)
+
+Delivered: `app/autonomous.py` (`propose_topics`, `run_autonomous`), `app/notify.py`,
+an autonomous scheduler job, and `POST /drafts/autonomous-run`.
+
+**176 tests green — full suite. All 14 slices pass.**
+
+Verified live: the run proposed 2 fresh angles from the corpus, wrote 2 drafts, 0 failed,
+both marked `autonomous`, both carrying full lineage — and it chose *different* hooks per
+topic (`headline-stat-reframe` and `open-question-then-tested`). `zernio_post_id` is None on
+both. One draft opened "no dollar impact yet" rather than inventing a number, which is the
+prompt's no-invented-statistics rule holding under unattended conditions.
+
+**Two hard limits on what unattended generation may do:**
+- **It never reaches Zernio.** Drafts land here for review; pushing stays a human act even
+  though a Zernio draft would not itself publish. An unattended loop with write access to the
+  live account is a different risk from one without, and there was no reason to take it.
+- **`cap` is a hard ceiling**, checked before any work. `cap=0` produces nothing and calls
+  no model. A scheduling fault, retry storm or runaway loop cannot flood the review queue.
+
+Also: **`enable_autonomous` defaults to False.** Unattended generation is opt-in, so deploying
+this does not silently start writing.
+
+Learned:
+- **A failure that prevents the run raises; a failure on one topic costs only that topic.**
+  `NoUsableTemplates` is the exception — nothing approved means no topic can succeed, so it
+  stops rather than failing n times identically. A test pins the flaky-topic case.
+- **`notify()` never raises.** A notifier that can fail its caller turns "the job had a
+  problem" into "the job crashed" — strictly worse, and precisely the silent-failure class
+  this system exists to correct. It always logs; Teams is best-effort on top.
+- Topics are grounded in the recent corpus and asked for angles *not already covered*, so
+  unattended output follows from the real account rather than from nothing.

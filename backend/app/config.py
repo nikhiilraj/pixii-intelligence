@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     # samples cannot separate a good template from a lucky one.
     min_sample_size: int = 5
 
+    # Autonomous runs. The cap is a hard ceiling on drafts per run so a scheduling fault
+    # cannot flood the review queue. Off by default — unattended generation is opt-in.
+    enable_autonomous: bool = False
+    autonomous_max_drafts: int = 2
+    autonomous_interval_hours: int = 24
+    teams_webhook_url: str = ""
+
     zernio_api_key: str = ""
     zernio_base_url: str = "https://getlate.dev/api/v1"
     getlate_linkedin_id: str = ""

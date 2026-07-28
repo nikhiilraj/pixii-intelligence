@@ -4,6 +4,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlmodel import col, desc, select
 
+from app.autonomous import AutonomousRunFailed, run_autonomous
+from app.config import settings
 from app.deps import HtmlRendererDep, ImageRendererDep, LLMDep, SessionDep, ZernioDep
 from app.generation import (
     NoUsableTemplates,
@@ -15,6 +17,7 @@ from app.generation import (
 from app.llm import LLMResponseError
 from app.models.draft import Draft
 from app.models.template import Template
+from app.notify import notify
 from app.publishing import PushFailed, push_draft
 
 router = APIRouter(prefix="/drafts", tags=["drafts"])
@@ -205,3 +208,25 @@ def push(session: SessionDep, zernio: ZernioDep, draft_id: int) -> DraftOut:
     session.commit()
     session.refresh(draft)
     return _out(session, draft)
+
+
+@router.post("/autonomous-run")
+def autonomous_run(
+    session: SessionDep,
+    llm: LLMDep,
+    html_renderer: HtmlRendererDep,
+    cap: int | None = None,
+) -> dict:
+    """Run unattended generation now, capped. Produces drafts here; pushes nothing."""
+    try:
+        result = run_autonomous(
+            session,
+            llm,
+            html_renderer,
+            cap=cap if cap is not None else settings.autonomous_max_drafts,
+            notify=notify,
+        )
+    except AutonomousRunFailed as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    session.commit()
+    return {"created": result.created, "failed": result.failed, "topics": result.topics}
