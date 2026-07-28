@@ -444,3 +444,38 @@ Other decisions worth knowing:
   the app's output would be indistinguishable from Monte's own.
 - `GET /v1/posts` returns `metadata`; `GET /v1/analytics` does not. Use `/v1/posts` whenever
   lineage needs reading back from Zernio's side.
+
+### US-011 — Scheduled analytics sync joined to lineage (done 2026-07-29)
+
+Delivered: `app/models/metric.py` (`MetricSnapshot`, migration `4281be495457`),
+`app/metrics.py` (`sync_metrics`, `record_snapshots`, `draft_for_post`,
+`template_performance`), `app/scheduler.py` (APScheduler, interval job),
+`POST /metrics/sync` and `GET /metrics/templates`.
+
+144 tests green, whole gate clean. Verified live: two syncs produced **100 snapshots across
+50 posts** — history accumulates rather than overwrites — and the scoreboard reports 22
+template versions, every one at `n=0`, with **no ranking anywhere in the payload**.
+
+**The join, stated once so it is never re-derived:**
+`Draft.zernio_post_id == Post.late_post_id`. The create response's `_id` appears in the
+analytics payload as `latePostId`; `Post.zernio_id` holds `analytics._id`, which is a
+*different* identifier. A test (`test_joining_on_the_analytics_row_id_finds_nothing`) asserts
+the two differ, so anyone who later joins on the wrong one fails loudly instead of silently
+attributing zero to everything.
+
+**n=0 everywhere is the correct answer right now, not a bug.** Analytics excludes unpublished
+drafts entirely, so a pushed draft contributes nothing until Monte actually publishes it.
+`test_a_pushed_draft_with_no_metrics_yet_is_not_an_error` pins this.
+
+Other decisions worth knowing:
+- **Snapshots append; the Post row keeps the latest.** The row makes sorting cheap; the
+  snapshot table keeps the engagement curve, which is the part that cannot be recovered later.
+- **Performance keys on `(family, version)`.** A test edits a template after attribution and
+  asserts v1 keeps its sample and v2 starts at zero.
+- **Posts without lineage are excluded from template aggregates but stay in post-level
+  views.** Everything ingested from history, and everything Monte writes outside the app,
+  falls in this category — it is data, just not evidence about a template.
+- **The scheduler swallows and logs its own failures.** A scheduler that dies on one bad run
+  stops refreshing silently, which is precisely the failure this system exists to fix.
+  `enable_scheduler` defaults to False so no test suite ever starts a thread that calls Zernio.
+- FastAPI's `@app.on_event` is deprecated; the scheduler starts from a `lifespan` handler.

@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     # one machine.
     media_dir: Path = REPO_ROOT / "media"
 
+    # Scheduled jobs run in the API process. Off by default under test so a suite never
+    # starts a background thread that talks to Zernio.
+    enable_scheduler: bool = False
+    metrics_sync_hours: int = 6
+
     zernio_api_key: str = ""
     zernio_base_url: str = "https://getlate.dev/api/v1"
     getlate_linkedin_id: str = ""

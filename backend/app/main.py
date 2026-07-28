@@ -1,3 +1,6 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -10,10 +13,22 @@ from app.config import settings
 from app.corpus import ingest_posts
 from app.db import engine
 from app.deps import SessionDep
+from app.metrics import sync_metrics, template_performance
 from app.models.post import Post
+from app.scheduler import shutdown as stop_scheduler
+from app.scheduler import start as start_scheduler
 from app.zernio import ZernioClient, ZernioResponseError
 
-app = FastAPI(title="Pixii Intelligence", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    """Scheduled jobs live for the lifetime of the process."""
+    start_scheduler()
+    yield
+    stop_scheduler()
+
+
+app = FastAPI(title="Pixii Intelligence", version="0.1.0", lifespan=lifespan)
 
 # Locally cached post media, served so the dashboard can display it without reaching
 # back out to Zernio's CDN.
@@ -91,3 +106,42 @@ def trigger_ingest(session: SessionDep, with_media: bool = True) -> dict:
     result = ingest_posts(session, payloads, with_media=with_media)
     session.commit()
     return {"fetched": len(payloads), "created": result.created, "updated": result.updated}
+
+
+@app.post("/metrics/sync")
+def trigger_metrics_sync(session: SessionDep) -> dict:
+    """Refresh every post's metrics now and append a snapshot for each.
+
+    The scheduler does this periodically; this endpoint is for when you do not want to wait.
+    """
+    client = ZernioClient()
+    try:
+        result = sync_metrics(session, client)
+    except ZernioResponseError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    finally:
+        client.close()
+    session.commit()
+    return result
+
+
+@app.get("/metrics/templates")
+def template_scoreboard(session: SessionDep) -> list[dict]:
+    """What each template version has actually done, with its sample count.
+
+    Deliberately unranked — at this sample size a ranking would be fitting noise.
+    """
+    return [
+        {
+            "family": row.family,
+            "version": row.version,
+            "kind": row.kind,
+            "name": row.name,
+            "status": row.status,
+            "sample_count": row.sample_count,
+            "total_engaged_actions": row.total_engaged_actions,
+            "total_impressions": row.total_impressions,
+            "mean_engaged_actions": round(row.mean_engaged_actions, 2),
+        }
+        for row in template_performance(session)
+    ]
