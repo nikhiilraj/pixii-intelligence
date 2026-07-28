@@ -204,5 +204,20 @@
     ],
     "priority": 14,
     "passes": true
+  },
+  {
+    "id": "US-015",
+    "title": "Manual corpus ingest for posts Zernio does not carry",
+    "description": "An operator drops in posts from outside Zernio \u2014 the creator posts Monte sent over LinkedIn, screenshots, pasted text \u2014 so the template library can learn from sources the API does not cover. Manually-added items are marked by source so Pixii's own history is distinguishable from external reference material, and a Zernio sync never overwrites or deletes them. Closes spec user stories 5 and 6, which the first pass claimed were covered and were not.",
+    "acceptanceCriteria": [
+      "An operator can add a post that did not come from Zernio",
+      "Manually-added posts are marked by source and distinguishable from synced ones",
+      "A Zernio sync neither overwrites nor removes manually-added posts",
+      "Manual posts are available to template extraction as evidence",
+      "slice tests green",
+      "full suite green"
+    ],
+    "priority": 15,
+    "passes": true
   }
 ]

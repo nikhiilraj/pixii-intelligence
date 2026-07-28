@@ -557,3 +557,30 @@ Learned:
   this system exists to correct. It always logs; Teams is best-effort on top.
 - Topics are grounded in the recent corpus and asked for angles *not already covered*, so
   unattended output follows from the real account rather than from nothing.
+
+### US-015 — Manual corpus ingest (done 2026-07-29)
+
+**Found by the post-build review, not by the plan.** Spec user stories 5 and 6 — dropping in
+posts Zernio does not carry — were never implemented, while three progress entries and
+several status reports claimed "the ingest layer accepts manual corpus drops". It did not.
+The gap mattered because the two known-missing inputs (Monte's creator posts, the design
+specs) were both supposed to arrive through it.
+
+Delivered: `PostSource` on Post (migration `959fc1ba1cc5`), `add_manual_post`,
+`POST /corpus/manual`, and a `source` filter on `GET /posts`.
+
+**185 tests green — full suite. 15/15 slices pass.**
+
+Verified live: added an external creator post, ran a full 50-post Zernio sync, and the manual
+row survived untouched — 1 manual, 50 zernio. Empty content → 422.
+
+Learned:
+- **Upsert is now scoped to `source == ZERNIO`.** Without that scope a sync could match,
+  overwrite or orphan a manual row that nothing upstream knows exists.
+- Manual ids are namespaced `manual:<uuid>` so they can never collide with a Zernio id.
+- **Alembic: `add_column` does NOT create a PG enum type** — `create_table` does it
+  implicitly, which is why the `template` table worked and this did not
+  (`type "postsource" does not exist`). Create it explicitly with
+  `postgresql.ENUM(...).create(op.get_bind(), checkfirst=True)`, and give a `NOT NULL`
+  column a `server_default` so existing rows can take it. **Every future enum column on an
+  existing table hits this.**

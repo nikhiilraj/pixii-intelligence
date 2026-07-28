@@ -1,8 +1,20 @@
 from datetime import datetime
+from enum import StrEnum
 
 from sqlalchemy import Column
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
+
+
+class PostSource(StrEnum):
+    """Where a corpus row came from.
+
+    Zernio rows are refreshed on every sync. Manual rows are external reference material —
+    creator posts, pasted text — that no sync knows about and must never overwrite.
+    """
+
+    ZERNIO = "zernio"
+    MANUAL = "manual"
 
 
 class Post(SQLModel, table=True):
@@ -21,6 +33,7 @@ class Post(SQLModel, table=True):
     zernio_id: str = Field(index=True, unique=True)
     late_post_id: str | None = None
 
+    source: PostSource = Field(default=PostSource.ZERNIO, index=True)
     platform: str = Field(index=True)
     content: str = ""
     status: str = ""

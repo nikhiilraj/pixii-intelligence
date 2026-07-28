@@ -5,19 +5,20 @@ from datetime import date, datetime, time
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 from sqlalchemy import text
 from sqlmodel import col, select
 
 from app.api_drafts import router as drafts_router
 from app.api_templates import router as templates_router
 from app.config import settings
-from app.corpus import ingest_posts
+from app.corpus import ManualPostRejected, add_manual_post, ingest_posts
 from app.db import engine
 from app.deps import SessionDep
 from app.metrics import sync_metrics, template_performance
 from app.models.draft import Draft
 from app.models.metric import MetricSnapshot
-from app.models.post import Post
+from app.models.post import Post, PostSource
 from app.scheduler import shutdown as stop_scheduler
 from app.scheduler import start as start_scheduler
 from app.zernio import ZernioClient, ZernioResponseError
@@ -96,6 +97,7 @@ def list_posts(
     session: SessionDep,
     limit: int = 500,
     platform: str | None = None,
+    source: PostSource | None = None,
     since: date | None = None,
     until: date | None = None,
     template_family: str | None = None,
@@ -112,6 +114,8 @@ def list_posts(
     statement = select(Post)
     if platform:
         statement = statement.where(Post.platform == platform)
+    if source:
+        statement = statement.where(Post.source == source)
     if since:
         statement = statement.where(col(Post.published_at) >= datetime.combine(since, time.min))
     if until:
@@ -131,6 +135,31 @@ def list_posts(
         col(column).asc() if order == "asc" else col(column).desc()
     ).limit(limit)
     return list(session.exec(statement).all())
+
+
+class ManualPostIn(BaseModel):
+    content: str
+    author: str | None = None
+    platform: str = "linkedin"
+    engaged_actions: int = 0
+    impressions: int = 0
+    published_at: datetime | None = None
+    note: str = ""
+
+
+@app.post("/corpus/manual", status_code=201)
+def add_external_post(session: SessionDep, payload: ManualPostIn) -> Post:
+    """Add a post Zernio does not carry — a creator post, a paste, a screenshot's text.
+
+    Extraction treats it as evidence like any other post. A Zernio sync never touches it.
+    """
+    try:
+        post = add_manual_post(session, **payload.model_dump())
+    except ManualPostRejected as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    session.commit()
+    session.refresh(post)
+    return post
 
 
 @app.get("/posts/{post_id}/history")

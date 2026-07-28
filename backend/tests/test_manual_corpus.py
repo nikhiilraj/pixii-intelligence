@@ -1,0 +1,102 @@
+from fastapi.testclient import TestClient
+from sqlmodel import Session, select
+
+from app.corpus import PostSource, add_manual_post, ingest_posts
+from app.db import get_session
+from app.extraction import propose_hooks
+from app.main import app
+from app.models.post import Post
+
+
+def client_with(session: Session) -> TestClient:
+    app.dependency_overrides[get_session] = lambda: session
+    return TestClient(app)
+
+
+class FakeLLM:
+    def __init__(self):
+        self.user = ""
+
+    def complete_json(self, system: str, user: str) -> dict:
+        self.user = user
+        return {"hooks": [{"name": "n", "pattern": "{a}"}]}
+
+
+CREATOR_POST = {
+    "content": "A creator post Monte sent over LinkedIn.",
+    "author": "Some Creator",
+    "engaged_actions": 900,
+    "impressions": 40000,
+}
+
+
+def test_a_post_that_never_came_from_zernio_can_be_added(session):
+    post = add_manual_post(session, **CREATOR_POST)
+
+    assert post.content.startswith("A creator post")
+    assert post.engaged_actions == 900
+
+
+def test_a_manual_post_is_marked_by_source(session):
+    manual = add_manual_post(session, **CREATOR_POST)
+
+    assert manual.source == PostSource.MANUAL
+
+
+def test_a_synced_post_is_marked_as_such(session):
+    ingest_posts(session, [{"_id": "z1", "platform": "linkedin", "content": "ours"}])
+
+    assert session.exec(select(Post)).one().source == PostSource.ZERNIO
+
+
+def test_a_zernio_sync_does_not_remove_or_overwrite_manual_posts(session):
+    manual = add_manual_post(session, **CREATOR_POST)
+
+    ingest_posts(session, [{"_id": "z1", "platform": "linkedin", "content": "ours"}])
+
+    kept = session.get(Post, manual.id)
+    assert kept is not None
+    assert kept.content.startswith("A creator post")
+    assert kept.source == PostSource.MANUAL
+
+
+def test_manual_posts_get_a_distinct_id_that_cannot_collide_with_zernio(session):
+    first = add_manual_post(session, **CREATOR_POST)
+    second = add_manual_post(session, content="Another one.")
+
+    assert first.zernio_id != second.zernio_id
+    assert first.zernio_id.startswith("manual:")
+
+
+def test_a_manual_post_is_available_to_extraction_as_evidence(session):
+    add_manual_post(session, **CREATOR_POST)
+    llm = FakeLLM()
+
+    propose_hooks(session, llm)
+
+    assert "A creator post Monte sent over LinkedIn." in llm.user
+
+
+def test_a_manual_post_with_no_content_is_rejected(session):
+    response = client_with(session).post("/corpus/manual", json={"content": "   "})
+
+    assert response.status_code == 422
+    app.dependency_overrides.clear()
+
+
+def test_adding_a_manual_post_through_the_api(session):
+    body = client_with(session).post("/corpus/manual", json=CREATOR_POST).json()
+
+    assert body["source"] == "manual"
+    assert body["engaged_actions"] == 900
+    app.dependency_overrides.clear()
+
+
+def test_the_corpus_can_be_filtered_to_one_source(session):
+    add_manual_post(session, **CREATOR_POST)
+    ingest_posts(session, [{"_id": "z1", "platform": "linkedin", "content": "ours"}])
+
+    manual = client_with(session).get("/posts?source=manual").json()
+
+    assert [p["source"] for p in manual] == ["manual"]
+    app.dependency_overrides.clear()

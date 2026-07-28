@@ -1,10 +1,11 @@
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlmodel import Session, select
 
 from app.media import download_post_media
-from app.models.post import Post
+from app.models.post import Post, PostSource
 
 _METRICS = (
     "impressions",
@@ -83,7 +84,13 @@ def ingest_posts(
         if not zernio_id:
             continue
 
-        post = session.exec(select(Post).where(Post.zernio_id == zernio_id)).first()
+        # Scoped to synced rows: a manual row must never be matched, overwritten or
+        # removed by a sync, because nothing upstream knows it exists.
+        post = session.exec(
+            select(Post).where(
+                Post.zernio_id == zernio_id, Post.source == PostSource.ZERNIO
+            )
+        ).first()
         if post is None:
             post = Post(zernio_id=zernio_id)
             result.created += 1
@@ -98,3 +105,46 @@ def ingest_posts(
 
     session.flush()
     return result
+
+
+class ManualPostRejected(ValueError):
+    """A manual corpus item that carries no text is no evidence about anything."""
+
+
+def add_manual_post(
+    session: Session,
+    *,
+    content: str,
+    author: str | None = None,
+    platform: str = "linkedin",
+    engaged_actions: int = 0,
+    impressions: int = 0,
+    published_at: datetime | None = None,
+    note: str = "",
+) -> Post:
+    """Add a post Zernio does not carry — a creator post, a screenshot's text, a paste.
+
+    Extraction treats these as evidence like any other post, which is the point: the
+    template library should be able to learn from material the API cannot reach. They are
+    marked by source so Pixii's own history stays distinguishable from reference material.
+    """
+    if not content.strip():
+        raise ManualPostRejected("a manual corpus item needs text")
+
+    post = Post(
+        # Namespaced so it can never collide with a Zernio id.
+        zernio_id=f"manual:{uuid.uuid4().hex}",
+        source=PostSource.MANUAL,
+        platform=platform,
+        content=content.strip(),
+        account_username=author,
+        engaged_actions=engaged_actions,
+        impressions=impressions,
+        published_at=published_at,
+        status="external",
+        metrics_updated_at=datetime.now(UTC),
+    )
+    post.likes = engaged_actions
+    session.add(post)
+    session.flush()
+    return post
