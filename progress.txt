@@ -208,3 +208,38 @@ Learned:
   another comment line does not apply and becomes an "unused directive" warning.
 - When checking rendered HTML, `grep -c` counts *lines* and Next.js emits one long line.
   Use `grep -o ... | wc -l` or the count is misleadingly 1.
+
+### US-004 — Template library: model, versioning, lifecycle, editor (done 2026-07-29)
+
+Delivered: `app/models/template.py` (one table, `kind` discriminator, JSONB body),
+`app/templates.py` (create / edit / approve / retire / `latest_versions` /
+`usable_templates`), `app/api_templates.py` router, `app/deps.py`, migration `4cdc7e782318`,
+and a `/templates` page with an author-and-revise form plus approve/retire actions. Added
+nav across all pages.
+
+46 tests green, whole gate clean. Lifecycle verified live end to end: proposed → 0 usable;
+approve → 1 usable; edit → v2 with v1 intact; retire → 0 usable; editing a retired template
+→ HTTP 409; both versions still on record.
+
+**Decisions worth knowing before building on this:**
+- **`family_id` is the stable identity, not `id`.** Every version is its own row sharing a
+  `family_id`. Performance attribution must key on `(family_id, version)` — never on `id`
+  alone, or an edit silently detaches history.
+- **An edited version inherits the status it was edited from.** A strategist editing an
+  approved template in the UI *is* the approver, so demanding re-approval is friction
+  without review. Extraction proposals still require explicit approval — that is where the
+  "nothing unvetted" rule actually bites.
+- **Retired templates are immutable** (`RetiredTemplateError` → 409). Author a new family
+  instead of reviving one.
+- `usable_templates(kind)` is the only thing generation may consume: newest version,
+  approved, right kind. Use it rather than querying Template directly.
+
+Learned:
+- `SessionDep` now lives in `app/deps.py` so routers can share it. **Import it from there**,
+  not from `app.main` — that would be a circular import.
+- New routers go in `app/api_*.py` as an `APIRouter` and are included from `main`.
+- Alembic writes enum columns on one long line that trips E501; wrap by hand, same as
+  `add_column`.
+- Checking rendered React output for a string built from an interpolation (`from {n} posts`)
+  fails on a naive grep — SSR splits it with `<!-- -->` markers. Strip comments and tags
+  before asserting on rendered text.

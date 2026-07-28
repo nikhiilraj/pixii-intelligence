@@ -1,25 +1,25 @@
-from typing import Annotated
-
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
-from sqlmodel import Session, desc, select
+from sqlmodel import desc, select
 
+from app.api_templates import router as templates_router
 from app.config import settings
 from app.corpus import ingest_posts
-from app.db import engine, get_session
+from app.db import engine
+from app.deps import SessionDep
 from app.models.post import Post
 from app.zernio import ZernioClient, ZernioResponseError
 
 app = FastAPI(title="Pixii Intelligence", version="0.1.0")
 
-SessionDep = Annotated[Session, Depends(get_session)]
-
 # Locally cached post media, served so the dashboard can display it without reaching
 # back out to Zernio's CDN.
 settings.media_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/media", StaticFiles(directory=settings.media_dir), name="media")
+
+app.include_router(templates_router)
 
 app.add_middleware(
     CORSMiddleware,

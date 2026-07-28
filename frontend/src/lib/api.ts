@@ -22,6 +22,22 @@ export type Post = {
   engaged_actions: number;
 };
 
+export type TemplateKind = "hook" | "structure" | "visual";
+export type TemplateStatus = "proposed" | "approved" | "retired";
+
+export type Template = {
+  id: number;
+  family_id: string;
+  version: number;
+  kind: TemplateKind;
+  name: string;
+  status: TemplateStatus;
+  body: Record<string, unknown>;
+  slots: Record<string, unknown>[];
+  provenance: string[];
+  notes: string;
+};
+
 export async function getJson<T>(path: string): Promise<T | null> {
   try {
     const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
