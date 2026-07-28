@@ -92,3 +92,56 @@ def test_listing_shows_only_the_current_version_of_each_family(session):
 
     assert [t["name"] for t in listed] == ["v2"]
     app.dependency_overrides.clear()
+
+
+def test_extraction_endpoint_creates_proposals_awaiting_approval(session):
+    from app.deps import get_llm
+    from app.models.post import Post
+
+    session.add(
+        Post(zernio_id="win-1", platform="linkedin", content="A hook.", engaged_actions=185)
+    )
+    session.flush()
+
+    app.dependency_overrides[get_llm] = lambda: _FakeLLM(
+        {
+            "hooks": [
+                {
+                    "name": "transformation",
+                    "pattern": "{a} turned into {b}",
+                    "tone": "plain",
+                    "source_post_ids": ["win-1"],
+                }
+            ]
+        }
+    )
+    client = client_with(session)
+
+    body = client.post("/templates/extract/hooks").json()
+
+    assert [t["status"] for t in body] == ["proposed"]
+    assert body[0]["provenance"] == ["win-1"]
+    assert client.get("/templates?kind=hook&usable_only=true").json() == []
+    app.dependency_overrides.clear()
+
+
+def test_a_model_that_returns_the_wrong_shape_is_reported_not_silently_ignored(session):
+    from app.deps import get_llm
+    from app.models.post import Post
+
+    session.add(Post(zernio_id="win-1", platform="linkedin", content="A hook.", engaged_actions=1))
+    session.flush()
+    app.dependency_overrides[get_llm] = lambda: _FakeLLM({"nope": []})
+
+    response = client_with(session).post("/templates/extract/hooks")
+
+    assert response.status_code == 502
+    app.dependency_overrides.clear()
+
+
+class _FakeLLM:
+    def __init__(self, response: dict):
+        self.response = response
+
+    def complete_json(self, system: str, user: str) -> dict:
+        return self.response

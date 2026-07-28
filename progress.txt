@@ -243,3 +243,34 @@ Learned:
 - Checking rendered React output for a string built from an interpolation (`from {n} posts`)
   fails on a naive grep — SSR splits it with `<!-- -->` markers. Strip comments and tags
   before asserting on rendered text.
+
+### US-005 — Hook extraction from the winning posts (done 2026-07-29)
+
+Delivered: `app/llm.py` (`AzureChat` + an `LLM` Protocol), `app/extraction.py`
+(`propose_hooks`), `POST /templates/extract/hooks`, `get_llm`/`LLMDep` in `app/deps.py`,
+and an extract button on `/templates`.
+
+65 tests green, whole gate clean. Run live against Monte's real 27 LinkedIn posts: **6 hook
+templates proposed, 0 hallucinated provenance ids, 0 usable until approved.**
+
+The proposals independently reconstructed the top three posts —
+`ai-time-value-equation` (#1, 185 engaged), `dated-platform-countdown` (#2, 139),
+`small-input-big-recurring-result` (#3, 48) — and found two patterns spanning *multiple*
+posts (`headline-stat-reframe` from #6 and #9, `open-question-then-tested` from #7 and #12).
+That cross-post generalisation is the signal that the ranking is doing real work.
+
+Learned:
+- **The `LLM` Protocol is the seam.** Anything with `complete_json(system, user) -> dict`
+  satisfies it. Tests inject a plain stub; `AzureChat` itself is tested separately with
+  httpx `MockTransport`. Reuse this shape for the image adapter.
+- **`max_completion_tokens`, never `max_tokens`** — this deployment rejects the old
+  parameter. Already in the seam notes; now enforced by a test.
+- Models sometimes fence their JSON in ```json despite instructions. `_parse_json` strips
+  the fence; unparseable output raises `LLMResponseError` rather than returning empty.
+- **Provenance is filtered against the ids actually shown to the model.** An id the model
+  invented is dropped rather than stored — provenance must stay checkable, and a
+  hallucinated citation is worse than none.
+- **Route order matters:** `/templates/extract/hooks` is declared before
+  `/templates/{template_id}/approve`, or FastAPI tries to parse "extract" as an int and 422s.
+- Inject external clients as FastAPI dependencies (`LLMDep`), not by constructing them
+  inside the handler — otherwise the endpoint cannot be tested without a network call.

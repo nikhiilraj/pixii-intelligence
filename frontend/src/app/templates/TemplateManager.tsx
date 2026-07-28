@@ -106,6 +106,20 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
   return (
     <div className="mt-8 grid gap-10 lg:grid-cols-[1fr_20rem]">
       <section>
+        <div className="mb-4 flex items-center gap-3">
+          <button
+            onClick={() => send("/templates/extract/hooks", { method: "POST" })}
+            disabled={busy}
+            className="rounded-md border border-black/20 px-3 py-1.5 text-sm disabled:opacity-50 dark:border-white/25"
+          >
+            {busy ? "Working…" : "Extract hooks from top posts"}
+          </button>
+          <span className="text-xs opacity-50">
+            Proposes patterns from the strongest posts. Nothing becomes usable until you
+            approve it.
+          </span>
+        </div>
+
         {initial.length === 0 ? (
           <p className="text-sm opacity-60">
             No templates yet. Author one, or run hook extraction once it exists.
