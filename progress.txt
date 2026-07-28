@@ -584,3 +584,37 @@ Learned:
   `postgresql.ENUM(...).create(op.get_bind(), checkfirst=True)`, and give a `NOT NULL`
   column a `server_default` so existing rows can take it. **Every future enum column on an
   existing table hits this.**
+
+### Correction — 2026-07-29: the account is 155 posts, not 50
+
+A peer session probing the same account read-only caught an error in my reporting, and it
+was right. Recording it because the wrong numbers reached both the seam notes and the user.
+
+**What was wrong:** I read `GET /v1/posts?limit=50` without paging and reported "37 drafts
+and 13 published posts" as the account. That was page 1 of 4. The account actually holds
+**155 posts — 103 draft, 45 published, 5 partial, 2 failed**. The join proof was therefore
+stated as "13/13" when the published set is 45.
+
+**What the corrected evidence shows — the finding holds and is stronger:**
+`/v1/posts._id` → `analytics._id` matches **0 / 45**. `/v1/posts._id` →
+`analytics.latePostId` matches **34 / 45**; the other 11 are outside the analytics window,
+not counter-examples. A cleaner proof than content-matching: `GET /v1/posts/{analytics._id}`
+→ **404**, `GET /v1/posts/{analytics.latePostId}` → **200, same post**.
+
+**The finding that actually changes what this system knows:**
+`GET /v1/analytics` is a **window, not the account** — `total: 50`, one page, and only 37 of
+those rows carry a `latePostId`. There are **34 published LinkedIn posts** but extraction only
+ever saw **27**. Eleven published posts, all March–April 2026, have no analytics row at all.
+**The corpus is a subset of the published history, and every "learned from the corpus" claim
+in this log means the 50-row analytics window.** Widening it means paging `GET /v1/posts` and
+accepting rows with no metrics.
+
+**And a confirmation obtained without writing:** a pushed draft can never be verified against
+analytics — 0 of 103 drafts appear there. The live post created for US-010 was not needed to
+answer the id question; cross-referencing published posts settles it read-only. The ticket's
+prescribed method ("create a post, then look it up in analytics") does not terminate.
+
+**Lesson, and it is the same one twice now:** this API truncates silently in more than one
+way. An unpaged `limit=50` looks exactly like a complete account, just as an over-limit
+request looks exactly like an empty one. **Check `pagination.total` and `pages` before
+believing any count from this API.**

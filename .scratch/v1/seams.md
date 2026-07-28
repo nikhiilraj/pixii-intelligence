@@ -45,22 +45,48 @@ supplied — "nothing auto-publishes" is native behaviour.
 Created a real draft; the create response returned `_id = 6a691c6d95e614b6077edb22`, and
 `GET /v1/posts` carries that same value as its `_id` with our metadata intact.
 
-Across all **13** published posts on the account:
+Across **all 45 published posts** (corrected 2026-07-29 — an earlier pass read only page 1
+of `/v1/posts` and wrongly reported 13):
 
 | join attempt | matches |
 |---|---|
-| `/v1/posts._id` → `analytics.latePostId` | **13 / 13** |
-| `/v1/posts._id` → `analytics._id` | **0 / 13** |
+| `/v1/posts._id` → `analytics.latePostId` | **34 / 45** |
+| `/v1/posts._id` → `analytics._id` | **0 / 45** |
 
-`analytics._id` is a separate analytics-row identifier. **Joining on it would match nothing,
-silently.** Analytics also does not carry unpublished drafts at all, so a pushed draft only
-becomes joinable once it is published.
+`analytics._id` is a separate analytics-record identifier: `GET /v1/posts/{analytics._id}`
+returns **404**, while `GET /v1/posts/{analytics.latePostId}` returns **200** and the same
+post. **Joining on `analytics._id` would match nothing, silently.** The 11 unmatched
+published posts are not a counter-example — they are outside the analytics window (see
+below).
+
+Analytics carries **no unpublished drafts at all** (0 of 103 drafts appear), so a pushed
+draft only becomes joinable once it is published. The id is therefore confirmable *without
+writing anything*, by cross-referencing already-published posts across the two endpoints.
+
+## ⚠ Analytics is a window, not the account — the corpus is a subset
+
+**Corrected 2026-07-29.** `GET /v1/posts` reports `total: 155` across 4 pages —
+**103 draft, 45 published, 5 partial, 2 failed**. `GET /v1/analytics` reports `total: 50`,
+one page, and only **37 of those 50 rows carry a `latePostId`**.
+
+Consequences that were previously misstated:
+
+- The corpus this system learns from is **the 50 analytics rows** (27 LinkedIn, 13 YouTube,
+  10 X), **not the account**. There are **34 published LinkedIn posts**, so roughly 7 of
+  Monte's published LinkedIn posts were never visible to template extraction.
+- **11 published posts have no analytics row at all**, all dated March–April 2026 — analytics
+  behaves as a recent window. Older history is not reachable through it.
+- Reading `?limit=50` without paging gives page 1 of 4 and looks like the whole account. This
+  is the same silent-truncation trap as the empty-list failure above, in a different costume.
+
+To learn from the full published history, ingest would need to page `GET /v1/posts` and accept
+that those rows carry no metrics.
 
 ## ✅ Account posture — external posts are synced
 
-All 50 posts carry `isExternal: true` and `syncStatus: "synced"`. Posts Monte writes outside
-Zernio still flow into analytics, so the dashboard covers his complete posting history rather
-than only app-generated posts.
+Every analytics row carries `isExternal: true` and `syncStatus: "synced"`. Posts Monte writes
+outside Zernio do flow into analytics, so the dashboard is not limited to app-generated posts
+— within the analytics window.
 
 This is account configuration, not a platform guarantee — Zernio's documentation states that
 personal LinkedIn accounts only receive analytics for posts published through Zernio. The sync
