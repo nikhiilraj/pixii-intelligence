@@ -147,6 +147,12 @@ export default function Studio({ templates }: { templates: Template[] }) {
           <>
             <Lineage draft={draft} />
 
+            {draft.zernio_post_id && (
+              <p className="text-xs opacity-60">
+                In Zernio as a draft ({draft.zernio_post_id}). Publishing stays a human act.
+              </p>
+            )}
+
             <article className="whitespace-pre-wrap rounded-lg border border-black/10 p-4 text-[15px] leading-relaxed dark:border-white/15">
               {draft.full_text}
             </article>
@@ -184,6 +190,16 @@ export default function Studio({ templates }: { templates: Template[] }) {
                 }}
               >
                 Redraw visual
+              </button>
+              <button
+                disabled={busy !== null || draft.zernio_post_id !== null}
+                className="rounded-md bg-black px-3 py-1.5 text-sm text-white disabled:opacity-50 dark:bg-white dark:text-black"
+                onClick={async () => {
+                  const d = await call<Draft>(`/drafts/${draft.id}/push`);
+                  if (d) setDraft(d);
+                }}
+              >
+                {draft.zernio_post_id ? "In Zernio" : "Push to Zernio as draft"}
               </button>
             </div>
           </>

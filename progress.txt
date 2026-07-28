@@ -406,3 +406,41 @@ success-shaped wrong answer, which is worse than an error.
   that actually justify the pattern rather than the corpus at large.
 - A suggestion naming a template that does not exist falls back to the first approved one
   rather than failing the request.
+
+### US-010 — Publish to Zernio as a draft with lineage in metadata (done 2026-07-29)
+
+Delivered: `app/publishing.py` (`push_draft`, `lineage_metadata`), `create_post` and
+`list_posts` on `ZernioClient`, `get_zernio`/`ZernioDep`, `POST /drafts/{id}/push`, and a
+"Push to Zernio as draft" action in the studio.
+
+131 tests green, whole gate clean. Verified live on the real account: draft
+`6a691c6d95e614b6077edb22` created with `status=draft`, full lineage in its `metadata`, and
+`tags=['pixii-intelligence']`. Pushing again returned unchanged and created no second post.
+
+**THE JOIN KEY IS `latePostId`, NOT `_id`. This was the open question and the answer is
+counterintuitive — get it wrong and US-011 attributes nothing, silently.**
+
+The create response returns `_id`, and `GET /v1/posts` carries that same value as its `_id`.
+But in the analytics payload that value appears as **`latePostId`**; `analytics._id` is a
+separate analytics-row identifier. Across all 13 published posts on the account:
+`/v1/posts._id` → `analytics.latePostId` matched **13/13**; → `analytics._id` matched **0/13**.
+
+So `Draft.zernio_post_id` (the create-time `_id`) must be joined against
+**`analytics.latePostId`**.
+
+**Analytics does not contain unpublished drafts at all.** A pushed draft is invisible to
+`/v1/analytics` until it is actually published, so US-011 must treat "pushed but no metrics
+yet" as the normal state, not a failure.
+
+Other decisions worth knowing:
+- **Draft-ness is asserted two ways**: `isDraft: True` *and* omitting `scheduledFor` /
+  `publishNow` / `queuedFromProfile`. Zernio infers draft from the omission; sending the flag
+  as well makes the intent explicit rather than implied. Tests assert on both.
+- **The idempotency key is derived, not generated** — `uuid5` over the draft id, so a retry
+  after a timeout reuses the same `x-request-id` and cannot create a second post. A
+  already-pushed draft short-circuits before calling Zernio at all.
+- **Every post carries `source: pixii-intelligence` in metadata and a matching tag.** The
+  account already held 37 drafts and 13 published posts before this slice; without a marker,
+  the app's output would be indistinguishable from Monte's own.
+- `GET /v1/posts` returns `metadata`; `GET /v1/analytics` does not. Use `/v1/posts` whenever
+  lineage needs reading back from Zernio's side.

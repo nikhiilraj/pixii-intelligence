@@ -11,6 +11,10 @@ class ZernioResponseError(RuntimeError):
     """The API answered successfully but not with the shape a valid request produces."""
 
 
+class ZernioRefused(RuntimeError):
+    """The API declined to create the post. Carries the service's own reason."""
+
+
 class ZernioClient:
     def __init__(
         self,
@@ -56,6 +60,27 @@ class ZernioClient:
                 f"rejected in a way that looks like an empty account. Params: {params}"
             )
         return body
+
+    def create_post(self, payload: dict, request_id: str | None = None) -> dict:
+        """Create a post. Raises with the service's own reason if it declines.
+
+        `x-request-id` makes the call idempotent, so a retry after a timeout cannot
+        produce a second post on the account.
+        """
+        headers = {"x-request-id": request_id} if request_id else None
+        response = self._client.post("/posts", json=payload, headers=headers)
+        if response.status_code >= 400:
+            raise ZernioRefused(
+                f"Zernio refused the post ({response.status_code}): {response.text[:300]}"
+            )
+        return response.json()
+
+    def list_posts(self, limit: int = PAGE_SIZE, page: int = 1) -> list[dict]:
+        """Posts as Zernio holds them. Unlike /analytics, this carries `metadata`."""
+        response = self._client.get("/posts", params={"limit": limit, "page": page})
+        response.raise_for_status()
+        body = response.json()
+        return body.get("posts") or []
 
     def close(self) -> None:
         self._client.close()

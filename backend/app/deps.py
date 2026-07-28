@@ -7,6 +7,7 @@ from sqlmodel import Session
 from app.db import get_session
 from app.llm import LLM, AzureChat
 from app.rendering import AzureImageRenderer, CloudflareRenderer, HtmlRenderer, ImageRenderer
+from app.zernio import ZernioClient
 
 # Every route takes the session this way. Declaring it as an annotated alias rather than
 # a `Depends()` default keeps FastAPI's idiom without tripping ruff's B008.
@@ -47,3 +48,15 @@ def get_image_renderer() -> Iterator[ImageRenderer]:
 
 
 ImageRendererDep = Annotated[ImageRenderer, Depends(get_image_renderer)]
+
+
+def get_zernio() -> Iterator[ZernioClient]:
+    """The Zernio client, as a dependency so tests can substitute a fake."""
+    client = ZernioClient()
+    try:
+        yield client
+    finally:
+        client.close()
+
+
+ZernioDep = Annotated[ZernioClient, Depends(get_zernio)]

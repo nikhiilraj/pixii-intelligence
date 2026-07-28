@@ -41,10 +41,20 @@ supplied — "nothing auto-publishes" is native behaviour.
 
 `POST /v1/posts/{id}/metadata` patches metadata after creation.
 
-**Open item for the publishing slice:** the analytics payload carries both `_id` and
-`latePostId` and they differ. The first slice that creates a real post must determine which
-one the create response's `_id` matches, and record the finding. Until then the join key is
-treated as unresolved between two candidates, not as known.
+**RESOLVED 2026-07-29 (US-010) — the join key is `latePostId`, not `_id`.**
+Created a real draft; the create response returned `_id = 6a691c6d95e614b6077edb22`, and
+`GET /v1/posts` carries that same value as its `_id` with our metadata intact.
+
+Across all **13** published posts on the account:
+
+| join attempt | matches |
+|---|---|
+| `/v1/posts._id` → `analytics.latePostId` | **13 / 13** |
+| `/v1/posts._id` → `analytics._id` | **0 / 13** |
+
+`analytics._id` is a separate analytics-row identifier. **Joining on it would match nothing,
+silently.** Analytics also does not carry unpublished drafts at all, so a pushed draft only
+becomes joinable once it is published.
 
 ## ✅ Account posture — external posts are synced
 

@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlmodel import col, desc, select
 
-from app.deps import HtmlRendererDep, ImageRendererDep, LLMDep, SessionDep
+from app.deps import HtmlRendererDep, ImageRendererDep, LLMDep, SessionDep, ZernioDep
 from app.generation import (
     NoUsableTemplates,
     generate_draft,
@@ -15,6 +15,7 @@ from app.generation import (
 from app.llm import LLMResponseError
 from app.models.draft import Draft
 from app.models.template import Template
+from app.publishing import PushFailed, push_draft
 
 router = APIRouter(prefix="/drafts", tags=["drafts"])
 
@@ -184,6 +185,23 @@ def redraw(
     """Redraw the image from the values already written. The words are untouched."""
     draft = _load(session, draft_id)
     regenerate_visual(session, draft, _renderer(session, draft, html_renderer, image_renderer))
+    session.commit()
+    session.refresh(draft)
+    return _out(session, draft)
+
+
+@router.post("/{draft_id}/push")
+def push(session: SessionDep, zernio: ZernioDep, draft_id: int) -> DraftOut:
+    """Create this draft in Zernio — as a draft. Nothing here publishes or schedules.
+
+    Safe to call twice: an already-pushed draft returns unchanged rather than creating a
+    second post, and the underlying request carries a stable idempotency key.
+    """
+    draft = _load(session, draft_id)
+    try:
+        push_draft(session, draft, zernio)
+    except PushFailed as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     session.commit()
     session.refresh(draft)
     return _out(session, draft)
