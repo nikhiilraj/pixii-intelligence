@@ -1,0 +1,125 @@
+# Pixii Intelligence — build log
+
+Read `## Codebase Patterns` first. Append what you did and what you learned after each slice.
+
+---
+
+## Codebase Patterns
+
+### What this is
+
+A standalone content-intelligence application that will replace `pixii-cli`,
+`podcast-chopper`, `social-automation` and `ai-slop-scorer` (~30k LOC in
+`~/monte-workshop/bots-and-tools/`). V1 is one vertical slice: Zernio corpus in → template
+library → generate with lineage → Zernio draft → analytics joined back → dashboard.
+
+Full spec: `.scratch/v1/spec.md`. Verified integration contracts: `.scratch/v1/seams.md`.
+**Read both before the first slice.** They contain live-verified API behaviour that is not
+guessable from documentation.
+
+### Hard rules
+
+- **Never write to `~/monte-workshop`.** Read-only reference only. This is a standing rule.
+- **Nothing auto-publishes.** Every post reaches Zernio as a draft. This is permanent design,
+  not a V1 limitation.
+- **`.env` is a symlink to `~/Nikhil-workshop/.env`** — one source of truth. Never commit it,
+  never write secret values into any file, never print a key value into logs or output.
+- **Pin Python 3.12.** The system default `python3` is 3.14.0 and will be picked up silently.
+- **Ponytail is on.** Laziest thing that works. No speculative abstractions, no interface with
+  one implementation, no config for a value that never changes. Mark deliberate
+  simplifications with a `ponytail:` comment naming the ceiling and the upgrade path.
+
+### Stack
+
+Backend: Python 3.12, FastAPI, Pydantic v2, SQLModel over SQLAlchemy, Alembic.
+Frontend: Next.js 15 App Router, TypeScript, Tailwind, shadcn/ui, Recharts.
+Database: PostgreSQL via Docker Compose (daemon confirmed running 2026-07-29).
+Scheduling: APScheduler in-process. No Redis, no Celery, no broker in V1.
+Package management: `uv` for Python, `pnpm` for Node. Both confirmed installed.
+
+### The Zernio API — verified live 2026-07-29, do not re-derive
+
+Base `https://getlate.dev/api/v1`, bearer auth with `ZERNIO_API_KEY`.
+Zernio is the GetLate rebrand; `docs.getlate.dev` 301s to `docs.zernio.com`.
+
+**`GET /v1/analytics` — two silent failure modes. Both return HTTP 200 with an empty list:**
+
+- `limit` caps at **50**. `limit=200` returns zero posts and no `pagination` object.
+- A `fromDate`/`toDate` span beyond **90 days** returns zero posts.
+
+Page with `limit=50` and an incrementing `page`. **Treat an unexpected empty result as a
+failure, never as an empty account.** The previous tooling carries a stale comment claiming
+this endpoint does not exist at all; that class of silent, undetectable wrongness is exactly
+what these tests guard against.
+
+Per-post fields: `_id`, `latePostId`, `content`, `publishedAt`, `scheduledFor`, `status`,
+`platform`, `platformPostUrl`, `mediaItems`, `thumbnailUrl`, `mediaType`, `profileId`,
+`isExternal`, `isAd`, and `analytics{impressions, reach, likes, comments, shares, saves,
+clicks, views, follows, engagementRate, lastUpdated}`. The `platforms[]` array repeats metrics
+per account and carries `platformPostId` (`urn:li:share:…`) and `syncStatus`.
+
+**`POST /v1/posts`** accepts `content`, `title`, `mediaItems`, `platforms`, `scheduledFor`,
+`publishNow`, `isDraft`, `timezone`, `tags`, `hashtags`, `mentions`, **`metadata` (arbitrary
+object — this is where lineage goes)**, and an optional `x-request-id` header for idempotency.
+Returns `post._id`. **Draft is the default** when none of `scheduledFor`, `publishNow` or
+`queuedFromProfile` is given. `POST /v1/posts/{id}/metadata` patches metadata later.
+
+**Unresolved, and US-010 must resolve it:** the analytics payload carries both `_id` and
+`latePostId` with different values. Which one the create response's `_id` corresponds to is
+unknown and only determinable by creating a real post. Record the answer here when found.
+
+### Other verified endpoints
+
+Azure OpenAI chat — `POST {AZURE_OPENAI_CHAT_ENDPOINT}/openai/deployments/{deployment}/chat/completions?api-version={ver}`,
+header `api-key`. Deployment `gpt-5-5`, api-version `2024-12-01-preview`. **Uses
+`max_completion_tokens`, not `max_tokens`.** Verified HTTP 200.
+
+Cloudflare Browser Rendering — `POST https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/browser-rendering/screenshot`,
+bearer `CLOUDFLARE_BROWSER_RENDERING_TOKEN`, body `{html, viewport:{width,height}, screenshotOptions:{type}}`.
+Verified: returned a 1080×1350 PNG rendering `$325M` crisply on `#F5F0E8`.
+
+Azure OpenAI image — credentials present for default plus POL/SWE/UAE/WUS3 regions.
+**Not yet exercised live.** US-008 must verify it first.
+
+### Corpus facts
+
+50 posts available: 27 LinkedIn (Monte Desai), 13 YouTube (pixii.creates), 10 X (Pixii_ai),
+spanning 2026-04-30 → 2026-07-28. 25 of 27 LinkedIn posts carry media. Average LinkedIn post
+is ~818 characters. All 50 are `isExternal: true, syncStatus: "synced"`, so posts written
+outside the app are included.
+
+LinkedIn impressions, sorted: 6691, 5747, 4698, 3823, 2840, 1209, 1094, 928, 855, 800, 772,
+640, 545, 525, 468, 457, 430, 405, 402, 394, 377, 354, 348, 332, 332, 111, 0.
+Median 525, max 6691 — a **12.7x spread**.
+
+**Primary success metric is engaged actions = likes + comments + shares + saves.** Not
+impressions (the 6691 post drew 11 reactions), not engagement rate (a 332-impression post
+scores 3.01). The two alternatives disagree on 60% of the top five.
+
+**This is why V1 is a scoreboard, not an optimizer.** ~3 samples per template against a 12.7x
+noise floor cannot support ranking. Show aggregates with their sample counts, flag thin
+samples, let a human promote or retire. Do not build automatic template selection.
+
+### Brand
+
+Post visuals are 1080×1350 (4:5). Cream background `#F5F0E8`, heavy black type, orange Pixii
+wordmark bottom-right. The established layout is an oversized ghosted figure behind a subject
+image with a bold two-line headline beneath. Reference images from the real corpus are useful
+for authoring visual templates — they are downloadable from `media.zernio.com` URLs in the
+analytics payload.
+
+Visual templates declare `renderer: "html" | "ai"`. Typographic frames use `html` because
+image models garble large embedded text. Scene and lifestyle imagery uses `ai`.
+
+### Missing corpus inputs — do not block on these
+
+The creator posts Monte sent over LinkedIn, and the per-post design specifications, are not
+in any repository or API. Extraction runs on the 27 available LinkedIn posts. Manual corpus
+ingest exists so both can be absorbed later. **No slice's acceptance criteria may depend on
+material that does not yet exist.**
+
+---
+
+## Session log
+
+(append per slice: what was built, what was learned, what surprised you)
