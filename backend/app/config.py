@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     enable_scheduler: bool = False
     metrics_sync_hours: int = 6
 
+    # Below this many attributed posts, a template's aggregate is shown but marked
+    # insufficient. Across this corpus a post's engagement spans 12.7x, so a handful of
+    # samples cannot separate a good template from a lucky one.
+    min_sample_size: int = 5
+
     zernio_api_key: str = ""
     zernio_base_url: str = "https://getlate.dev/api/v1"
     getlate_linkedin_id: str = ""

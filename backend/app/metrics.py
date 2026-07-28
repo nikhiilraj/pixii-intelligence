@@ -4,6 +4,7 @@ from typing import Protocol
 
 from sqlmodel import Session, col, select
 
+from app.config import settings
 from app.corpus import ingest_posts
 from app.models.draft import Draft
 from app.models.metric import MetricSnapshot
@@ -51,6 +52,16 @@ class TemplatePerformance:
     @property
     def mean_engaged_actions(self) -> float:
         return self.total_engaged_actions / self.sample_count if self.sample_count else 0.0
+
+    @property
+    def sufficient(self) -> bool:
+        """Whether this aggregate rests on enough posts to be worth reading.
+
+        False is the normal state early on, and says "not enough evidence yet" — not
+        "this template performs badly". The distinction matters: retiring a template on a
+        sample of two is how you delete something that works.
+        """
+        return self.sample_count >= settings.min_sample_size
 
 
 def record_snapshots(session: Session, posts: list[Post]) -> int:

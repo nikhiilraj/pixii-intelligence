@@ -208,6 +208,8 @@ def template_scoreboard(session: SessionDep) -> list[dict]:
             "total_engaged_actions": row.total_engaged_actions,
             "total_impressions": row.total_impressions,
             "mean_engaged_actions": round(row.mean_engaged_actions, 2),
+            "sufficient": row.sufficient,
+            "min_sample_size": settings.min_sample_size,
         }
         for row in template_performance(session)
     ]

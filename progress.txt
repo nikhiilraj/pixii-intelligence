@@ -502,3 +502,25 @@ Learned:
   cannot match, which is correct: they are not evidence about a template.
 - Wide tables live in their own `overflow-x-auto` container so the page body never scrolls
   sideways at laptop width.
+
+### US-013 — Template scoreboard with sample counts and thin-sample flags (done 2026-07-29)
+
+Delivered: `settings.min_sample_size` (default 5), a `sufficient` property on
+`TemplatePerformance`, both surfaced on `GET /metrics/templates`, and a `/scoreboard` page
+grouped by kind with every row linking through to the posts behind it.
+
+164 tests green, whole gate clean. Verified live: 22 template versions, threshold 5, all 22
+correctly marked insufficient, and **no ranking key anywhere in the payload** — a test asserts
+the absence of `rank`/`score`/`best`/`recommended` rather than trusting it stays that way.
+
+**The distinction the flag exists to preserve:** `sufficient: false` says *not enough evidence
+yet*, never *this template performs badly*. Conflating the two is how someone retires a
+template that actually works on a sample of two. The UI says "too thin (n/5)", not "0
+engaged", and templates are ordered by name within their kind — deliberately not by
+performance, because ordering by a number is a ranking whatever you call the column.
+
+Learned:
+- The scoreboard carries `min_sample_size` on every row so the UI never hardcodes the
+  threshold it is applying — change the setting and the explanation changes with it.
+- Link-through reuses the `template_family` filter from US-012, so "show me the posts behind
+  this number" is one hop and needs no new endpoint.
