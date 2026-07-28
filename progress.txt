@@ -337,3 +337,38 @@ Learned:
   **Later slices that render in a loop must pace themselves or handle 429.**
 - The preview UI fills slots from each slot's own `example`, so a preview shows what the
   template author considered representative rather than lorem text.
+
+### US-008 — Visual templates with the ai renderer (done 2026-07-29)
+
+Delivered: `AzureImageRenderer` and an `ImageRenderer` protocol in `app/rendering.py`,
+dispatch in `render_visual`, `get_image_renderer`/`ImageRendererDep`, and Pillow for scaling.
+`.scratch/v1/seams.md` updated — the image seam is now verified rather than assumed.
+
+102 tests green, whole gate clean. Generated live through the app: a 1080x1350 product shot
+on the brand cream, no text — exactly the case the ai path exists for.
+
+**The contract, verified live — this was the one seam never exercised:**
+- `POST {endpoint}/openai/deployments/gpt-image-2/images/generations?api-version=2025-04-01-preview`,
+  header `api-key`, body `{prompt, n, size, quality}`. The PNG comes back under
+  **`data[0].b64_json`**; this deployment never returns a URL.
+- **Both dimensions must be divisible by 16.** `1080x1350` is rejected outright, so the brand
+  size cannot be asked for. `snap_to_16` rounds up to `1088x1360` — exact 4:5 — and Pillow
+  scales down to the declared size. No crop, no distortion. Arbitrary `/16` sizes are allowed,
+  so this generalises to any declared dimensions.
+
+**Decisions worth knowing before building on this:**
+- **`fill(..., escape=False)` for prompts.** HTML-escaping a prompt would send `&amp;` to the
+  image model. Markup escapes; prompts do not. Getting this backwards is silent — the image
+  would just come out subtly wrong.
+- **Dispatch is by capability, not by type.** `render_visual` checks the declaration, then
+  checks the supplied renderer has the matching method. Handing it the wrong renderer raises
+  rather than silently falling back to the other path.
+- **The style reference is concatenated onto every prompt.** It is the only thing holding
+  generated imagery to the brand between runs, so it lives on the template, not in the call.
+- A refusal (moderation, quota) raises `ImageGenerationError` carrying the service's own
+  message and surfaces as 502. A blank image would be the worst possible outcome here.
+
+Learned:
+- Pillow 12 moved the resampling constants: `Image.Resampling.LANCZOS`, not `Image.LANCZOS`.
+- `Image.open()` returns `ImageFile`, and `.resize()` returns `Image` — reassigning to the
+  same name fails mypy. Bind the resized result to a new name.

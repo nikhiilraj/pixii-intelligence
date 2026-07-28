@@ -1,8 +1,11 @@
+import base64
 import html as html_escape
+import io
 import re
 from typing import Protocol
 
 import httpx
+from PIL import Image
 
 from app.config import settings
 from app.models.template import Template
@@ -21,7 +24,21 @@ class MissingSlotValue(RuntimeError):
 
 
 class UnsupportedRenderer(RuntimeError):
-    """The template declares a renderer this path cannot produce."""
+    """The template declares a renderer the supplied renderer cannot produce."""
+
+
+class ImageGenerationError(RuntimeError):
+    """The image service declined or returned nothing usable."""
+
+
+def snap_to_16(value: int) -> int:
+    """Round up to a multiple of 16.
+
+    Azure rejects any dimension not divisible by 16, so the brand's 1080x1350 cannot be
+    requested directly. Asking for 1088x1360 keeps the exact 4:5 ratio, and the result is
+    scaled down to the declared size — no crop, no distortion.
+    """
+    return -(-value // 16) * 16
 
 
 class HtmlRenderer(Protocol):
@@ -30,15 +47,24 @@ class HtmlRenderer(Protocol):
     def screenshot(self, html: str, width: int, height: int) -> bytes: ...
 
 
-def fill(template_html: str, values: dict[str, str]) -> str:
-    """Substitute {slot} placeholders, escaping every value.
+class ImageRenderer(Protocol):
+    """Generates an image from a prompt at a given size."""
+
+    def generate(self, prompt: str, width: int, height: int) -> bytes: ...
+
+
+def fill(template_html: str, values: dict[str, str], *, escape: bool = True) -> str:
+    """Substitute {slot} placeholders.
 
     Template chrome is authored by the team and trusted. Slot values are not — they will
-    come from a language model — so they are escaped rather than injected raw.
+    come from a language model — so for markup they are escaped rather than injected raw.
+    Prompts are not markup: escaping there would put &amp; into the text sent to the image
+    model, so callers building a prompt pass escape=False.
     """
     filled = template_html
     for name, value in values.items():
-        filled = filled.replace(f"{{{name}}}", html_escape.escape(str(value)))
+        replacement = html_escape.escape(str(value)) if escape else str(value)
+        filled = filled.replace(f"{{{name}}}", replacement)
 
     unresolved = sorted(set(_SLOT.findall(filled)))
     if unresolved:
@@ -81,26 +107,109 @@ class CloudflareRenderer:
 
 
 def render_visual(
-    template: Template, values: dict[str, str], renderer: HtmlRenderer
+    template: Template, values: dict[str, str], renderer: HtmlRenderer | ImageRenderer
 ) -> bytes:
     """Render a visual template to image bytes, by the renderer it declares.
 
-    ponytail: the html path is the only one implemented. The ai path arrives in US-008 and
-    dispatches from the same declaration.
+    Both renderers are reached through this one call. The template's declaration selects
+    the path; supplying a renderer that cannot serve that declaration is an error rather
+    than a silent fallback.
     """
     declared = template.body.get("renderer")
-    if declared != "html":
-        raise UnsupportedRenderer(
-            f"template {template.name!r} declares renderer {declared!r}; "
-            "this path renders 'html' templates only"
+    width = int(template.body.get("width") or DEFAULT_WIDTH)
+    height = int(template.body.get("height") or DEFAULT_HEIGHT)
+
+    if declared == "html":
+        if not hasattr(renderer, "screenshot"):
+            raise UnsupportedRenderer(f"template {template.name!r} needs an html renderer")
+        markup = template.body.get("html") or ""
+        if not markup:
+            raise UnsupportedRenderer(f"html template {template.name!r} carries no markup")
+        return renderer.screenshot(fill(markup, values), width, height)
+
+    if declared == "ai":
+        if not hasattr(renderer, "generate"):
+            raise UnsupportedRenderer(f"template {template.name!r} needs an image renderer")
+        skeleton = template.body.get("prompt") or ""
+        if not skeleton:
+            raise UnsupportedRenderer(f"ai template {template.name!r} carries no prompt")
+        # The style reference travels with every prompt — it is what holds generated
+        # imagery to the brand between runs.
+        style = (template.body.get("style_reference") or "").strip()
+        prompt = fill(skeleton, values, escape=False)
+        described = f"{prompt}. {style}" if style else prompt
+        return renderer.generate(described, width, height)
+
+    raise UnsupportedRenderer(
+        f"template {template.name!r} declares renderer {declared!r}, which is not supported"
+    )
+
+
+class AzureImageRenderer:
+    """Azure OpenAI image generation. Contract verified live 2026-07-29.
+
+    Returns base64 PNG under ``data[0].b64_json`` — this deployment never returns a URL.
+    """
+
+    def __init__(
+        self,
+        endpoint: str | None = None,
+        api_key: str | None = None,
+        deployment: str | None = None,
+        api_version: str | None = None,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
+        self._deployment = deployment or settings.azure_openai_image_deployment
+        self._api_version = api_version or settings.azure_openai_image_api_version
+        self._client = httpx.Client(
+            base_url=(endpoint or settings.azure_openai_image_endpoint).rstrip("/"),
+            headers={"api-key": api_key or settings.azure_openai_image_api_key},
+            timeout=300.0,
+            transport=transport,
         )
 
-    markup = template.body.get("html") or ""
-    if not markup:
-        raise UnsupportedRenderer(f"html template {template.name!r} carries no markup")
+    def generate(self, prompt: str, width: int, height: int) -> bytes:
+        response = self._client.post(
+            f"/openai/deployments/{self._deployment}/images/generations",
+            params={"api-version": self._api_version},
+            json={
+                "prompt": prompt,
+                "n": 1,
+                "size": f"{snap_to_16(width)}x{snap_to_16(height)}",
+                "quality": "medium",
+            },
+        )
+        if response.status_code >= 400:
+            # A refusal is information, not a failure to hide. Surface what it said.
+            reason = _error_message(response)
+            raise ImageGenerationError(f"image service refused ({response.status_code}): {reason}")
 
-    return renderer.screenshot(
-        fill(markup, values),
-        int(template.body.get("width") or DEFAULT_WIDTH),
-        int(template.body.get("height") or DEFAULT_HEIGHT),
+        entries = response.json().get("data") or []
+        if not entries or not entries[0].get("b64_json"):
+            raise ImageGenerationError("image service returned no image")
+
+        raw = base64.b64decode(entries[0]["b64_json"])
+        return _scale_to(raw, width, height)
+
+    def close(self) -> None:
+        self._client.close()
+
+
+def _error_message(response: httpx.Response) -> str:
+    try:
+        return str(response.json().get("error", {}).get("message", response.text))[:300]
+    except Exception:
+        return response.text[:300]
+
+
+def _scale_to(raw: bytes, width: int, height: int) -> bytes:
+    """Scale a generated image to the exact declared size."""
+    opened = Image.open(io.BytesIO(raw))
+    scaled = (
+        opened
+        if opened.size == (width, height)
+        else opened.resize((width, height), Image.Resampling.LANCZOS)
     )
+    buffer = io.BytesIO()
+    scaled.save(buffer, format="PNG")
+    return buffer.getvalue()

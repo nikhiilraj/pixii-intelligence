@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 from sqlmodel import col, select
 
-from app.deps import HtmlRendererDep, LLMDep, SessionDep
+from app.deps import HtmlRendererDep, ImageRendererDep, LLMDep, SessionDep
 from app.extraction import (
     DEFAULT_SAMPLE_SIZE,
     ExtractionError,
@@ -13,7 +13,12 @@ from app.extraction import (
 )
 from app.llm import LLMResponseError
 from app.models.template import Template, TemplateKind, TemplateStatus
-from app.rendering import MissingSlotValue, UnsupportedRenderer, render_visual
+from app.rendering import (
+    ImageGenerationError,
+    MissingSlotValue,
+    UnsupportedRenderer,
+    render_visual,
+)
 from app.templates import (
     RetiredTemplateError,
     approve,
@@ -125,20 +130,27 @@ def extract_structures(
 @router.post("/{template_id}/preview")
 def preview_visual(
     session: SessionDep,
-    renderer: HtmlRendererDep,
+    html_renderer: HtmlRendererDep,
+    image_renderer: ImageRendererDep,
     template_id: int,
     values: dict[str, str],
 ) -> Response:
-    """Render a visual template with real values and return the image."""
+    """Render a visual template with real values and return the image.
+
+    The template's declared renderer selects which of the two paths runs.
+    """
     template = _load(session, template_id)
     if template.kind is not TemplateKind.VISUAL:
         raise HTTPException(status_code=400, detail="only visual templates render")
+    renderer = image_renderer if template.body.get("renderer") == "ai" else html_renderer
     try:
         image = render_visual(template, values, renderer)
     except MissingSlotValue as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except UnsupportedRenderer as exc:
         raise HTTPException(status_code=501, detail=str(exc)) from exc
+    except ImageGenerationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except httpx.HTTPStatusError as exc:
         # The rendering service failing is not this service failing. Report which it was
         # and what it said, so "rate limited, retry" is distinguishable from "broken".

@@ -70,12 +70,18 @@ crisply at 180px — the typographic case that AI image generation cannot reliab
 
 The `html` renderer path is proven end to end.
 
-## ◻ Azure OpenAI image — the `ai` visual renderer
+## ✅ Azure OpenAI image — the `ai` visual renderer
 
-Credentials present across five regions (`AZURE_OPENAI_IMAGE_*` for default, POL, SWE, UAE,
-WUS3) with `AZURE_OPENAI_IMAGE_DEPLOYMENT` and a `_15` variant. Not called live — no
-generation was needed before the renderer slice. Verified as configured, not as working; the
-`ai` renderer slice must exercise it first.
+Verified live 2026-07-29 (US-008). `POST {endpoint}/openai/deployments/gpt-image-2/images/generations?api-version=2025-04-01-preview`,
+header `api-key`, body `{prompt, n, size, quality}` → HTTP 200 with the PNG under
+**`data[0].b64_json`**. This deployment never returns a URL.
+
+**Both dimensions must be divisible by 16.** `1080x1350` is rejected outright
+("Width and height must both be divisible by 16"), so the brand size cannot be requested.
+Arbitrary `/16` sizes are accepted, including `1088x1360` — exact 4:5 — which is then scaled
+down to 1080x1350. No crop, no distortion.
+
+Credentials present across five regions (default, POL, SWE, UAE, WUS3).
 
 ## ✅ Channel identifiers
 
