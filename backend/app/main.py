@@ -1,11 +1,12 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import date, datetime, time
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
-from sqlmodel import desc, select
+from sqlmodel import col, select
 
 from app.api_drafts import router as drafts_router
 from app.api_templates import router as templates_router
@@ -14,6 +15,8 @@ from app.corpus import ingest_posts
 from app.db import engine
 from app.deps import SessionDep
 from app.metrics import sync_metrics, template_performance
+from app.models.draft import Draft
+from app.models.metric import MetricSnapshot
 from app.models.post import Post
 from app.scheduler import shutdown as stop_scheduler
 from app.scheduler import start as start_scheduler
@@ -71,10 +74,73 @@ def health() -> dict:
     }
 
 
+# Sortable columns, named explicitly. An allow-list rather than trusting the query string:
+# an unknown field is rejected, never silently ignored, because a silent fallback shows a
+# different ranking than the one that was asked for.
+SORTABLE = {
+    "engaged_actions",
+    "impressions",
+    "reach",
+    "likes",
+    "comments",
+    "shares",
+    "saves",
+    "clicks",
+    "engagement_rate",
+    "published_at",
+}
+
+
 @app.get("/posts")
-def list_posts(session: SessionDep, limit: int = 200) -> list[Post]:
-    """The corpus, ranked by the primary success measure."""
-    statement = select(Post).order_by(desc(Post.engaged_actions)).limit(limit)
+def list_posts(
+    session: SessionDep,
+    limit: int = 500,
+    platform: str | None = None,
+    since: date | None = None,
+    until: date | None = None,
+    template_family: str | None = None,
+    sort: str = "engaged_actions",
+    order: str = "desc",
+) -> list[Post]:
+    """The corpus, filtered and sorted. Ranked by the primary success measure by default."""
+    if sort not in SORTABLE:
+        raise HTTPException(
+            status_code=422,
+            detail=f"cannot sort by {sort!r}; try one of {sorted(SORTABLE)}",
+        )
+
+    statement = select(Post)
+    if platform:
+        statement = statement.where(Post.platform == platform)
+    if since:
+        statement = statement.where(col(Post.published_at) >= datetime.combine(since, time.min))
+    if until:
+        statement = statement.where(col(Post.published_at) <= datetime.combine(until, time.max))
+    if template_family:
+        # Posts this app generated under some version of that template family. Anything
+        # without lineage cannot match, which is correct — it is not evidence about it.
+        late_ids = select(col(Draft.zernio_post_id)).where(
+            (Draft.hook_family == template_family)
+            | (Draft.structure_family == template_family)
+            | (Draft.visual_family == template_family)
+        )
+        statement = statement.where(col(Post.late_post_id).in_(late_ids))
+
+    column = getattr(Post, sort)
+    statement = statement.order_by(
+        col(column).asc() if order == "asc" else col(column).desc()
+    ).limit(limit)
+    return list(session.exec(statement).all())
+
+
+@app.get("/posts/{post_id}/history")
+def post_history(session: SessionDep, post_id: int) -> list[MetricSnapshot]:
+    """Every reading taken of this post, oldest first — the engagement curve."""
+    statement = (
+        select(MetricSnapshot)
+        .where(MetricSnapshot.post_id == post_id)
+        .order_by(col(MetricSnapshot.captured_at))
+    )
     return list(session.exec(statement).all())
 
 

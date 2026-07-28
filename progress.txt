@@ -479,3 +479,26 @@ Other decisions worth knowing:
   stops refreshing silently, which is precisely the failure this system exists to fix.
   `enable_scheduler` defaults to False so no test suite ever starts a thread that calls Zernio.
 - FastAPI's `@app.on_event` is deprecated; the scheduler starts from a `lifespan` handler.
+
+### US-012 — Dashboard post explorer (done 2026-07-29)
+
+Delivered: filtering, sorting and a `SORTABLE` allow-list on `GET /posts`;
+`GET /posts/{id}/history` for the engagement curve; and a `/posts` explorer with channel,
+template and date filters, sort control, a Recharts line chart and a scrollable table.
+
+156 tests green, whole gate clean. Verified live: no filter → 50 posts; `platform=twitter`
+→ 10; `platform=linkedin` → 27; `since=2026-07-01` → 10; an unknown sort field → **422**;
+history for the top post returned its 2 snapshots.
+
+Learned:
+- **Sort fields are an allow-list, not a passthrough.** `getattr(Post, sort)` on an arbitrary
+  string is both an injection surface and a silent-wrong-answer surface — falling back to a
+  default would show a different ranking than the one asked for. Unknown field → 422.
+- **React 19's `react-hooks/set-state-in-effect` rejects fetch-in-`useEffect`.** Filtering is
+  a user action, so `apply()` refetches from the change handler instead. Simpler and it is
+  what the rule is pushing toward. **Do not reach for `useEffect` to sync server state here.**
+- Filtering by template family goes through `Draft.zernio_post_id in (...)` against
+  `Post.late_post_id` — the same confirmed join as everywhere else. Posts without lineage
+  cannot match, which is correct: they are not evidence about a template.
+- Wide tables live in their own `overflow-x-auto` container so the page body never scrolls
+  sideways at laptop width.
