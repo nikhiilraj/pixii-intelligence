@@ -123,3 +123,32 @@ material that does not yet exist.**
 ## Session log
 
 (append per slice: what was built, what was learned, what surprised you)
+
+### US-001 — Walking skeleton (done 2026-07-29)
+
+Built by the orchestrator rather than a loop iteration: it scaffolds two toolchains and is
+the least tracer-bullet-shaped slice in the list.
+
+Delivered: FastAPI backend on 8000 with `/health` reporting database reachability and
+credential presence (presence only, never values); Postgres 17 in Docker on **port 5433**
+(not 5432 — avoids collision with the Homebrew postgresql@16/@17 installs on this machine);
+Alembic wired with baseline `c2756fd0ca1a`; Next.js 15 + Tailwind 4 frontend on 3000 whose
+status page renders `/health` live; GitHub Actions CI running ruff, mypy, alembic and pytest
+for the backend and tsc, eslint and build for the frontend; a Makefile where `make check`
+runs everything.
+
+Verified live end to end: `/health` returned `database: true` with all four credential groups
+present, and the rendered page showed six green rows and no red.
+
+Learned:
+- `.env` is a symlink to `~/Nikhil-workshop/.env` and loads correctly through
+  pydantic-settings from the repo root. Do not copy secrets into this repo.
+- `uv venv --python 3.12` pins correctly; the machine default `python3` is 3.14.0.
+- Alembic 1.14 needs `path_separator` in alembic.ini; the older `version_path_separator`
+  spelling is deprecated.
+- `create-next-app` produces Tailwind **4**, which has no `tailwind.config.ts` — configuration
+  lives in CSS via `@import "tailwindcss"`. Do not add a v3-style config file.
+- FastAPI's TestClient warns that `httpx` is deprecated in favour of `httpx2`. Harmless today;
+  revisit if the warning becomes an error.
+- Compose uses `restart: unless-stopped` so a Docker Desktop restart does not silently kill
+  long unattended runs.

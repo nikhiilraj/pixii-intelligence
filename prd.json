@@ -1,7 +1,7 @@
 [
   {
     "id": "US-001",
-    "title": "Walking skeleton — backend, frontend, database, CI",
+    "title": "Walking skeleton \u2014 backend, frontend, database, CI",
     "description": "An engineer clones the repo, runs one command, and gets a working stack: a FastAPI backend connected to Postgres, a Next.js frontend that reads from it, and CI that runs typecheck, lint and tests on push. The frontend shows a status page reporting backend reachability and database connectivity. Pin Python to 3.12 explicitly (system default is 3.14). Postgres runs via Docker Compose; the Docker daemon is installed but not running, and Homebrew postgresql@17 is an available fallback. Alembic is wired with an initial empty migration so every later schema change is versioned. Secrets come from the environment; a committed .env.example documents every variable by name and no .env is ever committed.",
     "acceptanceCriteria": [
       "One documented command starts backend, frontend and database locally",
@@ -12,12 +12,12 @@
       "slice tests green"
     ],
     "priority": 1,
-    "passes": false
+    "passes": true
   },
   {
     "id": "US-002",
     "title": "Corpus ingest from Zernio with paging and failure detection",
-    "description": "An operator triggers ingest and every post Pixii has published is pulled in with its real metrics, visible as a list in the dashboard. Ingest pages with limit=50 because larger values silently return an empty list with HTTP 200; a span over 90 days does the same. Re-running ingest updates existing posts instead of duplicating them. An unexpected empty response is treated as a failure and reported, never as an empty account — this is the exact failure mode that let a wrong assumption survive in the previous tooling. Posts store their platform, content, publish time, media references, external flag and full metric set.",
+    "description": "An operator triggers ingest and every post Pixii has published is pulled in with its real metrics, visible as a list in the dashboard. Ingest pages with limit=50 because larger values silently return an empty list with HTTP 200; a span over 90 days does the same. Re-running ingest updates existing posts instead of duplicating them. An unexpected empty response is treated as a failure and reported, never as an empty account \u2014 this is the exact failure mode that let a wrong assumption survive in the previous tooling. Posts store their platform, content, publish time, media references, external flag and full metric set.",
     "acceptanceCriteria": [
       "Ingest pages with limit=50 and retrieves all available posts across pages",
       "Re-running ingest updates existing posts rather than creating duplicates",
@@ -32,7 +32,7 @@
   {
     "id": "US-003",
     "title": "Media download and single-post detail view",
-    "description": "An operator opens any post and sees its full text, its image or video, its metrics and its publication details on one page. Post media is downloaded from Zernio and stored locally so visual patterns can be studied offline and referenced by the template library. Media download failures degrade gracefully — the post is still usable without its media.",
+    "description": "An operator opens any post and sees its full text, its image or video, its metrics and its publication details on one page. Post media is downloaded from Zernio and stored locally so visual patterns can be studied offline and referenced by the template library. Media download failures degrade gracefully \u2014 the post is still usable without its media.",
     "acceptanceCriteria": [
       "Post media downloads and is stored locally, keyed to its post",
       "A media download failure does not fail the ingest of that post",
@@ -44,7 +44,7 @@
   },
   {
     "id": "US-004",
-    "title": "Template library — model, versioning, lifecycle and editor",
+    "title": "Template library \u2014 model, versioning, lifecycle and editor",
     "description": "A strategist creates, edits, approves and retires templates in the dashboard. A template has a stable identity, a kind (hook, structure or visual), typed slots, provenance, a lifecycle status and a version. Editing an approved template creates a new version rather than mutating it, so performance already attributed to the earlier version stays attached to it. Retiring preserves history. A template in proposed state cannot be used for generation. This slice also lets a strategist author a template by hand, which is how supplied design specs enter the library later without reopening the design.",
     "acceptanceCriteria": [
       "Templates persist with kind, slots, provenance, status and version",
@@ -102,7 +102,7 @@
   {
     "id": "US-008",
     "title": "Visual templates with the ai renderer",
-    "description": "A strategist previews an ai-renderer visual template and gets generated scene or lifestyle imagery, produced from a prompt skeleton plus a style reference that holds it to the brand. This is the second renderer behind the same interface, used where imagery rather than typography is the point. Azure image generation credentials are configured across five regions but have not been exercised live — this slice verifies them first.",
+    "description": "A strategist previews an ai-renderer visual template and gets generated scene or lifestyle imagery, produced from a prompt skeleton plus a style reference that holds it to the brand. This is the second renderer behind the same interface, used where imagery rather than typography is the point. Azure image generation credentials are configured across five regions but have not been exercised live \u2014 this slice verifies them first.",
     "acceptanceCriteria": [
       "An ai template persists a prompt skeleton and a style reference",
       "Image generation produces an image at the expected dimensions",
@@ -115,7 +115,7 @@
   },
   {
     "id": "US-009",
-    "title": "Directed generation — idea to reviewable draft with lineage",
+    "title": "Directed generation \u2014 idea to reviewable draft with lineage",
     "description": "An operator supplies an idea, topic or source link and gets a complete draft: hook, body and visual, grounded in real corpus exemplars so it reads like Pixii rather than like a language model. The system suggests suitable hook and structure templates and the operator can override any suggestion. Text and visual can be regenerated independently. The draft is stamped at creation with the hook, structure and visual template ids and the versions used, and the operator can see that lineage while reviewing. Nothing leaves the system in this slice.",
     "acceptanceCriteria": [
       "An idea produces a draft with hook, body and visual",
@@ -148,7 +148,7 @@
   {
     "id": "US-011",
     "title": "Scheduled analytics sync joined to lineage",
-    "description": "Metrics refresh on a schedule without manual work and attach to the correct posts, and every generated post's performance is automatically attributed to the templates that produced it. Metric history is retained rather than overwritten so a post's engagement accumulation over time is visible. Posts that arrive without lineage — everything historical, and anything Monte writes outside the app — are included in post-level analytics and excluded from template aggregates.",
+    "description": "Metrics refresh on a schedule without manual work and attach to the correct posts, and every generated post's performance is automatically attributed to the templates that produced it. Metric history is retained rather than overwritten so a post's engagement accumulation over time is visible. Posts that arrive without lineage \u2014 everything historical, and anything Monte writes outside the app \u2014 are included in post-level analytics and excluded from template aggregates.",
     "acceptanceCriteria": [
       "A scheduled job refreshes post metrics without manual intervention",
       "Metrics attach to the correct post via the confirmed join key",
@@ -162,7 +162,7 @@
   },
   {
     "id": "US-012",
-    "title": "Dashboard — post explorer",
+    "title": "Dashboard \u2014 post explorer",
     "description": "An analyst opens one view containing every post with its metrics, filters by channel, date range, post type and template, sorts by any metric, and sees performance charted over time. Posts rank by engaged actions by default, with impressions and engagement rate available as secondary measures. The page is readable on a laptop without horizontal scrolling; wide content scrolls within its own container.",
     "acceptanceCriteria": [
       "All posts appear in one view with their metrics",
