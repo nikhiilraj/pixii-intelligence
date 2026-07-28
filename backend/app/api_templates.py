@@ -3,7 +3,13 @@ from pydantic import BaseModel
 from sqlmodel import col, select
 
 from app.deps import LLMDep, SessionDep
-from app.extraction import ExtractionError, propose_hooks
+from app.extraction import (
+    DEFAULT_SAMPLE_SIZE,
+    ExtractionError,
+    compatible_hooks,
+    propose_hooks,
+    propose_structures,
+)
 from app.llm import LLMResponseError
 from app.models.template import Template, TemplateKind, TemplateStatus
 from app.templates import (
@@ -85,6 +91,42 @@ def extract_hooks(session: SessionDep, llm: LLMDep, platform: str = "linkedin") 
     for proposal in proposals:
         session.refresh(proposal)
     return proposals
+
+
+@router.post("/extract/structures", status_code=201)
+def extract_structures(
+    session: SessionDep,
+    llm: LLMDep,
+    platform: str = "linkedin",
+    sample_size: int = DEFAULT_SAMPLE_SIZE,
+    focus: str = "",
+) -> list[Template]:
+    """Ask the model for post structures from the strongest posts. Proposals only.
+
+    `sample_size` widens the evidence base. Post types that consistently underperform
+    (research posts, in this corpus) sit below the default cutoff, so deriving a structure
+    for one requires deliberately looking further down the ranking.
+    """
+    try:
+        proposals = propose_structures(
+            session, llm, platform=platform, sample_size=sample_size, focus=focus
+        )
+    except (ExtractionError, LLMResponseError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    session.commit()
+    for proposal in proposals:
+        session.refresh(proposal)
+    return proposals
+
+
+@router.get("/{template_id}/compatible-hooks")
+def get_compatible_hooks(session: SessionDep, template_id: int) -> list[Template]:
+    """The usable hooks a structure declares it pairs with."""
+    structure = _load(session, template_id)
+    if structure.kind is not TemplateKind.STRUCTURE:
+        raise HTTPException(status_code=400, detail="only a structure declares hook pairings")
+    return compatible_hooks(session, structure)
 
 
 @router.post("", status_code=201)

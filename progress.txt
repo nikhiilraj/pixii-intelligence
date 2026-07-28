@@ -274,3 +274,34 @@ Learned:
   `/templates/{template_id}/approve`, or FastAPI tries to parse "extract" as an int and 422s.
 - Inject external clients as FastAPI dependencies (`LLMDep`), not by constructing them
   inside the handler — otherwise the endpoint cannot be tested without a network call.
+
+### US-006 — Post structures for offer-reward and deep-research (done 2026-07-29)
+
+Delivered: `propose_structures` and `compatible_hooks` in `app/extraction.py`,
+`POST /templates/extract/structures` (with `sample_size` and `focus`),
+`GET /templates/{id}/compatible-hooks`, and an extract-structures button.
+
+78 tests green, whole gate clean. Approved and live: **`ai-workflow-giveaway`
+(offer-reward, 8 sections)** paired with `ai-time-value-equation`, and **`case-study-loop`
+(deep-research, 6 sections)** paired with `small-input-big-recurring-result`.
+
+**The finding that shaped this slice — worth carrying forward.** Extraction at the default
+sample refused to produce a deep-research structure, twice. Not a bug: the corpus does not
+contain a deep-research post that performed. Of 27 LinkedIn posts, 4 are research-shaped and
+three of those rank #14, #20 and #26 — below the top-12 cutoff (engaged 11). Only rank #5
+made the sample. **Ranking by engaged actions structurally hides post types that
+underperform**, which is correct for "what works" and wrong for "cover this post type".
+Hence `focus`: it names a type to describe and tells the model to say when the evidence is
+thin. Use it whenever a wanted post type is absent from the default sample — and read the
+absence as signal, not as failure.
+
+Learned:
+- **Cited names are resolved to `family_id` and unknown names are dropped**, exactly as
+  provenance ids are. A structure pointing at an invented hook would break generation the
+  first time anyone selected it.
+- `compatible_hooks()` returns only *usable* hooks, so an unapproved or retired pairing
+  silently disappears rather than offering something generation would reject.
+- Structure extraction sends **whole posts** (`POST_CHARS = 2000`); hook extraction sends
+  only the opening (`HOOK_CHARS = 220`). Different questions need different windows.
+- `GET /{id}/compatible-hooks` 400s on a non-structure rather than returning an empty list —
+  an empty list would read as "no pairings" instead of "wrong kind of thing".

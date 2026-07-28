@@ -114,6 +114,15 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
           >
             {busy ? "Working…" : "Extract hooks from top posts"}
           </button>
+          <button
+            onClick={() =>
+              send("/templates/extract/structures?sample_size=27", { method: "POST" })
+            }
+            disabled={busy}
+            className="rounded-md border border-black/20 px-3 py-1.5 text-sm disabled:opacity-50 dark:border-white/25"
+          >
+            Extract structures
+          </button>
           <span className="text-xs opacity-50">
             Proposes patterns from the strongest posts. Nothing becomes usable until you
             approve it.
