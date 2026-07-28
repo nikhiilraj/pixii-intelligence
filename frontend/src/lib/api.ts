@@ -10,6 +10,7 @@ export type Post = {
   account_username: string | null;
   media_type: string | null;
   thumbnail_url: string | null;
+  local_media_path: string | null;
   is_external: boolean;
   impressions: number;
   reach: number;

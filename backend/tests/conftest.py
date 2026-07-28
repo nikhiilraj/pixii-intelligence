@@ -1,8 +1,10 @@
 from collections.abc import Iterator
 
 import pytest
-from sqlmodel import Session
+from sqlalchemy import delete
+from sqlmodel import Session, SQLModel
 
+import app.models  # noqa: F401  — registers every table on SQLModel.metadata
 from app.db import engine
 
 
@@ -16,6 +18,10 @@ def session() -> Iterator[Session]:
     connection = engine.connect()
     transaction = connection.begin()
     with Session(bind=connection) as s:
+        # Start from an empty corpus regardless of what a live ingest left behind. The
+        # outer transaction is rolled back, so real rows are never actually removed.
+        for model in reversed(SQLModel.metadata.sorted_tables):
+            s.exec(delete(model))
         yield s
     transaction.rollback()
     connection.close()

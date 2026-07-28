@@ -2,6 +2,7 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlmodel import Session, desc, select
 
@@ -14,6 +15,11 @@ from app.zernio import ZernioClient, ZernioResponseError
 app = FastAPI(title="Pixii Intelligence", version="0.1.0")
 
 SessionDep = Annotated[Session, Depends(get_session)]
+
+# Locally cached post media, served so the dashboard can display it without reaching
+# back out to Zernio's CDN.
+settings.media_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/media", StaticFiles(directory=settings.media_dir), name="media")
 
 app.add_middleware(
     CORSMiddleware,
@@ -55,8 +61,16 @@ def list_posts(session: SessionDep, limit: int = 200) -> list[Post]:
     return list(session.exec(statement).all())
 
 
+@app.get("/posts/{post_id}")
+def get_post(post_id: int, session: SessionDep) -> Post:
+    post = session.get(Post, post_id)
+    if post is None:
+        raise HTTPException(status_code=404, detail=f"no post {post_id}")
+    return post
+
+
 @app.post("/corpus/ingest")
-def trigger_ingest(session: SessionDep) -> dict:
+def trigger_ingest(session: SessionDep, with_media: bool = True) -> dict:
     """Pull every post and its metrics from Zernio into the corpus.
 
     Safe to re-run: posts are upserted on Zernio's own id, and metrics move as posts
@@ -72,6 +86,6 @@ def trigger_ingest(session: SessionDep) -> dict:
     finally:
         client.close()
 
-    result = ingest_posts(session, payloads)
+    result = ingest_posts(session, payloads, with_media=with_media)
     session.commit()
     return {"fetched": len(payloads), "created": result.created, "updated": result.updated}

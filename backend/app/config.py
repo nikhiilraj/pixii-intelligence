@@ -22,6 +22,11 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://pixii:pixii@localhost:5433/pixii_intelligence"
 
+    # Downloaded post media. Gitignored — it is a local cache of Zernio's files, not
+    # source. ponytail: local disk; swap for object storage when this runs on more than
+    # one machine.
+    media_dir: Path = REPO_ROOT / "media"
+
     zernio_api_key: str = ""
     zernio_base_url: str = "https://getlate.dev/api/v1"
     getlate_linkedin_id: str = ""

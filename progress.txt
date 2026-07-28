@@ -180,3 +180,31 @@ Learned:
   session. Remember to clear the override at the end of an API test.
 - httpx `MockTransport` is how the Zernio client is tested without a network call. Follow
   this pattern for the Azure and Cloudflare adapters.
+
+### US-003 — Media download and post detail view (done 2026-07-29)
+
+Delivered: `app/media.py` (`download_post_media`), `local_media_path` on Post (migration
+`3ea8ff85c496`), media served from `/media` via StaticFiles, `GET /posts/{id}`, and a
+`/posts/[id]` detail page with a metrics grid, the media, and the full body. The corpus list
+now links through to it.
+
+28 tests green, whole gate clean. Verified live: 40 media files / 31 MB downloaded — which
+matches the corpus exactly, since 10 of the 50 posts are text-only (24 image + 16 video + 10
+text). `/media/<file>` served the 2,497,633-byte hero PNG at HTTP 200.
+
+Learned:
+- **Media download is opt-in via `ingest_posts(..., with_media=True)`.** Tests and
+  metric-only refreshes stay offline by default; only the API route asks for media.
+- Every media failure is logged and swallowed, returning None. A post is complete without
+  its image, and losing an image must never cost the post.
+- **The `session` fixture now truncates all tables inside its rolled-back transaction.**
+  A live ingest commits 50 real rows, and tests that count the table were seeing them
+  (`assert 62 == 12`). Truncate-then-rollback gives a clean slate without deleting real data.
+  Any new test that counts rows relies on this.
+- Alembic autogenerate emits `op.add_column` on one long line that trips ruff's E501. Wrap
+  the generated call by hand; it is the routine cost of a new column.
+- `next/image` is wrong for backend-served media at arbitrary paths — use a plain `<img>`
+  with an eslint-disable directly above the tag. A disable comment separated from the tag by
+  another comment line does not apply and becomes an "unused directive" warning.
+- When checking rendered HTML, `grep -c` counts *lines* and Next.js emits one long line.
+  Use `grep -o ... | wc -l` or the count is misleadingly 1.

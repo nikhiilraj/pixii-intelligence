@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { getJson, type Post } from "@/lib/api";
 
 export const dynamic = "force-dynamic";
@@ -71,18 +73,9 @@ export default async function PostsPage() {
                   className="border-b border-black/8 last:border-0 dark:border-white/10"
                 >
                   <td className="max-w-md py-3 pr-4">
-                    {post.platform_post_url ? (
-                      <a
-                        href={post.platform_post_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="hover:underline"
-                      >
-                        {firstLine(post.content)}
-                      </a>
-                    ) : (
-                      firstLine(post.content)
-                    )}
+                    <Link href={`/posts/${post.id}`} className="hover:underline">
+                      {firstLine(post.content)}
+                    </Link>
                   </td>
                   <td className="py-3 pr-4 opacity-70">{post.platform}</td>
                   <td className="py-3 pr-4 tabular-nums opacity-70">

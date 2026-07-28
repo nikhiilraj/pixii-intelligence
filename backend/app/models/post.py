@@ -35,6 +35,10 @@ class Post(SQLModel, table=True):
     thumbnail_url: str | None = None
     media_items: list[dict] = Field(default_factory=list, sa_column=Column(JSONB))
 
+    # Filename of the locally cached media, relative to the media directory.
+    # None means either the post has no media or the download failed — both survivable.
+    local_media_path: str | None = None
+
     # True for posts Zernio synced from the platform rather than published itself.
     is_external: bool = False
 

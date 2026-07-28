@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 
 from sqlmodel import Session, select
 
+from app.media import download_post_media
 from app.models.post import Post
 
 _METRICS = (
@@ -66,11 +67,15 @@ def _apply(post: Post, payload: dict) -> None:
     post.metrics_updated_at = datetime.now(UTC)
 
 
-def ingest_posts(session: Session, payloads: list[dict]) -> IngestResult:
+def ingest_posts(
+    session: Session, payloads: list[dict], *, with_media: bool = False
+) -> IngestResult:
     """Upsert Zernio's posts into the corpus, keyed on Zernio's own post id.
 
     Re-running is safe and expected: metrics change as posts accumulate engagement, so
     ingest updates in place rather than appending a second row.
+
+    Media download is opt-in so that tests and metric-only refreshes stay offline.
     """
     result = IngestResult()
     for payload in payloads:
@@ -86,6 +91,9 @@ def ingest_posts(session: Session, payloads: list[dict]) -> IngestResult:
             result.updated += 1
 
         _apply(post, payload)
+        if with_media:
+            # Never lets a media failure cost us the post — it returns None instead.
+            post.local_media_path = download_post_media(post) or post.local_media_path
         session.add(post)
 
     session.flush()
