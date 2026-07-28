@@ -1,5 +1,6 @@
 import { getJson, type Post, type Template } from "@/lib/api";
 
+import AddExternal from "./AddExternal";
 import Explorer from "./Explorer";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +25,10 @@ export default async function PostsPage() {
           <code className="rounded bg-black/5 px-1 dark:bg-white/10">make api</code>.
         </p>
       ) : (
-        <Explorer initial={posts} templates={templates ?? []} />
+        <>
+          <AddExternal />
+          <Explorer initial={posts} templates={templates ?? []} />
+        </>
       )}
     </main>
   );
