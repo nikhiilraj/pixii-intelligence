@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     # Whose writing templates are allowed to describe. Extraction learns voice from this
     # account only — creator posts stay in the corpus as reference material, but a
     # template claiming to be Monte's voice must not be led by someone else's writing.
+    # ponytail: one account string, and the account names differ per platform
+    # (`Pixii_ai` on twitter, `pixii.creates` on youtube), so extraction on any platform
+    # but LinkedIn now returns an empty sample. Make this a per-platform mapping when
+    # X and Reddit land.
     voice_account: str = "Monte Desai"
 
     # Below this many attributed posts, a template's aggregate is shown but marked
