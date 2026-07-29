@@ -17,7 +17,14 @@ EXEMPLAR_LIMIT = 3
 # Slots the model may write prose into. Anything else — an image URL, say — must come from
 # a real asset: a sentence in an <img src> renders as an empty box and reports success,
 # which is worse than failing.
-WRITABLE_SLOT_TYPES = {"", "text", "number"}
+#
+# **An untyped slot is not writable.** `""` was in this set, which made every slot of every
+# template authored before `type` existed writable by default — `stat-hero` v1 was APPROVED
+# with four untyped slots, two of them an `<img src>`, and that is precisely how the empty-box
+# draft happened. The guard cannot key on the slot's name instead: `left_image_url` reads as
+# an asset but `subject`, `logo` and `hero` do not, so a name heuristic reintroduces the same
+# class of silent wrongness it is meant to close. Absent means unknown, and unknown fails loud.
+WRITABLE_SLOT_TYPES = {"text", "number"}
 
 
 def writable_slots(visual: Template) -> list[str]:

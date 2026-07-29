@@ -967,3 +967,84 @@ Learned:
 LinkedIn post count when that button was written; the voice cohort is now 69 posts and the
 inspiration cohort is 14, for which 27 is simply "all of them". Outside these four gaps, so
 left alone.
+
+### Three false values removed — untyped slots, a fabricated likes count, the hack behind it (done 2026-07-30)
+
+Not imprecision. Each of the three reported something as measured or usable that was neither.
+
+Delivered: `""` out of `WRITABLE_SLOT_TYPES`; `post.likes = engaged_actions` out of
+`add_manual_post`; `scripts/correct_external_creator_metrics.py` and
+`scripts/fix_untyped_visual_slots.py`. 258 tests green, whole gate clean.
+
+**Was the `stat-hero` v1 bug live or latent? Both, on different paths — and this is the
+part worth remembering.**
+
+`usable_templates` selects **newest version per family, then filters to APPROVED**
+(`_latest_version_ids` groups on `max(version)`). v1 (556) and v2 (1101) share family
+`a2bcf8e2`, so v1 has been unreachable to suggestion since v2 was authored. On that path:
+**latent**. Retiring 556 therefore changes the `usable_templates` output by exactly nothing —
+it is hygiene, not the fix.
+
+But `generation._resolve` does `session.get(Template, id)` and checks **`kind` only** — no
+status, no newest-version — and `api_drafts.IdeaIn` takes a caller-supplied `visual_id`. So
+`POST /drafts {"visual_id": 556}` reached v1 **today**, and still would after retirement,
+because retirement sets a status `_resolve` never reads. On that path: **live**. `draft 21`
+carries `visual_family=a2bcf8e2, visual_version=1` — the historical proof the row was really
+used. The `WRITABLE_SLOT_TYPES` change is the only one of the three that actually closes it.
+
+*Not fixed, deliberately:* `_resolve` accepting a retired or superseded template by id is a
+second defect on the same path and outside this task. Worth a slice.
+
+**`WRITABLE_SLOT_TYPES` — `""` is gone. An untyped slot is not writable.**
+It was the whole mechanism: every slot of every template authored before `type` existed
+counted as prose-writable by default, which is how four untyped slots on an APPROVED template
+let the model write "image CTR" into an `<img src>`.
+**The guard deliberately does not key on the slot's name.** `left_image_url` reads as an
+asset; `subject`, `logo` and `hero` do not. A name heuristic would reintroduce the same class
+of silent wrongness it exists to close. Absent type means unknown, and unknown fails loud.
+Checked against all five live visuals: 1101 and 1102 are fully typed and unaffected; 556 is
+retired; 557 and 798 were the only rows relying on untyped-as-writable, both PROPOSED, both
+`ai`, both a single `subject` slot — now typed `text` in place. Nothing APPROVED depended on it.
+
+**Nothing pinned the `likes` hack.** Removing `post.likes = engaged_actions` left the suite
+green, so a future edit could have reintroduced it silently. Added the assertion rather than
+flipped one: `(likes, comments, shares, saves) == (0,0,0,0)` and `engaged_actions == 900`.
+`add_manual_post` now stores its `engaged_actions` argument in `engaged_actions` only —
+it arrives as a single total and there is nothing to split it into.
+
+**`note` is accepted and discarded, and that is a compromise, not a choice.** Both options
+are closed: dropping it from the signature breaks `main.ManualPostIn`'s `**model_dump()`
+(off-limits — parallel workstream), and persisting it needs a `Post.note` column, i.e. a
+migration (forbidden). Marked `ponytail:` with both halves of the upgrade path. The linter
+flagging it is not `make check` — ruff selects `E,F,I,UP,B`, not `ARG` — so it is cosmetic.
+
+Learned:
+
+- **One fixture carried the bug's shape.** `test_generation.library()` declared
+  `[{"name": "big_number"}, {"name": "headline"}]` — untyped — so two tests went red on the
+  change. Correct churn, not a regression: the fixture was asserting the old default.
+- **The regression test has to reproduce the prose, not the omission.** The first version of
+  `test_an_untyped_template_fails_loudly...` passed before the fix, because `WRITTEN` simply
+  omits `left_image_url` and a leftover placeholder already raises. Only feeding the model's
+  invented `"image CTR"` through discriminates.
+- **Structural idempotency beats a guard.** `correct_external_creator_metrics.py` selects on
+  the username it overwrites, so the second run matches nothing by construction.
+- Reassign a JSONB list, never mutate it — SQLAlchemy does not track the in-place edit and
+  the commit is a no-op.
+- The corpus explorer's account dropdown derives its options from the rows, so
+  `External creator` disappeared from the UI with the data and no frontend change.
+
+**Verified after the live correction:** `metric_snapshot` holds **zero** rows for post 2300 and
+zero rows carrying `likes = 1240` anywhere. Snapshots are only written by a Zernio analytics
+sync keyed on `late_post_id`, and this row is MANUAL with `late_post_id` NULL, so the false
+figure never propagated to a second table. Worth checking rather than assuming — a corrected
+`post` row with a stale snapshot beside it is the same lie, one join away.
+
+*Noticed, not fixed — the corrected row is uniquely fragile.* It is now the only row where
+`engaged_actions` (1240) exceeds `likes+comments+shares+saves` (0), because the total is known
+and the breakdown is not. `upsert_linkedin_posts` matches **unscoped by source** on
+`platform == 'linkedin'` (`corpus.py:389`) and then recomputes
+`engaged_actions = likes + comments + shares + saves`, so a LinkedIn scrape that
+content-matched this post would zero the one figure genuinely known. Matching another
+creator's post while scraping Monte's profile is unlikely, and fixing it is outside this task
+— but the whole point of the change was preserving that 1240, so the path is named here.

@@ -40,6 +40,19 @@ def test_a_post_that_never_came_from_zernio_can_be_added(session):
     assert post.engaged_actions == 900
 
 
+def test_a_manual_post_records_no_per_metric_figure_it_was_never_given(session):
+    """`engaged_actions` is one total. Splaying it onto `likes` invents a measurement.
+
+    The row it was written on claimed 1240 likes off a 1240-reaction total, and everything
+    reading `likes` — `/posts?sort=likes`, `metrics.record_snapshots` — believed it. A zero
+    with a known total beside it is honest; a confident wrong number is not.
+    """
+    post = add_manual_post(session, **CREATOR_POST)
+
+    assert (post.likes, post.comments, post.shares, post.saves) == (0, 0, 0, 0)
+    assert post.engaged_actions == 900
+
+
 def test_a_manual_post_is_marked_by_source(session):
     manual = add_manual_post(session, **CREATOR_POST)
 

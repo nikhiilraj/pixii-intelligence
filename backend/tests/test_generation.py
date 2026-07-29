@@ -7,6 +7,7 @@ from app.generation import (
     regenerate_text,
     regenerate_visual,
     suggest_templates,
+    writable_slots,
 )
 from app.models.post import Post
 from app.models.template import TemplateKind
@@ -68,7 +69,12 @@ def library(session, *, approve_all: bool = True):
         kind=TemplateKind.VISUAL,
         name="stat-hero",
         body={"renderer": "html", "html": "<b>{big_number}</b><p>{headline}</p>"},
-        slots=[{"name": "big_number"}, {"name": "headline"}],
+        slots=[
+            # Typed, because untyped is not writable — see
+            # `test_an_untyped_asset_slot_is_not_writable`.
+            {"name": "big_number", "type": "text"},
+            {"name": "headline", "type": "text"},
+        ],
     )
     if approve_all:
         for template in (hook, structure, visual):
@@ -334,4 +340,57 @@ def test_an_unfilled_image_slot_reports_rather_than_rendering_an_empty_box(sessi
 
     assert draft.visual_image is None
     assert "left_image_url" in (draft.visual_error or "")
+    assert draft.body_text.startswith("not a rebrand")
+
+
+def untyped_slot_library(session):
+    """The legacy shape: a visual authored before slots declared a `type`.
+
+    `stat-hero` v1 was live in this state — APPROVED, four untyped slots, two of them an
+    `<img src>`. Kept as a fixture because retiring that row does not delete the shape.
+    """
+    hook = create_template(
+        session, kind=TemplateKind.HOOK, name="transformation", body={"pattern": "{a}"}
+    )
+    structure = create_template(
+        session, kind=TemplateKind.STRUCTURE, name="s", body={"sections": []}
+    )
+    visual = create_template(
+        session,
+        kind=TemplateKind.VISUAL,
+        name="stat-hero-v1",
+        body={"renderer": "html", "html": "<b>{big_number}</b><img src='{left_image_url}'>"},
+        slots=[{"name": "big_number"}, {"name": "left_image_url"}],
+    )
+    for t in (hook, structure, visual):
+        approve(session, t)
+    return hook, structure, visual
+
+
+def test_an_untyped_asset_slot_is_not_writable(session):
+    """An untyped slot is an unknown slot, and no name proves it is safe.
+
+    `left_image_url` reads as an asset, but `subject`, `logo` and `hero` do not, so the
+    guard cannot key on the name. Absent `type` means absent, and absent is not writable.
+    """
+    _, _, visual = untyped_slot_library(session)
+
+    assert writable_slots(visual) == []
+
+
+def test_an_untyped_template_fails_loudly_instead_of_rendering_empty_boxes(session):
+    """The exact live failure, reproduced: the model volunteers prose for the `<img src>`.
+
+    While `""` counted as writable, that prose was accepted, Cloudflare rendered the page,
+    the `<img>` silently failed, and the draft came back with an image and
+    `visual_error: None` — success reported for an asset with empty boxes in it.
+    """
+    untyped_slot_library(session)
+    invented = {**WRITTEN, "visual_values": {"big_number": "40", "left_image_url": "image CTR"}}
+
+    draft = generate_draft(session, FakeLLM(invented), FakeRenderer(), idea=IDEA)
+
+    assert "left_image_url" not in draft.visual_values
+    assert draft.visual_image is None
+    assert draft.visual_error is not None
     assert draft.body_text.startswith("not a rebrand")
