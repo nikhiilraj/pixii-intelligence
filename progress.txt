@@ -673,3 +673,52 @@ is the reason.
 Also: backfilled rows are never snapshotted — `sync_metrics` selects on
 `Post.zernio_id in (analytics ids)` and these rows are keyed on the platform-entry id.
 Correct, since they have no metrics to track, but it is why their history stays empty.
+
+---
+
+### LinkedIn profile scrape → corpus (`upsert_linkedin_posts`, `POST /corpus/linkedin`)
+
+**The join key is normalised content, and the URN proves why.** The profile DOM names a post
+`urn:li:activity:<id>`; Zernio's `platformPostId` names the same post `urn:li:share:<id>`.
+Different namespaces — a URN join matches **0 rows**. `re.sub(r'\W+','',content).lower()[:120]`
+matches, and absorbs the whitespace/punctuation drift of a post edited after publishing.
+Verified offline against the live corpus before any code was written.
+
+**Live load, 39 scraped posts: 4 matched existing rows, 35 created. LinkedIn corpus 35 → 70.**
+Only **5** of the 39 fall inside the corpus's date window (2026-02-17 →), and 4 of those 5 hit;
+the fifth (2026-07-17, "China's AI labs…") is genuinely absent from Zernio — nearest existing
+row scores 0.31 similarity. The other 34 misses are all older than anything Zernio holds. So
+the scrape's real value is **history**, not enrichment: it reaches back to **2024-01-25**.
+
+**Repost counts only exist here.** Zernio reports `shares: 0` on every LinkedIn row; the scrape
+carries 43 across 11 posts. Shares are in `_ENGAGED`, so a corpus where only some rows have them
+mis-ranks — writing them is correctness, not a bonus. All 43 landed on created rows: none of the
+4 merged posts had been reposted.
+
+**A merge writes reactions only.** Impressions are author-only and invisible when scraping
+someone else's profile, so a scraped row has none and writing them would replace a real figure
+with a zero. `likes`/`comments` take `max(existing, scraped)` — the scrape is live, analytics
+lag, neither side is authoritative. `impressions`, `engagement_rate`, `source` and `zernio_id`
+are never touched; confirmed live (merged rows kept 210 / 470 / 332 / 1209 impressions).
+Re-running the whole file: **0 created, 39 updated**, still 70 rows.
+
+**This *does* change what extraction sees — unlike the `/v1/posts` backfill above.** Those rows
+arrived at `engaged_actions = 0` and ranked last. These carry real reaction counts, and Monte's
+2024 launch-era posts out-engage everything Pixii has published since: the top-12 sample
+`_strongest_posts` feeds the LLM is now **8 scraped rows to 4 Zernio rows**, topped by a 2024
+soft-launch post at 181. **Cross-era `engaged_actions` are not comparable** — a 2024 post drew a
+different audience, and with no impressions on those rows nothing can normalise for it.
+Re-extraction will now learn from 2024 personal/launch posts rather than 2026 Amazon-listing
+posts. That is a judgement call for Nikhil, not a bug: it is the ranking key doing exactly what
+it says.
+
+**Media.** `media.licdn.com` serves images from paths with **no extension**, so `_filename`
+stored them suffixless and StaticFiles handed them out as `application/octet-stream`. Suffix now
+falls back to the response's content-type (gated through `_KNOWN_SUFFIXES`, so
+`application/octet-stream` → `.bin` is rejected). Live: 10/10 image posts stored `.jpg`, and
+`GET /media/linkedin:urn:li:activity:….jpg` returns `200 image/jpeg`. Video is **never
+downloaded** — `media_type='video'` and the post URL, nothing else (11 posts). Carousels keep the
+cover image only.
+
+No migration: every column already existed, and no `PostSource` value was added — `alembic/env.py`
+wraps migrations in a transaction, which makes `ALTER TYPE … ADD VALUE` a trap.
