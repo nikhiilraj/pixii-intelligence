@@ -221,6 +221,17 @@ def add_manual_post(
     Extraction treats these as evidence like any other post, which is the point: the
     template library should be able to learn from material the API cannot reach. They are
     marked by source so Pixii's own history stays distinguishable from reference material.
+
+    `engaged_actions` is stored as the one total it is, and the per-metric columns are left
+    at zero. It used to be copied onto `likes` as well, which turned a reaction total into
+    a likes count that was never measured — a figure `/posts?sort=likes` and
+    `metrics.record_snapshots` then read as an observation. `ingest_inspiration_posts`
+    carries the same reasoning for the cohort that does have a breakdown.
+
+    ponytail: `note` is accepted and discarded. There is nowhere to put it — `Post` has no
+    such column — and adding one is a migration for a field no caller sends a value for.
+    It stays in the signature because `main.ManualPostIn` passes it as a keyword through
+    `**model_dump()`; drop it there and here in the same change.
     """
     if not content.strip():
         raise ManualPostRejected("a manual corpus item needs text")
@@ -238,7 +249,6 @@ def add_manual_post(
         status="external",
         metrics_updated_at=datetime.now(UTC),
     )
-    post.likes = engaged_actions
     session.add(post)
     session.flush()
     return post
