@@ -203,26 +203,25 @@ def test_a_video_post_records_its_type_and_downloads_nothing(session):
     assert post.local_media_path is None
 
 
-def test_the_next_zernio_sync_wipes_the_shares_a_merge_wrote(session):
-    """**A known ceiling, pinned so nobody assumes otherwise.**
+def test_a_zernio_sync_cannot_erase_a_repost_count_it_never_observed(session):
+    """Zernio reports `shares: 0` on every LinkedIn row because it does not measure reposts.
 
-    `sync_metrics` re-applies the analytics payload over every row it covers, and Zernio
-    reports `shares: 0` on every LinkedIn row — so enrichment of a post still inside the
-    50-row analytics window is undone by the next scheduled sync. Rows the scrape created
-    are safe (no sync knows them), and so is any post older than the window.
-
-    The fix belongs wherever analytics metrics are re-applied — `_apply` would have to
-    stop trusting a zero it never observes — not here.
+    A merged post still inside the 50-row analytics window used to lose the repost count the
+    scrape gave it on the very next scheduled sync, taking `engaged_actions` down with it —
+    the primary ranking metric decaying on a timer, with nothing in the data to show why.
     """
     zernio_row(session)
     upsert_linkedin_posts(session, [scraped()])
 
     ingest_posts(
         session,
-        [{"_id": "z1", "platform": "linkedin", "content": CONTENT, "analytics": {"likes": 12}}],
+        [{"_id": "z1", "platform": "linkedin", "content": CONTENT, "analytics": {"likes": 30}}],
     )
 
-    assert session.exec(select(Post)).one().shares == 0
+    post = session.exec(select(Post)).one()
+    assert post.shares == 2
+    assert post.likes == 30  # a real observation still lands
+    assert post.engaged_actions == 35  # 30 likes + 3 comments + 2 reposts
 
 
 def test_the_endpoint_ingests_a_scrape_payload(session):

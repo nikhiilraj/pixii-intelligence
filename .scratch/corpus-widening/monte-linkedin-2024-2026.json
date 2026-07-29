@@ -1,0 +1,470 @@
+{
+ "account": "Monte Desai",
+ "profile": "https://www.linkedin.com/in/montedesai/",
+ "captured_at": "2026-07-29T02:21:13.049Z",
+ "expanded": true,
+ "count": 39,
+ "posts": [
+  {
+   "urn": "urn:li:activity:7487870509611778048",
+   "content": "I graded 27 beauty SKUs and every single one was leaving somewhere between $2,400 and $45,000 on the table. The catch is the fix is different for every brand, so I stopped giving one-size advice and built a map instead.\n\nIt's two axes. Listing quality on one, catalog size on the other. Every brand lands in one of four boxes, and the box tells you the play, not the other way around.\n\nHigh quality, low volume is the Catalog-Expansion Sprint, and Dove lives here. The listings are genuinely good, there just aren't enough of them, so you go wide and go fast.\n\nHigh quality, high volume is Automation at Scale, where Maybelline sits, best in class at 84. When you're already good and already big, the only lever left is doing it faster than a human team ever could.\n\nLow quality, high volume is Triage and Template, and that's Nivea's spot. Too many SKUs to hand-fix, so you build a template and stamp out the worst offenders first.\n\nLow quality, low volume is White-Glove Uplift, which is Guerlain. Small catalog, weak listings, rebuild each one by hand.\n\nThe box that trips people up most is high/high, Maybelline's quadrant. Everyone assumes 'we're already good, we're basically done.' That's exactly the brand where automation prints the most, because good times big compounds. \n\nThere is no one \"best practice\" for a catalog. Find your box first, then run the play.",
+   "likes": 4,
+   "comments": 0,
+   "shares": 0,
+   "media_urls": [
+    "https://media.licdn.com/dms/image/v2/D4E10AQE6C1Hhn_nVQw/image-shrink_800/B4EZ.pCjYeHwAg-/0/1785247446818?e=1785898800&v=beta&t=hxm-VfAges8obZ6HtKE9VDUs0pyJEtZsNbDOIV5kCT4"
+   ],
+   "media_type": "image",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7487870509611778048/",
+   "published_at": "2026-07-28T14:04:07.398Z"
+  },
+  {
+   "urn": "urn:li:activity:7486036934725693440",
+   "content": "The beauty brand leaving the most money on Amazon is the one you'd least expect. L'Oreal. $7.3M sitting on the table.\n\nNot because they're bad at it. Because the biggest names have the most to lose, and right now almost none of them convert the demand they already have.\n\nSo we graded the real listings for the 10 biggest beauty brands, then ranked them by dollars left behind:\n\n- L'Oreal: $7.3M\n- Guerlain: $6.7M\n- Lancome: $5.2M\n- Estee Lauder: $4.4M\n- all the way down to Pantene at $0.2M\n\nNot one of the ten earned an A. The average listing is a 79. A B-.\n\n57% of product searches begin on Amazon. The demand is already there. They are just losing it at the listing.\n\nAnd here is the uncomfortable part of the ranking. The leak scales with size. The bigger and more \"established online\" the brand, the more it tends to leave behind, because one mediocre listing quietly caps a much larger catalog.\n\nMy pushback: stop scoring your Amazon presence by whether you show up. Score it by whether the listing wins.\n\nFull ranking, every brand's score and the per-brand math in one report. Link in the comments.",
+   "likes": 6,
+   "comments": 0,
+   "shares": 0,
+   "media_urls": [
+    "https://media.licdn.com/dms/image/v2/D5610AQGoml47a7u0Ag/image-shrink_800/B56Z.O.7XcKAAg-/0/1784810288826?e=1785898800&v=beta&t=varG5lBghMJEheb6Ph7EF-mHiz-npadImisQqBveT6M"
+   ],
+   "media_type": "image",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7486036934725693440/",
+   "published_at": "2026-07-23T12:38:09.079Z"
+  },
+  {
+   "urn": "urn:li:activity:7485310690640134144",
+   "content": "Beauty is leaving $11.7B on the table online, and the brands supposedly winning the channel aren't actually good at it.\n\nAcross the 10 biggest beauty and personal-care companies, eCommerce is 25% of sales, but fair share, given where shoppers actually are, is 32% (FFA Consulting / Euromonitor). That 7-point gap is worth $11.7B in enterprise value today and $16.7B by 2030. \n\nMany will treat a number like that as a sales miss but it's a valuation miss and those are two very different conversations with your board.\n\nSo we pointed our grader at the top 10 beauty brands on Amazon to see who's converting the demand. Not one earned an A. The average listing came back at 79, which is a B-. \n\nSome of the brands with the most presence and the biggest budgets are turning in C+ homework...\n\nThe demand is sitting right there. \n\nMy actual pushback: stop scoring your online business by revenue growth alone. Score it by whether your digital share matches where the category is headed, and whether the listings convert once people show up. \n\nWe put the full leaderboard and the size-of-prize math into one report. Link in the comments.",
+   "likes": 4,
+   "comments": 3,
+   "shares": 0,
+   "media_urls": [
+    "https://media.licdn.com/dms/image/v2/D5622AQFuu784seT5oQ/feedshare-shrink_800/B56Z.EqaTVG4Ag-/0/1784637138446?e=1787184000&v=beta&t=RveL7VYP2k69X5m9wMfMi_65rdKqWmH-vNSiy4178rA"
+   ],
+   "media_type": "image",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7485310690640134144/",
+   "published_at": "2026-07-21T12:32:18.996Z"
+  },
+  {
+   "urn": "urn:li:activity:7484943477840125952",
+   "content": "amazon says rufus shoppers are ~60% more likely to buy.\n\nso the real question isn't \"am i ranking?\" anymore. it's \"is the ai recommending me?\"\n\namazon search is quietly changing. the old A9 keyword algorithm is getting reshaped by an AI layer (Cosmo) that powers Rufus, the conversational assistant. it doesn't match keywords, it reads intent.\n\njon tilley, founder of zonguru, shares how to handle the shift from SEO to AEO: stop stuffing keywords, start answering the actual question a shopper is asking.\n\nhis approach is a dual AI discoverability checklist:\n- semantic mapping: state plainly what your product IS, who it's FOR, when it's used, and what it PAIRS WITH, so the ai can place you in its knowledge graph\n- rufus Q&A: find the top research and decision questions in your category, then answer them in your copy and images\n- the single-ASIN test: update one listing, measure the lift, then roll out catalog-wide\n\nsecond drop from Framework Daddy. the full checklist and episode are in the comments.",
+   "likes": 15,
+   "comments": 2,
+   "shares": 0,
+   "media_urls": [
+    "https://media.licdn.com/dms/image/v2/D5622AQHotiM2gDVj2A/feedshare-shrink_800/B56Z9_cbySG8Ac-/0/1784549588370?e=1787184000&v=beta&t=n99h0qUCbD2t3MVGCd61jetYPm51nxzGjA9BZNcgFfM"
+   ],
+   "media_type": "image",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7484943477840125952/",
+   "published_at": "2026-07-20T12:13:08.642Z"
+  },
+  {
+   "urn": "urn:li:activity:7483822821287153665",
+   "content": "China's AI labs use a 4-step playbook to dominate America. \n\nthe same playbook china used to dominate smartphones, manufacturing, and EVs.\n\nThe Playbook:\n1. copy\n2. share learnings\n3. innovate better than America\n4. dominate America\n\nstep 3 is happening now. Kimi, a new model, BEATS the best American model on some benchmarks. \n\nyou think China just copies. nah son.\n\nChina innovates:\n- Huawei phones are 1 year ahead of iphone\n- BYD has an electric car that drives itself. costs $10K. \n- \n\nstep 4 is familiar\n- raise quality\n- drop price\n- use government subsidies to wipe out American industry\n\nWHY does China go from 'copycat' to 'innovator' to 'dominator' again and again?\n\nthey do it for the nation\nwe do it for the payday\n\nthey admire progress\nwe fight about plastic straws\n\nthey give away their best models\nwe 'can't trust the public'\n\nthey are missionaries\nwe are mercenaries",
+   "likes": 2,
+   "comments": 0,
+   "shares": 0,
+   "media_urls": [
+    "https://media.licdn.com/dms/image/v2/D5622AQGszRHT3J7NQw/feedshare-shrink_800/B56Z9twQp_KgAc-/0/1784252795813?e=1787184000&v=beta&t=fhBtw6I6_HVMx3C7LA2QfeRhZZ67TYWm5pfDRB_ZyZc"
+   ],
+   "media_type": "image",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7483822821287153665/",
+   "published_at": "2026-07-17T10:00:03.299Z"
+  },
+  {
+   "urn": "urn:li:activity:7346138073346269185",
+   "content": "there is so much noise in e-commerce and AI\n\nI decided to cut through it. \n\nI'm launching a newsletter!\n\nDeep research on e-commerce and AI, presented simply\n\nEach week we will answer 1 question that keeps you up.\n\nWhat we do:\n1. interview insiders at top brands\n2. scrape and analyze millions of listings\n3. simplify into a framework\n\nYou get answers, not clickbait.\n\nIssue 1 covers\n\u2022 AI is the new store front\n\u2022 how do I get ChatGPT to recommend my product?\n\u2022 10 recent e-commerce acquisitions\n\u2022 breakdown of the top 10 Amazon listings in Supplements\n\u2022 one line update on Pixii\n\nWould appreciate you if you subscribe to Pixii Perspective! \n\nLink in the comment",
+   "likes": 8,
+   "comments": 1,
+   "shares": 0,
+   "media_urls": [],
+   "media_type": null,
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7346138073346269185/",
+   "published_at": "2025-07-02T11:30:01.331Z"
+  },
+  {
+   "urn": "urn:li:activity:7344343614757453825",
+   "content": "ChatGPT is coming for Amazon\n\n25% of online shoppers now use AI\n\nHere are 3 signals that number will skyrocket to 80%\n \n1. ChatGPT now shows product cards in the chat. Shopping is a huge priority for them.\n \n2. 25% of people use AI at some point in their shopping journey. Most of this is with Google AI answers. But everyone is gunning for this.\n\n3. ChatGPT now commands more attention than several social platforms! These are $XB ad networks.\n\n\n-->How do you get your product recommend by ChatGPT?\n\nCustomers kept asking about this so we went deep.\n\nI'll post these 2 free resources next week:\n-checklist\n-chrome extension to see what keywords ChatGPT searches for when people ask about your product\n \nSources:\n-Joe Kiernan runs polls periodically to see how customer behavior is changing with AI. Check him out!\n-Coatue 'State of the Markets' report",
+   "likes": 5,
+   "comments": 1,
+   "shares": 0,
+   "media_urls": [
+    "https://media.licdn.com/dms/image/v2/D4E22AQGlNeP816KeCQ/feedshare-shrink_1280/B4EZexZmMXHsAo-/0/1751027967218?e=1787184000&v=beta&t=AidPYpGaNuq0lLPygbSBOnpr6KNsTvqNQukzdICEOd0",
+    "https://media.licdn.com/dms/image/v2/D4E22AQE3CWSGLOjKTQ/feedshare-shrink_1280/B4EZexZmMwHsAw-/0/1751027967154?e=1787184000&v=beta&t=98o7ASHLpTUWXQZlVxcQod_2zcTlDJ2-Hb7tQdMFguk",
+    "https://media.licdn.com/dms/image/v2/D4E22AQGvOo9UzaONew/feedshare-shrink_1280/B4EZexZmKvHcAo-/0/1751027967015?e=1787184000&v=beta&t=xso4ZRkev_91eDmfDTiBc19oF7kmHCblGCeYQV9ldvY"
+   ],
+   "media_type": "image",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7344343614757453825/",
+   "published_at": "2025-06-27T12:39:29.064Z"
+  },
+  {
+   "urn": "urn:li:activity:7344326375161442305",
+   "content": "Zuck is making $100 million job offers.\n\nWhat does he see?\n\n\n-->AGI is months away. \n\nThe prize pool is $100 trillion. First one there gets the lion's share, let's say $10 trillion.\n\nIf the new hire improves Meta's odds by 0.001%, that's worth $10 billion. Zuck gets 100x ROI on his recruitment effort.\n\n\n-->Why is the prize pool $100 trillion?\n\nThe world economy is essentially:\nGDP = humans x the work each human does\n\nAGI means unlimited workers. \n\nIf you simply double today's workers, you could double GDP, which today is ~$100 trillion.\n\n\n-->Why does being first to AGI matter?\n\nThe best model will create better versions of itself. Every hour. \n\nIt will create robots that create robots.\n\nSoon you'll have an unlimited army of robots. Each one smarter than Einstein. All connected to a god-like brain. \n\nMore powerful than countries and religions.\n\n\n-->Zuck in 2030 is not a tech bro. \n\nHe's emperor.",
+   "likes": 10,
+   "comments": 11,
+   "shares": 2,
+   "media_urls": [],
+   "media_type": null,
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7344326375161442305/",
+   "published_at": "2025-06-27T11:30:58.824Z"
+  },
+  {
+   "urn": "urn:li:activity:7340736473203138560",
+   "content": "I love when a customer says: \u201cyou made me money\u201d\n\nso I made that our mission\n\nis that shallow?\n\nperhaps a more noble mission would be to automate processes\n\nboring\n\nwe help entrepreneurs build the next Tide, Liquid Death, or Warby Parker\n\nhustlers\n\ntaking on Goliath\n\nbig brands have millions for photoshoots\n\nPixii levels the field\n\nupload 1 photo, get a billion-dollar listing. instantly.",
+   "likes": 19,
+   "comments": 0,
+   "shares": 0,
+   "media_urls": [],
+   "media_type": "video",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7340736473203138560/",
+   "published_at": "2025-06-17T13:45:59.500Z"
+  },
+  {
+   "urn": "urn:li:activity:7338165549840887808",
+   "content": "People ask: is your startup just a wrapper on GPT?\n\nIs it worthless?\n\nLet's look at examples.\n\nWrappers on GPT\n-Perplexity ($14B)\n-Windsurf (acquired by OpenAI for $3B)\n\nWrappers on AWS\n-Dropbox ($8B)\n-Snowflake ($50B)\n\nWrappers in the wild\n-iPhone \u2192 Samsung parts\n-Coke \u2192 water\n-VCs \u2192 the Fed\n-Kayak \u2192 Sabre \n-Stripe \u2192 ACH\n-Stoves \u2192 fire\n-Quesadillas \u2192 cheese\n\nYou say wrapper, billionaires say 'supply chain'.",
+   "likes": 29,
+   "comments": 8,
+   "shares": 0,
+   "media_urls": [],
+   "media_type": null,
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7338165549840887808/",
+   "published_at": "2025-06-10T11:30:03.605Z"
+  },
+  {
+   "urn": "urn:li:activity:7335983848872173571",
+   "content": "Recess didn't ask for this. But I saved them $20K I think?\n\nTesting out a feature that turns 1 photo into an entire set fo Amazon listings.\n\nMix of lifestyle, UGC, infographics, and product-on-white.\n\nTakes about 2 minutes for 20+ shots. \n\nNot sure what to show users while they wait. (ideas?)\n\nThe key bottleneck is the input photo. I used a render from their Amazon page but real photos work better.",
+   "likes": 14,
+   "comments": 1,
+   "shares": 1,
+   "media_urls": [],
+   "media_type": "video",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7335983848872173571/",
+   "published_at": "2025-06-04T11:00:45.560Z"
+  },
+  {
+   "urn": "urn:li:activity:7335266444235980801",
+   "content": "Technology ruined user experience\n\nMeetings with technology:\n1. Open Calendar\n2. Find the Calendar Event and open it\n3. click Join\n4. your browser opens\n5. click Allow Zoom meeting to launch\n6. Turn on microphone and speaker\n7. It looks like you're on mute. unmute from your computer\n8. Endure surveillance from 6 AI notetakers\n9. Hope anyone is listening to you (they're not)\n\nMeetings before technology:\n1. Open door",
+   "likes": 6,
+   "comments": 1,
+   "shares": 0,
+   "media_urls": [],
+   "media_type": null,
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7335266444235980801/",
+   "published_at": "2025-06-02T11:30:02.966Z"
+  },
+  {
+   "urn": "urn:li:activity:7334179584596209664",
+   "content": "Our roadmap assumed 95% cost decline in 15 months\n\nIt took 1 month\n\nDeepSeek is making headlines because its new model:\n\n1) accelerates progress of society by 15x\n\n2) rips power from Silicon Valley, Wall Street, and Washington and gives it to everyone\n\nOur company will revisit ideas that were too expensive, too slow, or too dependent on platforms :-). \n\nOn a personal level, I realized that AI smarter than \"1,000 Einsteins\" is mere months away. Terrifying.",
+   "likes": 19,
+   "comments": 2,
+   "shares": 0,
+   "media_urls": [],
+   "media_type": "video",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7334179584596209664/",
+   "published_at": "2025-05-30T11:31:15.435Z"
+  },
+  {
+   "urn": "urn:li:activity:7331642619015348224",
+   "content": "My notes on Sam Altman's predictions\n\nthe OpenAI CEO spoke recently at a Sequoia event\n\nTimeline\n\u2022 2025: agents doing real work. Coding and a few other categories\n\u2022 2026: AI making new scientific discoveries.\n\u2022 2027: AI doing things in the real world\n\nWhat will ChatGPT will be:\n\u2022 Your operating system\n\u2022 1 ai model that knows every conversation you've ever had, book you ever read. Personalized. The weights never change. Trillion token context. Instant response.\n\u2022 Login with OpenAI to other apps. Those apps can embed your personalized chatgpt into their service\n\u2022 Personal + work goes together\n\nTheir roadmap\n\u2022 Your core AI subscription\n\u2022 Better models\n\u2022 Few core categories (coding is one)\n\u2022 Devices\n\u2022 Operating system like thing\n\nHow people use ChatGPT today\n\u2022 Older ppl: Google replacement\n\u2022 20-30s: life advisor\n\u2022 College students: they don't make any decision without asking ChatGPT first. Their entire operating system",
+   "likes": 14,
+   "comments": 3,
+   "shares": 0,
+   "media_urls": [
+    "https://media.licdn.com/dms/image/v2/D4E10AQHn50itcBSdhw/image-shrink_800/B4EZb86ElDHMAk-/0/1747999804374?e=1785898800&v=beta&t=ix5zS5M1OFBSk3meuzkr_eyTVROMiZB3vXjSx82-i28",
+    "https://media.licdn.com/dms/image/v2/D4E10AQFIfRy1tLw6eA/image-shrink_800/B4EZb86GAxHAAg-/0/1747999810331?e=1785898800&v=beta&t=CiBH4YjTptS95-6rCVYGolv0jBMsT_GEQ0vGHSuZynE"
+   ],
+   "media_type": "image",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7331642619015348224/",
+   "published_at": "2025-05-23T11:30:15.706Z"
+  },
+  {
+   "urn": "urn:li:activity:7319017341785149442",
+   "content": "Peek behind the curtain on what causes me visceral pain about building in AI",
+   "likes": 14,
+   "comments": 0,
+   "shares": 0,
+   "media_urls": [
+    "https://media.licdn.com/dms/image/sync/v2/D4E27AQGDePPbVjs4ng/articleshare-shrink_480/B4EZZEQ6khHUAo-/0/1774365206349?e=1785898800&v=beta&t=_bMbv3uMyuU-eTxVnqtZar_jlYzcXBGtTYBPnD58P2w"
+   ],
+   "media_type": "image",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7319017341785149442/",
+   "published_at": "2025-04-18T15:21:55.048Z"
+  },
+  {
+   "urn": "urn:li:activity:7318699382277591040",
+   "content": "Friends have asked me how I use AI.\n\nI spend all my waking (and sleeping) hours on it. \n\nWould this be useful to you?\n\nThere is so much hype. \n\nBut here are some things I've actually done with AI:\n-save 10 hours a week at work\n-build apps (i'm not a programmer)\n-make songs (i'm tone deaf)\n-plan trips\n-practice new languages\n-motivate myself every day\n-plan the overthrow of countries\n\n\nhashtag\n#AI",
+   "likes": 8,
+   "comments": 2,
+   "shares": 0,
+   "media_urls": [],
+   "media_type": null,
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7318699382277591040/",
+   "published_at": "2025-04-17T18:18:27.594Z"
+  },
+  {
+   "urn": "urn:li:activity:7318693847117553664",
+   "content": "AI is human-level now.\n\n95% of people don't use it.\n\nIt's your golden opportunity.\n\nIt's like having cars when others are walking. Electricity when others are burning candles.",
+   "likes": 20,
+   "comments": 3,
+   "shares": 0,
+   "media_urls": [],
+   "media_type": null,
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7318693847117553664/",
+   "published_at": "2025-04-17T17:56:27.909Z"
+  },
+  {
+   "urn": "urn:li:activity:7318589414400557057",
+   "content": "The holy grail of marketing is here.\n\n1 ad. 1 person. 1 moment.\n\nThis Rippling ad proves LinkedIn is opening the gates for true personalization.\n\nPixii takes it a step further. Drop in CRM data and it generates unique creative for each lead.\n\nAccount-based marketing teams will lead the way to personalization.\n\nAd costs will skyrocket.\n\nBut if conversion rate is 50%, is it worth it?\n\n\nhashtag\n#ABM \nhashtag\n#accountbasedmarketing",
+   "likes": 15,
+   "comments": 2,
+   "shares": 0,
+   "media_urls": [],
+   "media_type": "video",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7318589414400557057/",
+   "published_at": "2025-04-17T11:01:29.209Z"
+  },
+  {
+   "urn": "urn:li:activity:7317864473501859841",
+   "content": "Hey Rippling. Love seeing my name in the caption, but why not personalize the graphic too?\n\nI made some for you. Plus a few different colorways too.\n\nNext time, I'll personalize the whole ad using CRM data",
+   "likes": 17,
+   "comments": 2,
+   "shares": 0,
+   "media_urls": [],
+   "media_type": "video",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7317864473501859841/",
+   "published_at": "2025-04-15T11:00:49.830Z"
+  },
+  {
+   "urn": "urn:li:activity:7313647107704320000",
+   "content": "it wasn't me though, don't sue me bro @Canva",
+   "likes": 21,
+   "comments": 0,
+   "shares": 0,
+   "media_urls": [],
+   "media_type": "video",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7313647107704320000/",
+   "published_at": "2025-04-03T19:42:31.469Z"
+  },
+  {
+   "urn": "urn:li:activity:7312886701956255745",
+   "content": "I had no clue",
+   "likes": 4,
+   "comments": 0,
+   "shares": 0,
+   "media_urls": [],
+   "media_type": null,
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7312886701956255745/",
+   "published_at": "2025-04-01T17:20:56.611Z"
+  },
+  {
+   "urn": "urn:li:activity:7312654884686778369",
+   "content": "Come through at \nhashtag\n#SMMW \nhashtag\n#smmw25",
+   "likes": 7,
+   "comments": 0,
+   "shares": 0,
+   "media_urls": [],
+   "media_type": "video",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7312654884686778369/",
+   "published_at": "2025-04-01T01:59:47.067Z"
+  },
+  {
+   "urn": "urn:li:activity:7312260423150391296",
+   "content": "This photo is 100% AI generated \n\n\n\nJk we\u2019re in San Diego for \nhashtag\n#SMMW25\n\nAddison is handing out these slick sunglasses and I\u2019m handing out bad breath\n\nCome see us with the Pixii shirts\n\n\nhashtag\n#smmw",
+   "likes": 52,
+   "comments": 2,
+   "shares": 1,
+   "media_urls": [
+    "https://media.licdn.com/dms/image/v2/D4E22AQE12mcsSONGBw/feedshare-shrink_800/B4EZXpeEy4HUAg-/0/1743378739392?e=1787184000&v=beta&t=000tuJ3dNhpbuZ417aHmW98ktffQK0yzKJFXvQhFlag"
+   ],
+   "media_type": "image",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7312260423150391296/",
+   "published_at": "2025-03-30T23:52:20.108Z"
+  },
+  {
+   "urn": "urn:li:activity:7303746502043070465",
+   "content": "We asked 100 marketing agencies their top pain points\n\n1: creative is always a bottleneck\n2: churn\n3: AI sucks\n\nWe built Pixii to solve these problems, working closely with top agencies.\n\nWe're not sharing everything today, but here is a preview.\n\nWe built 3 skills into the AI agent:\n-editable designs\n-on brand\n-no prompt engineering\n\nPartner agencies now use Pixii for clients. Some save $20K per month. Others use the time saved to scale!",
+   "likes": 56,
+   "comments": 2,
+   "shares": 3,
+   "media_urls": [],
+   "media_type": "video",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7303746502043070465/",
+   "published_at": "2025-03-07T12:01:03.135Z"
+  },
+  {
+   "urn": "urn:li:activity:7247191116616282113",
+   "content": "Netflix ruined television. DirecTV can save our favorite pastime.\n\nDirecTV is merging with Dish because the core satellite TV business is dying. Time for something new.\n\nWhy do people like DirecTV?\nA. rural (no other option)\nB. content (sports, international channels, niches)\nC. simplicity (just turn it on)\n\nRural folks now have options for internet and therefore TV. Starlink, T-Mobile, and local telcos serve them now. DirecTV should keep them happy but accept that many will leave every year. \n\nThey still have B and C in their favor.\n\nWhat's wrong with TV today?\n-painful logins and menus\n-on-screen keyboard (wtf)\n-'what should we watch?' (for hours)\n-ads (lol)\n-expensive (lol)\n\nBig tech and streaming apps made TV feel like Windows 95. We wanted escape, they gave us a chore.\n\nThey have all my intimate data but can't guess what I want to watch??\n\nThe solution? \n\nDirectTV SURF\n\nJust turn it on and something great plays. Like the old days.\n\n1. It's TikTok for long-form TV. Don\u2019t like what's playing? Tap 'next'. It learns YOU.\n2. Voice mode by OpenAI built in. Just say what you want.\n3. All your favorite on-demand content, live sports, and international channels. Plus menus if you really want them.\n4. No logins, keyboards, or app switching\n\nWhy is DirectTV the only company that can pull this off?\n\nThey can focus on making TV simple and delightful.\n\nOthers have content deals, but they have bigger agendas:\n-Amazon sells you movies, apps, and toilet paper\n-Comcast rents you set-top boxes (there's no way this is medically necessary in 2024)\n-Apple lures you into its ecosystem\n\nDirecTV SURF. Just turn it on.",
+   "likes": 6,
+   "comments": 0,
+   "shares": 0,
+   "media_urls": [
+    "https://media.licdn.com/dms/image/v2/D4E22AQHubtds1OVhxA/feedshare-shrink_800/feedshare-shrink_800/0/1727811585003?e=1787184000&v=beta&t=RvAueKWBCD71TeWM5gUB-8QG3SyYIQn62K9lHT_Nz9M",
+    "https://media.licdn.com/dms/image/v2/D4E22AQHef4iFTztAKw/feedshare-shrink_800/feedshare-shrink_800/0/1727811585470?e=1787184000&v=beta&t=_JuoQuGI_cydURSIN_NbqaV5YVBoQWj2jhxruF-6sH8"
+   ],
+   "media_type": "image",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7247191116616282113/",
+   "published_at": "2024-10-02T10:30:08.501Z"
+  },
+  {
+   "urn": "urn:li:activity:7241844804244893697",
+   "content": "What does OpenAI o1 mean for you as an AI builder or user?\n \n1. First impressions\n \nO1 or 'Strawberry' is incredibly powerful but not entirely new. It breaks down big tasks into smaller ones. For example, if you ask it to plan a trip to Mexico City, o1 will break that down into: pick a neighborhood, recommend hotels, and suggest restaurants. \n \nAI agent builders have been doing this for the past year. Pixii breaks down a request for an ad into design, artwork, writing, and more. MightyBot's UX was similar to o1: it explains the sub-tasks and tackles each one in order (e.g. find new sales leads from my emails and add them to Salesforce). We've also seen open source LLMs use this approach.\n \n2. Why is o1 so powerful?\n \na. from 'Training' to 'Trying'\n \nLLMs rely on massive 'pre-training'. This is akin to training a student for 12 years before letting them loose in the real world. OpenAI and others have already scraped the entire internet. Gains from pre-training are plateauing. \n \no1 shifts the emphasis from training to \"trying\", where the agent learns by doing. For example, when planning a trip to Mexico City, the agent might try to find flights under $500 for this weekend. If it can't, it won\u2019t stop\u2014it\u2019ll try different dates, check alternate airports, suggest adjusting the budget, or even explore buses. Every failed or successful attempt teaches it something new.\n \nTenacious models will try for longer and get more creative.\n \nCurrently the 'trying' phase lasts seconds. What if we let it try for months or years? What if we give it data and tools? That could lead to medical breakthroughs, trillion dollar businesses, and novel materials.\n \nYou might recognize this as optimization; the model searches for the best solution, learning from every move.\n \nb. Force multiplier for your AI agent\n \nAI agent builders previously had to create scaffolding for every step\u2014choose neighborhood, pick hotel, and so on. Now, many of these smaller tasks can be handled with a single prompt to o1. \n \nAgent builders can focus their energy on the next level. Let O1 plan the trip. Your agent will book it across Expedia and Marriot, update your family's calendars, and email you with travel alerts and inspiration.\n \n3. The new model reduces some problems and creates new ones\n \nProblems reduced:\n-rushing to an answer\n-confusion\n-hallucinations\n \nProblems created:\n-overthinking\n-verbosity\n \n4. \"High-agency\"\n \nYou want to hire high-agency people. The ones who 'figure it out'. They keep trying, get creative, and take work off your plate.\n \nSame for AI agents.",
+   "likes": 9,
+   "comments": 1,
+   "shares": 0,
+   "media_urls": [],
+   "media_type": null,
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7241844804244893697/",
+   "published_at": "2024-09-17T16:25:48.302Z"
+  },
+  {
+   "urn": "urn:li:activity:7240320817438339073",
+   "content": "well humans, we had a good run!",
+   "likes": 8,
+   "comments": 0,
+   "shares": 0,
+   "media_urls": [
+    "https://media.licdn.com/dms/image/v2/D4E22AQHHhBNRto9Gsg/feedshare-shrink_800/feedshare-shrink_800/0/1726167256040?e=1787184000&v=beta&t=hc5E2BS7_luQLBwlYUqBrc6dYJcuazd7kxqABxj-uh0"
+   ],
+   "media_type": "image",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7240320817438339073/",
+   "published_at": "2024-09-13T11:30:01.533Z"
+  },
+  {
+   "urn": "urn:li:activity:7240065181001609216",
+   "content": "Yes, Pixii, an AI marketing agent, builds with OpenAI o1. We'll soon roll out updates for complex work like campaign planning, deployment, and analytics.",
+   "likes": 29,
+   "comments": 0,
+   "shares": 0,
+   "media_urls": [],
+   "media_type": null,
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7240065181001609216/",
+   "published_at": "2024-09-12T18:34:13.057Z"
+  },
+  {
+   "urn": "urn:li:activity:7239277587007508480",
+   "content": "You can fix anything. What do you choose to fix?\n\nWatching our engineers work is a marvel. They can fix anything if they just have the time. The same is true in business. I've watched founders invent new things and consultants crack new markets. The same is true personally. I've seen friends uplift and heal ones they love.\n\nWhat is worth your precious time? Who?\n\nI ponder this question often as a founder. What should my team do? What should they not?\n\nI ask this to people seeking career advice. What do you choose to fix? Or is someone choosing for you?",
+   "likes": 10,
+   "comments": 0,
+   "shares": 0,
+   "media_urls": [],
+   "media_type": null,
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7239277587007508480/",
+   "published_at": "2024-09-10T14:24:36.016Z"
+  },
+  {
+   "urn": "urn:li:activity:7174125181064335360",
+   "content": "The last couple days have been exhilarating. Here are some breakthroughs and what they mean for your life.\n\nFigure added GPT4 agents to its robot, giving it reasoning and conversation. This humanoid has eyes and fingers and knows how to use them. I expect these to cost $25K in 3 years. They'll help you with chores!\n\nCognition turned heads with Devin, an AI software engineer. Agents like these will become more common over 2024-2025. You'll reach Devin (and Pixii) over Slack, like any teammate. \n\nGoogle DeepMind announced SIMA, an AI agent that can play any video game. Over time, this kind of technology will help robots traverse our physical world.\n\nSpaceX hit another milestone with Starship. Space exploration led to breakthroughs for life on earth, like GPS, weather prediction, CT scans, and memory foam. Scientists are excited about 3D printing retinas in space to cure blindness. That's difficult on earth because of gravity.",
+   "likes": 27,
+   "comments": 1,
+   "shares": 1,
+   "media_urls": [
+    "https://media.licdn.com/dms/image/v2/D4E22AQFImKDLeyzaxA/feedshare-shrink_800/feedshare-shrink_800/0/1710444731515?e=1787184000&v=beta&t=KyawIB3ToeoOQmfNS4Ww4yN9NwBeEh5A1h11qLR4By8"
+   ],
+   "media_type": "image",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7174125181064335360/",
+   "published_at": "2024-03-14T19:32:11.966Z"
+  },
+  {
+   "urn": "urn:li:activity:7171489782462685186",
+   "content": "The average human scores 100 on IQ tests. How is AI doing?\n2022 = below average\n2024 = matches human average (Claude-3 scores 101)\n2025 = beats human average\n2026 = !!!!!!!\n2030 =",
+   "likes": 22,
+   "comments": 1,
+   "shares": 4,
+   "media_urls": [
+    "https://media.licdn.com/dms/image/v2/D4E22AQHnHM4_0hgVGg/feedshare-shrink_800/feedshare-shrink_800/0/1709782511698?e=1787184000&v=beta&t=4KCFR3_M-7yBL2cIkTKN_KN_4wKVR-bBOc1QYIcEzZY"
+   ],
+   "media_type": "image",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7171489782462685186/",
+   "published_at": "2024-03-07T13:00:03.976Z"
+  },
+  {
+   "urn": "urn:li:activity:7170426739234328577",
+   "content": "There are now 4 GPT-4 class models (and counting):\n1. Gemini Pro (with 1M token context window)\n2. Claude 3 Opus\n3. Mistral Large\n4. GPT4\n\nThe race to the bottom will continue as OpenAI and others:\n-Cut price\n-Improve speed\n-Increase context length\n\nThese companies will try to build their moat with:\n-features like memory and function-calling\n-ecosystem integration\n-control and ability to fine tune\n\nAnd of course, the race for GPT5-class systems continues. The focus there is agents.\n\nPixii implements new models when they make sense for our users.",
+   "likes": 37,
+   "comments": 1,
+   "shares": 2,
+   "media_urls": [],
+   "media_type": null,
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7170426739234328577/",
+   "published_at": "2024-03-04T14:35:54.720Z"
+  },
+  {
+   "urn": "urn:li:activity:7168590743698169856",
+   "content": "Breaking out of stealth: Pixii, a creative AI\n \nPixii is a team of agents that create campaigns. Designer, writer, artist, and strategist. All in a single chatbot.\n \nPixii creates assets for any platform, any style, any language. On-brand.\n \nSend your feedback and Pixii revises in 1 minute.\n \nWe built two technical breakthroughs:\n1. Agents\n2. Text-to-design\n \nAgents are AIs that make decisions and use tools on your behalf. Pixii's tools include models like GPT4, text-to-design, and the self-evolving brand profile. Agents will become part of everyone's life this year.\n \nOur memberships in Microsoft and Google accelerators give us extensive access to top models.\n \nBeta testers report:\n-Higher ROI\n-More creativity\n-Lower costs\n-Faster, more personalized assets\n \nAbout us:\n-Mission: personalize anything AI can create.\n-Vision: Pixii does it for you.\n-Team: from Amazon, Bain & Company, Harvard University, Meta, and IIT.\n-Backers: Bain & Company, marketing executives, and tech investors.\n \nOur waitlist is open for startups. If you know someone who needs this, please introduce them to me by tagging them below.\n \nThis video shows our Resize feature. Marketers complain about the painful task of adjusting ads for each platform. Pixii does it for you, intelligently moving and resizing elements.\n \nOh yea, it's mobile-friendly.",
+   "likes": 127,
+   "comments": 27,
+   "shares": 17,
+   "media_urls": [],
+   "media_type": "video",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7168590743698169856/",
+   "published_at": "2024-02-28T13:00:19.273Z"
+  },
+  {
+   "urn": "urn:li:activity:7168340192309825536",
+   "content": "Klarna\u2019s customer service AI does the job of *700 humans*. It\u2019s faster, more accurate, and speaks 35 languages.\n\nThis is month 1, v1.",
+   "likes": 20,
+   "comments": 2,
+   "shares": 0,
+   "media_urls": [
+    "https://media.licdn.com/dms/image/v2/D5622AQF3c2dvMuIKMQ/feedshare-image-high-res/feedshare-image-high-res/0/1709065482391?e=1787184000&v=beta&t=fnACaZJzndA_rm5tOr8job86ILUbGZ7bMJvCwh2UWLo"
+   ],
+   "media_type": "image",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7168340192309825536/",
+   "published_at": "2024-02-27T20:24:43.167Z"
+  },
+  {
+   "urn": "urn:li:activity:7163997033312288768",
+   "content": "This video is AI-generated!\n\nOpenAI announced Sora, its text-to-video model. The goal is to train AI to understand the real world. Physical robots are coming to do your chores and fight your wars.\n\n(yes, Pixii will have on-brand video later this year)\n\nSource: OpenAI website",
+   "likes": 41,
+   "comments": 2,
+   "shares": 0,
+   "media_urls": [],
+   "media_type": "video",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7163997033312288768/",
+   "published_at": "2024-02-15T20:46:33.370Z"
+  },
+  {
+   "urn": "urn:li:activity:7161335377616617472",
+   "content": "Instagram's AI friends want to know you deeply. Meta sells ads.\n\nChatbots will help brands create serendipity - 1 ad for 1 person for 1 moment. They will also create risks in the realms of manipulation, privacy, and tech fragmentation.",
+   "likes": 27,
+   "comments": 1,
+   "shares": 2,
+   "media_urls": [],
+   "media_type": null,
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7161335377616617472/",
+   "published_at": "2024-02-08T12:30:05.201Z"
+  },
+  {
+   "urn": "urn:li:activity:7158206629673336832",
+   "content": "I stopped using Google. Most of us will in the next 1-3 years. \n\nWhat replaces the $200B search market? How do marketers adapt?",
+   "likes": 26,
+   "comments": 3,
+   "shares": 3,
+   "media_urls": [],
+   "media_type": null,
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7158206629673336832/",
+   "published_at": "2024-01-30T21:17:33.562Z"
+  },
+  {
+   "urn": "urn:li:activity:7156616830361436160",
+   "content": "The future is unlimited everything. Free. \nhashtag\n#Davos sees a turning point coming.\n\nThe end of homelessness, hunger, and work.\n\nThis requires unlimited labor, intelligence, and energy.\n\nRobots, AI, and quantum about to hit a tipping point that moves us toward this future, says Davos.\n\nFusion (unlimited energy) has also seen breakthroughs.\n\nThe cost of making things falls toward zero.\n\n2024 will be historic.",
+   "likes": 3,
+   "comments": 0,
+   "shares": 0,
+   "media_urls": [],
+   "media_type": null,
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7156616830361436160/",
+   "published_at": "2024-01-26T12:00:15.869Z"
+  },
+  {
+   "urn": "urn:li:activity:7156301051158040576",
+   "content": "Soft launch to my connections: what have we been working on at Pixii ?\n\nPixii is a creative AI. Our first product is a chatbot that creates ads in 1 minute. We focus on startups. Comment below if you want to join the waitlist.\n\nHear a customer testimonial below.\n\nWe have an exceptional team hailing from Amazon, Bain & Company, Meta, and Indian Institute of Technology, Kanpur.\n\nOur mission is to personalize anything AI can create. We are building an ecosystem of agents to do that.",
+   "likes": 141,
+   "comments": 33,
+   "shares": 7,
+   "media_urls": [],
+   "media_type": "video",
+   "url": "https://www.linkedin.com/feed/update/urn:li:activity:7156301051158040576/",
+   "published_at": "2024-01-25T15:05:28.240Z"
+  }
+ ]
+}
