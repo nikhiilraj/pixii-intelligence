@@ -14,6 +14,15 @@ The archive is hand-assembled, so its structure is irregular:
     ``63-Reshare``). Partial metrics are normal; a missing metric is ``None``
     (``null`` in JSON), never 0.
   * Images sit at the END of a post, immediately before its metrics.
+  * Some images carry their original LinkedIn CDN address, either labelled
+    ("Image asset address: https://media.licdn.com/...") or as a bare hyperlink.
+    That is document annotation, not post text, so it moves to ``image_url`` and
+    is removed from ``content``.
+
+Output schema, per post:
+    index, label, content, likes, comments, shares, image_files, image_url, notes
+``label`` records which delimiter form produced the post; ``image_url`` is null
+when the doc did not note one. Missing metrics are null, never 0.
 
 Post boundary rule
 ------------------
@@ -55,6 +64,18 @@ def _img_token(target: str) -> str:
 DELIM_RE = re.compile(r"(?m)^[ \t]*Post[ \t]*[-–—]?[ \t]*(\d*)[ \t]*[-–—]?[ \t]*$")
 # Any occurrence, used only to flag delimiters we may have missed.
 DELIM_ANY_RE = re.compile(r"(?<![A-Za-z])Post[ \t]*[-–—]?[ \t]*\d*")
+
+# The doc annotates some images with their original LinkedIn CDN address, either
+# labelled ("Image asset address: https://media.licdn.com/...") or as a bare
+# hyperlink on its own line. That is document annotation, not post text: it is
+# lifted into ``image_url`` and removed from ``content`` so it never reaches hook
+# extraction. Deliberately restricted to the image CDN host -- posts legitimately
+# end with links their author wrote (post 14 signs off with an lnkd.in article
+# link), and those must stay in ``content``.
+IMAGE_URL_RE = re.compile(
+    r"^[ \t]*(?:Image[ \t]+asset[ \t]+address[ \t]*:[ \t]*)?(?P<url>https://media\.licdn\.com/\S+)[ \t]*$",
+    re.IGNORECASE,
+)
 
 LIKE_WORDS = ("l", "like", "likes")
 COMMENT_WORDS = ("c", "comment", "comments")
@@ -191,6 +212,21 @@ def parse_segment(body: str):
     return content, metrics, trailing
 
 
+def split_image_urls(lines):
+    """Pull image-CDN annotation lines out of the content. Returns (lines, urls)."""
+    kept, urls = [], []
+    for line in lines:
+        bare = IMG_RE.sub("", line).strip()
+        m = IMAGE_URL_RE.match(bare)
+        if m:
+            urls.append(m.group("url"))
+            # Keep any image token that shared the line; drop the URL text itself.
+            kept.append("".join(_img_token(t) for t in IMG_RE.findall(line)))
+            continue
+        kept.append(line)
+    return kept, urls
+
+
 def clean(lines):
     """Join content lines, strip image tokens, normalize blank runs."""
     text = "\n".join(lines)
@@ -237,12 +273,15 @@ def parse(docx_path: str):
                 "(misplaced '%s' delimiter in the source doc)." % (i + 2, raw[i + 1]["label"] if i + 1 < len(raw) else 0)
             )
 
+        lines, urls = split_image_urls(lines)
         content = clean(lines)
         imgs = images_in(lines)
         if not content and imgs:
             notes.append("Image-only post: no body text in the source doc.")
         if not seg["metrics"]:
             notes.append("No engagement metrics recorded in the source doc.")
+        if len(urls) > 1:
+            notes.append("Source doc lists %d image CDN URLs; kept the first in image_url: %s" % (len(urls), urls))
 
         posts.append(
             {
@@ -253,6 +292,7 @@ def parse(docx_path: str):
                 "comments": seg["metrics"].get("comments"),
                 "shares": seg["metrics"].get("shares"),
                 "_images": imgs,
+                "image_url": urls[0] if urls else None,
                 "notes": " ".join(notes),
             }
         )
@@ -277,7 +317,10 @@ def write_output(docx_path: str, out_dir: str):
             names.append(name)
         post["image_files"] = names
         # Keep the documented key order.
-        ordered = {k: post[k] for k in ("index", "label", "content", "likes", "comments", "shares", "image_files", "notes")}
+        ordered = {
+            k: post[k]
+            for k in ("index", "label", "content", "likes", "comments", "shares", "image_files", "image_url", "notes")
+        }
         post.clear()
         post.update(ordered)
 
@@ -334,7 +377,73 @@ EXPECTED = {
         (67, 25, 2),
         (433, 138, 39),
     ],
+    # Posts whose image carries an original CDN address in the doc.
+    "image_urls": {3: "D5622AQE6ovK1-jGQIg", 4: "D4E22AQHzrjOoYv21HQ"},
 }
+
+# Every label format observed in the archive, asserted on every run. Adding a new
+# spelling here is the way to extend the parser's vocabulary safely.
+FORMAT_CASES = [
+    # word-first, spaced separator, trailing comma
+    ("Likes - 4,", [("likes", 4)]),
+    ("Comment - 4,", [("comments", 4)]),
+    ("Repost - 4", [("shares", 4)]),
+    ("Likes - 4", [("likes", 4)]),
+    # word-first, tight separator, mixed case
+    ("Likes-345", [("likes", 345)]),
+    ("comments-49", [("comments", 49)]),
+    ("Shares-6", [("shares", 6)]),
+    # letter-first
+    ("L-334", [("likes", 334)]),
+    ("C-8", [("comments", 8)]),
+    ("S-7", [("shares", 7)]),
+    # number-first
+    ("734-L", [("likes", 734)]),
+    ("2-C", [("comments", 2)]),
+    ("33-S", [("shares", 33)]),
+    # thousands separators
+    ("1,334-L", [("likes", 1334)]),
+    ("2,934-C", [("comments", 2934)]),
+    ("1,127-L", [("likes", 1127)]),
+    # further share spellings
+    ("63-Reshare", [("shares", 63)]),
+    ("1-S", [("shares", 1)]),
+    # comma-joined on one line, lowercase s
+    ("7-C, 61-s", [("comments", 7), ("shares", 61)]),
+]
+
+# Lines that must NOT be read as metrics (guards against eating post prose).
+# The two em-dash lines are real post-3 prose and are the closest near-misses in
+# the archive: "brands—73%" is a plural 's' before an em dash, one character away
+# from a share token. They are pinned here so loosening _SEP or the word list
+# fails the suite instead of silently swallowing a paragraph.
+FORMAT_NON_CASES = [
+    "4",
+    "1,334",
+    "Post-",
+    "Post 4",
+    "269 brands—73%—appeared in only one market",
+    "Only 9 brands—2%—entered the Top 100 in all six",
+    "( ♻️Repost for priority access)",
+    'Comment “𝗔+” and I’ll share my exact workflow.',
+    "10 products × traditional A+ pricing = ~$30k",
+    "Read the full piece on State of Brand: https://lnkd.in/g-cEZ_Y9",
+]
+
+# A metric glued directly onto prose with no separator would be swallowed into
+# content. w:br renders as a newline so this does not happen in the archive, but
+# a future doc could differ -- this catches it.
+#
+# Only the multi-letter spellings are usable for the word-first branch: the
+# single letters l/c/s collide with ordinary prose ("269 brands—73%" is a plural
+# 's' before an em dash, not a share count). The number-first branch is safe with
+# the full vocabulary because a digit must precede the separator.
+_LONG_WORDS = tuple(w for w in ALL_WORDS if len(w) > 1)
+_LONG_ALT = "|".join(sorted(_LONG_WORDS, key=len, reverse=True))
+GLUED_METRIC_RE = re.compile(
+    r"\S(?:%s)[ \t]*[-–—][ \t]*\d|\S\d[\d,]*[ \t]*[-–—][ \t]*(?:%s)(?![A-Za-z])" % (_LONG_ALT, _WORD_ALT),
+    re.IGNORECASE,
+)
 
 
 def normalize(text: str) -> str:
@@ -345,15 +454,33 @@ def self_check(doc, docx_path, img_dir):
     problems = []
     stream, media = read_docx(docx_path)
 
-    # 1. Text conservation: every non-delimiter, non-metric line survives exactly once.
-    expected_lines = []
+    # 0. Label-format coverage: every spelling the archive uses, and every
+    #    near-miss that must not be mistaken for one.
+    for text, want_tokens in FORMAT_CASES:
+        if not METRIC_LINE_RE.match(text):
+            problems.append("format not recognized as a metric line: %r" % text)
+        elif parse_metric_line(text) != want_tokens:
+            problems.append("format %r parsed as %s, expected %s" % (text, parse_metric_line(text), want_tokens))
+    for text in FORMAT_NON_CASES:
+        if METRIC_LINE_RE.match(text):
+            problems.append("non-metric line wrongly matched as metrics: %r" % text)
+
+    # 1. Text conservation: every non-delimiter, non-metric, non-image-URL line
+    #    survives exactly once.
+    expected_lines, stripped_urls = [], []
     for line in DELIM_RE.sub("", stream).split("\n"):
         bare = IMG_RE.sub("", line)
         if not bare.strip():
             continue
         if METRIC_LINE_RE.match(bare):
             continue
+        m = IMAGE_URL_RE.match(bare.strip())
+        if m:
+            stripped_urls.append(m.group("url"))
+            continue
         expected_lines.append(bare)
+        if GLUED_METRIC_RE.search(bare):
+            problems.append("possible metric glued onto prose, check by hand: %r" % bare.strip()[:120])
     got = normalize(" ".join(p["content"] for p in doc["posts"]))
     want = normalize(" ".join(expected_lines))
     if got != want:
@@ -362,6 +489,15 @@ def self_check(doc, docx_path, img_dir):
             if got[i] != want[i]:
                 problems.append("  first divergence at %d: got %r want %r" % (i, got[i : i + 90], want[i : i + 90]))
                 break
+
+    # 1b. Every CDN address stripped from content is preserved in an image_url,
+    #     and nothing was invented.
+    captured = [p["image_url"] for p in doc["posts"] if p["image_url"]]
+    if sorted(captured) != sorted(stripped_urls):
+        problems.append("image_url mismatch: captured %s, stripped %s" % (captured, stripped_urls))
+    for post in doc["posts"]:
+        if post["image_url"] and "media.licdn.com" in post["content"]:
+            problems.append("post %d still has a CDN URL in content" % post["index"])
 
     # 2. Every image referenced exactly once.
     used = [n for p in doc["posts"] for n in p["image_files"]]
@@ -381,6 +517,12 @@ def self_check(doc, docx_path, img_dir):
             got_m = (post["likes"], post["comments"], post["shares"])
             if got_m != exp:
                 problems.append("post %d metrics: got %s expected %s" % (post["index"], got_m, exp))
+        for post in doc["posts"]:
+            want_url = EXPECTED["image_urls"].get(post["index"])
+            if want_url and (not post["image_url"] or want_url not in post["image_url"]):
+                problems.append("post %d image_url: expected one containing %r, got %r" % (post["index"], want_url, post["image_url"]))
+            if not want_url and post["image_url"]:
+                problems.append("post %d unexpected image_url %r" % (post["index"], post["image_url"]))
     return problems
 
 
