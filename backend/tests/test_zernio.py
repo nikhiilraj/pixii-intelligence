@@ -107,6 +107,19 @@ def test_list_posts_fails_when_fewer_posts_arrive_than_the_total_promises():
         client_returning(handler).list_posts()
 
 
+def test_list_posts_fails_when_the_api_reports_no_total_to_check_against():
+    """Without a total there is nothing to verify the count against, and this API's whole
+    pathology is responses that look complete and are not."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"posts": [post("a")], "pagination": {"page": 1, "pages": 1}}
+        )
+
+    with pytest.raises(ZernioResponseError):
+        client_returning(handler).list_posts()
+
+
 def test_list_posts_treats_a_missing_pagination_object_as_a_failure():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"posts": []})

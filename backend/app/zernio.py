@@ -97,9 +97,11 @@ class ZernioClient:
                 break
             page += 1
 
-        if total is not None and len(posts) != total:
+        # A missing total is itself a failure: there would be nothing left to check the
+        # collected count against, which is the one thing this method exists to do.
+        if len(posts) != total:
             raise ZernioResponseError(
-                f"/posts reported {total} posts across {pages} pages but yielded "
+                f"/posts reported total={total} across {pages} pages but yielded "
                 f"{len(posts)} — the response was truncated silently."
             )
         return posts
