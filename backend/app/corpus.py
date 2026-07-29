@@ -1,3 +1,4 @@
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -232,3 +233,98 @@ def add_manual_post(
     session.add(post)
     session.flush()
     return post
+
+
+def _content_key(content: str) -> str:
+    """The join key between a LinkedIn scrape and the corpus.
+
+    **Not the URN.** The profile DOM names a post `urn:li:activity:<id>` and Zernio names
+    the same post `urn:li:share:<id>` — different namespaces, so joining on them matches
+    zero rows. Normalised text does match, and it absorbs the whitespace, punctuation and
+    emoji drift between the two renderings. 120 characters is enough to be unique across
+    the account and short enough that a trailing edit does not break the match.
+    """
+    return re.sub(r"\W+", "", content or "").lower()[:120]
+
+
+def _scraped_post(item: dict, account: str | None, scrape_id: str) -> Post:
+    media_urls = item.get("media_urls") or []
+    media_type = item.get("media_type")
+    return Post(
+        zernio_id=scrape_id,
+        source=PostSource.MANUAL,
+        platform=_LINKEDIN,
+        content=(item.get("content") or "").strip(),
+        status="external",
+        is_external=True,
+        account_username=account,
+        platform_post_url=item.get("url"),
+        published_at=_parse_time(item.get("published_at")),
+        media_type=media_type,
+        # ponytail: the cover image only. A carousel's later slides are not stored, so
+        # visual extraction sees slide one and nothing else; video is recorded by type
+        # and left on LinkedIn. Widen when a slice actually needs the rest.
+        media_items=(
+            [{"type": "image", "url": media_urls[0]}]
+            if media_type == "image" and media_urls
+            else []
+        ),
+    )
+
+
+def upsert_linkedin_posts(
+    session: Session,
+    items: list[dict],
+    *,
+    account: str | None = None,
+    with_media: bool = False,
+) -> IngestResult:
+    """Fold posts scraped off a LinkedIn profile page into the corpus.
+
+    The scrape is the only source for two things Zernio cannot supply: posts older than
+    its history, and **repost counts** — Zernio reports `shares: 0` on every LinkedIn row,
+    and `engaged_actions` (the ranking key) counts shares, so a corpus where only some
+    rows carry them ranks wrongly.
+
+    Matching is unscoped by source, because the usual case is an existing Zernio row being
+    enriched rather than a new post. A match updates reactions only: impressions are
+    author-only and invisible when scraping someone's profile, so writing them would
+    replace a real figure with a zero.
+    """
+    existing = list(session.exec(select(Post).where(Post.platform == _LINKEDIN)).all())
+    by_content: dict[str, Post] = {}
+    for post in existing:
+        by_content.setdefault(_content_key(post.content), post)
+    # Second key, for a post edited since we last scraped it: its text no longer matches
+    # but its urn still does, so a re-run updates rather than duplicating.
+    by_scrape_id = {post.zernio_id: post for post in existing}
+
+    result = IngestResult()
+    for item in items:
+        content_key = _content_key(item.get("content") or "")
+        scrape_id = f"linkedin:{item['urn']}"
+
+        match = by_content.get(content_key) or by_scrape_id.get(scrape_id)
+        if match is None:
+            post = _scraped_post(item, account, scrape_id)
+            result.created += 1
+            by_content.setdefault(content_key, post)
+            by_scrape_id[scrape_id] = post
+            if with_media:
+                post.local_media_path = download_post_media(post)
+        else:
+            post = match
+            result.updated += 1
+
+        # The scrape is live and Zernio's analytics can lag, so neither side is
+        # authoritative on reactions — whichever saw more wins. Shares are the exception:
+        # only the scrape ever has them.
+        post.likes = max(post.likes, int(item.get("likes") or 0))
+        post.comments = max(post.comments, int(item.get("comments") or 0))
+        post.shares = int(item.get("shares") or 0)
+        post.engaged_actions = post.likes + post.comments + post.shares + post.saves
+        post.metrics_updated_at = datetime.now(UTC)
+        session.add(post)
+
+    session.flush()
+    return result

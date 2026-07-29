@@ -12,7 +12,13 @@ from sqlmodel import col, select
 from app.api_drafts import router as drafts_router
 from app.api_templates import router as templates_router
 from app.config import settings
-from app.corpus import ManualPostRejected, add_manual_post, ingest_history, ingest_posts
+from app.corpus import (
+    ManualPostRejected,
+    add_manual_post,
+    ingest_history,
+    ingest_posts,
+    upsert_linkedin_posts,
+)
 from app.db import engine
 from app.deps import SessionDep
 from app.metrics import sync_metrics, template_performance
@@ -160,6 +166,47 @@ def add_external_post(session: SessionDep, payload: ManualPostIn) -> Post:
     session.commit()
     session.refresh(post)
     return post
+
+
+class ScrapedLinkedInPost(BaseModel):
+    urn: str
+    url: str | None = None
+    # Kept as text: this is the scrape's own JSON, parsed where the corpus parses every
+    # other timestamp.
+    published_at: str | None = None
+    content: str = ""
+    likes: int = 0
+    comments: int = 0
+    shares: int = 0
+    media_urls: list[str] = []
+    media_type: str | None = None
+
+
+class LinkedInScrapeIn(BaseModel):
+    account: str | None = None
+    posts: list[ScrapedLinkedInPost]
+
+
+@app.post("/corpus/linkedin")
+def ingest_linkedin_scrape(
+    session: SessionDep, payload: LinkedInScrapeIn, with_media: bool = False
+) -> dict:
+    """Fold a LinkedIn profile scrape into the corpus.
+
+    Reaches what Zernio cannot: posts predating its history, and repost counts, which it
+    reports as zero on every LinkedIn row. Matching is on normalised content, not the
+    URN — see `upsert_linkedin_posts`.
+
+    Media is opt-in so an ingest of text alone never touches the network.
+    """
+    result = upsert_linkedin_posts(
+        session,
+        [item.model_dump() for item in payload.posts],
+        account=payload.account,
+        with_media=with_media,
+    )
+    session.commit()
+    return {"created": result.created, "updated": result.updated}
 
 
 @app.get("/posts/{post_id}/history")
