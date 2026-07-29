@@ -735,3 +735,39 @@ trusting a zero for a metric the source never observes), which was out of scope 
 Provenance note: the input, `.scratch/corpus-widening/monte-linkedin-2024-2026.json`, and the
 scraper, `scripts/linkedin_extract.js`, are **untracked** — 35 corpus rows currently have no
 versioned source. `.scratch/v1/` is tracked, so committing them would be consistent.
+
+---
+
+## Scoping extraction to Monte's repeatable posts
+
+`_strongest_posts` selects the sample the LLM learns hooks and structures from. The corpus
+tripling (27 → 70) exposed three faults in that one query. All three are fixed **inside** the
+query, before `.limit()` — the previous code filtered textless posts in Python *after* the
+limit, so every discarded row silently cost a real post its slot.
+
+**Voice.** The top row was a third-party creator post at `engaged_actions = 1240` — 6.7x
+Monte's best — so templates claiming to describe *his* voice were led by someone else's
+writing. `settings.voice_account` (default `"Monte Desai"`, pydantic-settings so it stays
+overridable) now filters the sample. Creator posts stay in the corpus as reference material;
+they just stop shaping voice templates.
+
+**Repeatability.** New column `Post.excluded_from_extraction` (bool, not null, default false)
+plus `POST /posts/{id}/exclude` and a toggle on the post detail page. Migration
+`4a783e8a1648` is a plain `op.add_column` with `server_default=sa.false()`; no enum was
+touched, for the reason recorded above. Excluded live: **id 3017** ("Soft launch to my
+connections…", 181, 2024-01-25) and **id 3011** ("Breaking out of stealth…", 171,
+2024-02-28) — Monte's two best posts ever, both winning on launch novelty and a network
+firing once. The hook is not reproducible, so teaching it teaches a trick that only works
+once. Both keep their rows and their metrics.
+
+**The sample this produces** — 12 posts, all Monte, `engaged_actions` 185 → 29, spanning
+2024-01 to 2026-07. The three ex-launch/creator slots were filled by posts at 32, 30 and 29,
+so the tail is now genuinely thin: the sample runs down to posts with 29 engaged actions.
+That is the corpus being honest about its size, not a regression.
+
+**Ceiling — `add_manual_post` sets `account_username = author`, and `author` defaults to
+`None`.** Any Monte post pasted at `/posts` without an explicit author now silently stops
+shaping voice templates. `author` is optional in the API and the form, but is effectively
+required in practice. Left alone deliberately this round.
+
+Ranking metric untouched: `engaged_actions desc`. 223 tests, `make check` green.
