@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     enable_scheduler: bool = False
     metrics_sync_hours: int = 6
 
+    # Whose writing templates are allowed to describe. Extraction learns voice from this
+    # account only — creator posts stay in the corpus as reference material, but a
+    # template claiming to be Monte's voice must not be led by someone else's writing.
+    voice_account: str = "Monte Desai"
+
     # Below this many attributed posts, a template's aggregate is shown but marked
     # insufficient. Across this corpus a post's engagement spans 12.7x, so a handful of
     # samples cannot separate a good template from a lucky one.

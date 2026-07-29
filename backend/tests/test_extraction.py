@@ -1,5 +1,6 @@
 import pytest
 
+from app.config import settings
 from app.extraction import ExtractionError, propose_hooks
 from app.models.post import Post
 from app.models.template import TemplateKind, TemplateStatus
@@ -40,13 +41,20 @@ TWO_HOOKS = {
 }
 
 
-def add_post(session, zid: str, engaged: int, content: str = "A hook line.\n\nBody text.") -> Post:
+def add_post(
+    session,
+    zid: str,
+    engaged: int,
+    content: str = "A hook line.\n\nBody text.",
+    author: str | None = None,
+) -> Post:
     post = Post(
         zernio_id=zid,
         platform="linkedin",
         content=content,
         engaged_actions=engaged,
         impressions=engaged * 30,
+        account_username=author or settings.voice_account,
     )
     session.add(post)
     session.flush()
@@ -140,6 +148,55 @@ def test_posts_without_content_are_not_offered_as_evidence(session):
     propose_hooks(session, llm)
 
     assert "empty" not in llm.user
+
+
+def test_a_textless_post_does_not_consume_a_sample_slot(session):
+    # It outranks everything, so it is drawn first and would otherwise cost a real post
+    # its place in the sample.
+    add_post(session, "empty", 500, content="   ")
+    for index in range(3):
+        add_post(session, f"real{index}", engaged=index, content=f"Hook number {index}.")
+
+    llm = FakeLLM(TWO_HOOKS)
+    propose_hooks(session, llm, sample_size=3)
+
+    assert [f"Hook number {i}." in llm.user for i in range(3)] == [True, True, True]
+
+
+def test_only_the_voice_accounts_own_posts_shape_templates(session):
+    # A creator post stays in the corpus as reference material, but the templates claim to
+    # describe Monte's voice, so they cannot be led by someone else's writing.
+    add_post(session, "creator", 1240, content="Someone else's hook.", author="External creator")
+    add_post(session, "ours", 185, content="Monte's own hook.")
+
+    llm = FakeLLM(TWO_HOOKS)
+    propose_hooks(session, llm)
+
+    assert "Monte's own hook." in llm.user
+    assert "Someone else's hook." not in llm.user
+
+
+def test_a_post_excluded_from_extraction_is_not_evidence(session):
+    strongest = add_post(session, "launch", 500, content="Breaking out of stealth.")
+    strongest.excluded_from_extraction = True
+    session.add(strongest)
+    session.flush()
+    add_post(session, "win-1", 185, content="A repeatable hook.")
+
+    llm = FakeLLM(TWO_HOOKS)
+    propose_hooks(session, llm)
+
+    assert "A repeatable hook." in llm.user
+    assert "Breaking out of stealth." not in llm.user
+
+
+def test_an_excluded_post_stays_in_the_corpus(session):
+    post = add_post(session, "launch", 500)
+    post.excluded_from_extraction = True
+    session.add(post)
+    session.flush()
+
+    assert session.get(Post, post.id) is not None
 
 
 def test_an_empty_corpus_produces_no_proposals_and_does_not_call_the_model(session):

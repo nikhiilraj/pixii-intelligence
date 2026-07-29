@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
+from app.config import settings
 from app.db import get_session
 from app.main import app
 
@@ -99,7 +100,13 @@ def test_extraction_endpoint_creates_proposals_awaiting_approval(session):
     from app.models.post import Post
 
     session.add(
-        Post(zernio_id="win-1", platform="linkedin", content="A hook.", engaged_actions=185)
+        Post(
+            zernio_id="win-1",
+            platform="linkedin",
+            content="A hook.",
+            engaged_actions=185,
+            account_username=settings.voice_account,
+        )
     )
     session.flush()
 
@@ -129,7 +136,15 @@ def test_a_model_that_returns_the_wrong_shape_is_reported_not_silently_ignored(s
     from app.deps import get_llm
     from app.models.post import Post
 
-    session.add(Post(zernio_id="win-1", platform="linkedin", content="A hook.", engaged_actions=1))
+    session.add(
+        Post(
+            zernio_id="win-1",
+            platform="linkedin",
+            content="A hook.",
+            engaged_actions=1,
+            account_username=settings.voice_account,
+        )
+    )
     session.flush()
     app.dependency_overrides[get_llm] = lambda: _FakeLLM({"nope": []})
 

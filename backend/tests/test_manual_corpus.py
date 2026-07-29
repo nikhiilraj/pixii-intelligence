@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
+from app.config import settings
 from app.corpus import PostSource, add_manual_post, ingest_posts
 from app.db import get_session
 from app.extraction import propose_hooks
@@ -68,13 +69,23 @@ def test_manual_posts_get_a_distinct_id_that_cannot_collide_with_zernio(session)
     assert first.zernio_id.startswith("manual:")
 
 
-def test_a_manual_post_is_available_to_extraction_as_evidence(session):
-    add_manual_post(session, **CREATOR_POST)
+def test_a_manual_post_in_the_voice_account_is_evidence_like_any_other(session):
+    add_manual_post(
+        session, content="A post Monte pasted in himself.", author=settings.voice_account
+    )
     llm = FakeLLM()
 
     propose_hooks(session, llm)
 
-    assert "A creator post Monte sent over LinkedIn." in llm.user
+    assert "A post Monte pasted in himself." in llm.user
+
+
+def test_a_pasted_creator_post_is_reference_material_not_voice_evidence(session):
+    creator = add_manual_post(session, **CREATOR_POST)
+    llm = FakeLLM()
+
+    assert propose_hooks(session, llm) == []
+    assert session.get(Post, creator.id) is not None
 
 
 def test_a_manual_post_with_no_content_is_rejected(session):
