@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
@@ -71,7 +73,11 @@ def test_manual_posts_get_a_distinct_id_that_cannot_collide_with_zernio(session)
 
 def test_a_manual_post_in_the_voice_account_is_evidence_like_any_other(session):
     add_manual_post(
-        session, content="A post Monte pasted in himself.", author=settings.voice_account
+        session,
+        content="A post Monte pasted in himself.",
+        author=settings.voice_account,
+        # A paste must carry its date to be evidence — extraction excludes undated posts.
+        published_at=datetime(2026, 6, 1),
     )
     llm = FakeLLM()
 

@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -40,6 +41,14 @@ class Settings(BaseSettings):
     # but LinkedIn now returns an empty sample. Make this a per-platform mapping when
     # X and Reddit land.
     voice_account: str = "Monte Desai"
+
+    # How far back the current voice reaches. The corpus goes further back than this, but
+    # the older posts are a different genre — AI-industry commentary rather than the
+    # Amazon-listing work Pixii publishes now — and ranked on engagement alone they crowd
+    # out the posts a template should describe. Cross-era engagement is not comparable
+    # either: those posts reached a different audience and carry no impressions to
+    # normalise against.
+    voice_since: datetime = datetime(2025, 1, 1)
 
     # Below this many attributed posts, a template's aggregate is shown but marked
     # insufficient. Across this corpus a post's engagement spans 12.7x, so a handful of

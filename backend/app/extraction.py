@@ -105,6 +105,11 @@ def _strongest_posts(session: Session, platform: str, sample_size: int) -> list[
         .where(col(Post.excluded_from_extraction).is_(False))
         # A post with no text carries no hook, so it is no evidence.
         .where(func.trim(col(Post.content)) != "")
+        # Older than the current voice, so it is a different genre — and its engagement is
+        # not comparable anyway, having reached a different audience. A NULL published_at
+        # fails this comparison and is excluded too: an undated post cannot be shown to be
+        # current.
+        .where(col(Post.published_at) >= settings.voice_since)
         .order_by(col(Post.engaged_actions).desc())
         .limit(sample_size)
     )
