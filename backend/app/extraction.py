@@ -1,3 +1,5 @@
+from enum import StrEnum
+
 from sqlalchemy import func
 from sqlmodel import Session, col, select
 
@@ -80,6 +82,18 @@ Return ONLY JSON of this shape, with no commentary:
 POST_CHARS = 2000
 
 
+class Cohort(StrEnum):
+    """Which body of work a sample is drawn from.
+
+    A hook and a structure are borrowable shapes, so both cohorts may teach them. A voice
+    is not borrowable: only VOICE may ever reach generation as a tone reference, and
+    `generation._exemplars` enforces that independently of what a template claims.
+    """
+
+    VOICE = "voice"
+    INSPIRATION = "inspiration"
+
+
 class ExtractionError(RuntimeError):
     """The model's proposal could not be turned into templates."""
 
@@ -89,30 +103,37 @@ def _hook_of(content: str) -> str:
     return opening[:HOOK_CHARS]
 
 
-def _strongest_posts(session: Session, platform: str, sample_size: int) -> list[Post]:
+def _strongest_posts(
+    session: Session, platform: str, sample_size: int, cohort: Cohort
+) -> list[Post]:
     """The sample the model learns from.
 
     Every exclusion is in the query, before the limit, so a post that cannot be evidence
     never costs a real post its slot.
     """
+    account = settings.voice_account if cohort is Cohort.VOICE else settings.inspiration_account
     statement = (
         select(Post)
         .where(Post.platform == platform)
-        # Templates claim to describe one person's voice. Creator posts stay in the corpus
-        # as reference material; they just do not get to shape that claim.
-        .where(Post.account_username == settings.voice_account)
+        # One cohort at a time, never mixed: a sample led by whichever cohort happened to
+        # rank higher would describe neither.
+        .where(Post.account_username == account)
         # Held out by hand — strong for a reason that cannot repeat.
         .where(col(Post.excluded_from_extraction).is_(False))
-        # A post with no text carries no hook, so it is no evidence.
+        # A post with no text carries no hook, so it is no evidence. Load-bearing in both
+        # cohorts: at least one creator post is an image with no text at all.
         .where(func.trim(col(Post.content)) != "")
-        # Older than the current voice, so it is a different genre — and its engagement is
-        # not comparable anyway, having reached a different audience. A NULL published_at
-        # fails this comparison and is excluded too: an undated post cannot be shown to be
-        # current.
-        .where(col(Post.published_at) >= settings.voice_since)
-        .order_by(col(Post.engaged_actions).desc())
-        .limit(sample_size)
     )
+    if cohort is Cohort.VOICE:
+        # An era floor on Monte's own history: his older posts are a different genre and
+        # their engagement is not comparable, having reached a different audience. It has
+        # no meaning for inspiration — those posts are never ranked against Monte's, and
+        # the date Monte's current voice began says nothing about someone else's timeline.
+        # Gating them on it would silently discard borrowable shapes for no reason.
+        # A NULL published_at fails this comparison and is excluded too: an undated post
+        # cannot be shown to be current.
+        statement = statement.where(col(Post.published_at) >= settings.voice_since)
+    statement = statement.order_by(col(Post.engaged_actions).desc()).limit(sample_size)
     return list(session.exec(statement).all())
 
 
@@ -129,7 +150,9 @@ def _build_prompt(posts: list[Post]) -> str:
     return "\n".join(lines)
 
 
-def _to_template(session: Session, proposal: dict, known_ids: set[str]) -> Template:
+def _to_template(
+    session: Session, proposal: dict, known_ids: set[str], cohort: Cohort
+) -> Template:
     name = (proposal.get("name") or "").strip()
     pattern = (proposal.get("pattern") or "").strip()
     if not name or not pattern:
@@ -146,6 +169,7 @@ def _to_template(session: Session, proposal: dict, known_ids: set[str]) -> Templ
             "pattern": pattern,
             "tone": (proposal.get("tone") or "").strip(),
             "rationale": (proposal.get("rationale") or "").strip(),
+            "cohort": cohort.value,
         },
         slots=proposal.get("slots") or [],
         provenance=provenance,
@@ -158,13 +182,15 @@ def propose_hooks(
     *,
     platform: str = "linkedin",
     sample_size: int = DEFAULT_SAMPLE_SIZE,
+    cohort: Cohort = Cohort.VOICE,
 ) -> list[Template]:
     """Propose hook templates from the strongest posts. Proposals only — a human approves.
 
     Ranked by engaged actions, so the model learns from posts people responded to rather
-    than posts that merely reached far.
+    than posts that merely reached far. `cohort` selects whose posts are read; a hook is a
+    borrowable shape, so a creator's posts can teach one.
     """
-    posts = _strongest_posts(session, platform, sample_size)
+    posts = _strongest_posts(session, platform, sample_size, cohort)
     if not posts:
         return []
 
@@ -174,7 +200,7 @@ def propose_hooks(
         raise ExtractionError(f"expected a 'hooks' list, got keys {sorted(result)}")
 
     known_ids = {p.zernio_id for p in posts}
-    return [_to_template(session, proposal, known_ids) for proposal in proposals]
+    return [_to_template(session, proposal, known_ids, cohort) for proposal in proposals]
 
 
 def _structure_prompt(posts: list[Post], hooks: list[Template], focus: str = "") -> str:
@@ -202,7 +228,9 @@ def _structure_prompt(posts: list[Post], hooks: list[Template], focus: str = "")
     return "\n".join(lines)
 
 
-def _to_structure(session: Session, proposal: dict, hooks_by_name: dict[str, str]) -> Template:
+def _to_structure(
+    session: Session, proposal: dict, hooks_by_name: dict[str, str], cohort: Cohort
+) -> Template:
     name = (proposal.get("name") or "").strip()
     sections = proposal.get("sections") or []
     if not name or not sections:
@@ -225,6 +253,7 @@ def _to_structure(session: Session, proposal: dict, hooks_by_name: dict[str, str
             "sections": sections,
             "compatible_hook_families": families,
             "rationale": (proposal.get("rationale") or "").strip(),
+            "cohort": cohort.value,
         },
         provenance=[p for p in proposal.get("source_post_ids") or []],
     )
@@ -237,13 +266,16 @@ def propose_structures(
     platform: str = "linkedin",
     sample_size: int = DEFAULT_SAMPLE_SIZE,
     focus: str = "",
+    cohort: Cohort = Cohort.VOICE,
 ) -> list[Template]:
     """Propose post structures from the strongest posts. Proposals only — a human approves.
 
     `focus` names a post type to describe specifically. Without it the model reports the
     shapes the corpus actually rewards, which may not include a type you want covered.
+    `cohort` selects whose posts are read; a structure is a borrowable shape, so a
+    creator's posts can teach one.
     """
-    posts = _strongest_posts(session, platform, sample_size)
+    posts = _strongest_posts(session, platform, sample_size, cohort)
     if not posts:
         return []
 
@@ -254,7 +286,7 @@ def propose_structures(
         raise ExtractionError(f"expected a 'structures' list, got keys {sorted(result)}")
 
     hooks_by_name = {hook.name: hook.family_id for hook in hooks}
-    return [_to_structure(session, proposal, hooks_by_name) for proposal in proposals]
+    return [_to_structure(session, proposal, hooks_by_name, cohort) for proposal in proposals]
 
 
 def compatible_hooks(session: Session, structure: Template) -> list[Template]:

@@ -131,7 +131,35 @@ def test_extraction_endpoint_creates_proposals_awaiting_approval(session):
 
     assert [t["status"] for t in body] == ["proposed"]
     assert body[0]["provenance"] == ["win-1"]
+    assert body[0]["body"]["cohort"] == "voice"
     assert client.get("/templates?kind=hook&usable_only=true").json() == []
+    app.dependency_overrides.clear()
+
+
+def test_the_extraction_endpoint_can_be_pointed_at_the_inspiration_cohort(session):
+    from app.deps import get_llm
+    from app.models.post import Post
+
+    session.add(
+        Post(
+            zernio_id="theirs",
+            platform="linkedin",
+            content="Someone else's hook.",
+            engaged_actions=1240,
+            account_username=settings.inspiration_account,
+            published_at=datetime(2026, 6, 1),
+        )
+    )
+    session.flush()
+
+    app.dependency_overrides[get_llm] = lambda: _FakeLLM(
+        {"hooks": [{"name": "borrowed", "pattern": "{a} turned into {b}"}]}
+    )
+    client = client_with(session)
+
+    body = client.post("/templates/extract/hooks?cohort=inspiration").json()
+
+    assert [t["body"]["cohort"] for t in body] == ["inspiration"]
     app.dependency_overrides.clear()
 
 

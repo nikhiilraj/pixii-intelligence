@@ -1,5 +1,6 @@
 import pytest
 
+from app.config import settings
 from app.generation import (
     NoUsableTemplates,
     generate_draft,
@@ -75,8 +76,14 @@ def library(session, *, approve_all: bool = True):
     return hook, structure, visual
 
 
-def add_post(session, zid: str, engaged: int, content: str) -> Post:
-    post = Post(zernio_id=zid, platform="linkedin", content=content, engaged_actions=engaged)
+def add_post(session, zid: str, engaged: int, content: str, author: str | None = None) -> Post:
+    post = Post(
+        zernio_id=zid,
+        platform="linkedin",
+        content=content,
+        engaged_actions=engaged,
+        account_username=author or settings.voice_account,
+    )
     session.add(post)
     session.flush()
     return post
@@ -137,6 +144,53 @@ def test_generation_is_grounded_in_the_posts_the_hook_came_from(session):
     generate_draft(session, llm, FakeRenderer(), idea=IDEA)
 
     assert "The exemplar post body that proves the pattern." in llm.last_user
+
+
+def test_a_creator_post_is_never_handed_to_the_model_as_a_voice_to_imitate(session):
+    """The hard line. Hooks may be borrowed from other creators; voice may not.
+
+    The creator post is named in the hook's own provenance and outranks Monte's, so only
+    the cohort restriction inside `_exemplars` keeps it out of the prompt. Widening that
+    query — or trusting the cohort a hook claims — fails this test.
+    """
+    hook, _, _ = library(session)
+    hook.provenance = ["win-1", "theirs"]
+    session.add(hook)
+    session.flush()
+    add_post(session, "win-1", 185, "Monte's own post body.")
+    add_post(
+        session,
+        "theirs",
+        5000,
+        "Someone else's writing.",
+        author=settings.inspiration_account,
+    )
+
+    llm = FakeLLM(WRITTEN)
+    generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+
+    assert "Monte's own post body." in llm.last_user
+    assert "Someone else's writing." not in llm.last_user
+
+
+def test_a_regenerated_draft_is_held_to_the_same_voice_line(session):
+    hook, _, _ = library(session)
+    hook.provenance = ["theirs"]
+    session.add(hook)
+    session.flush()
+    add_post(
+        session,
+        "theirs",
+        5000,
+        "Someone else's writing.",
+        author=settings.inspiration_account,
+    )
+
+    llm = FakeLLM(WRITTEN)
+    draft = generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+    regenerate_text(session, llm, draft)
+
+    assert "Someone else's writing." not in llm.last_user
 
 
 def test_the_chosen_templates_shape_the_prompt(session):

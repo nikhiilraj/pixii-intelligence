@@ -6,6 +6,7 @@ from sqlmodel import col, select
 from app.deps import HtmlRendererDep, ImageRendererDep, LLMDep, SessionDep
 from app.extraction import (
     DEFAULT_SAMPLE_SIZE,
+    Cohort,
     ExtractionError,
     compatible_hooks,
     propose_hooks,
@@ -83,14 +84,20 @@ def list_versions(session: SessionDep, template_id: int) -> list[Template]:
 
 
 @router.post("/extract/hooks", status_code=201)
-def extract_hooks(session: SessionDep, llm: LLMDep, platform: str = "linkedin") -> list[Template]:
+def extract_hooks(
+    session: SessionDep,
+    llm: LLMDep,
+    platform: str = "linkedin",
+    cohort: Cohort = Cohort.VOICE,
+) -> list[Template]:
     """Ask the model for hook patterns from the strongest posts.
 
     Everything it returns arrives as a proposal — a human still approves before any of it
-    can be used for generation.
+    can be used for generation. `cohort=inspiration` reads other creators' posts instead
+    of Monte's; the resulting hooks are still only shapes, never a voice.
     """
     try:
-        proposals = propose_hooks(session, llm, platform=platform)
+        proposals = propose_hooks(session, llm, platform=platform, cohort=cohort)
     except (ExtractionError, LLMResponseError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -107,16 +114,23 @@ def extract_structures(
     platform: str = "linkedin",
     sample_size: int = DEFAULT_SAMPLE_SIZE,
     focus: str = "",
+    cohort: Cohort = Cohort.VOICE,
 ) -> list[Template]:
     """Ask the model for post structures from the strongest posts. Proposals only.
 
     `sample_size` widens the evidence base. Post types that consistently underperform
     (research posts, in this corpus) sit below the default cutoff, so deriving a structure
-    for one requires deliberately looking further down the ranking.
+    for one requires deliberately looking further down the ranking. `cohort=inspiration`
+    reads other creators' posts instead of Monte's.
     """
     try:
         proposals = propose_structures(
-            session, llm, platform=platform, sample_size=sample_size, focus=focus
+            session,
+            llm,
+            platform=platform,
+            sample_size=sample_size,
+            focus=focus,
+            cohort=cohort,
         )
     except (ExtractionError, LLMResponseError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

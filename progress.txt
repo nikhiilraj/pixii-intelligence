@@ -810,3 +810,49 @@ templates, the same trap `author` already has. Left alone deliberately; the fix 
 both effectively required at the API and form.
 
 Ranking metric untouched: `engaged_actions desc`. 226 tests (223 + 3), `make check` green.
+
+---
+
+## Extraction: an inspiration cohort, and a hard line at the voice
+
+**Why.** ~12 LinkedIn posts by other creators are being ingested under
+`account_username = "Creator inspiration"`. They may teach hooks and post structures — a
+hook is a borrowable shape — but they must never shape Monte's voice. Yesterday's
+`voice_account` filter blocked them wholesale; this generalises it into a cohort so their
+shapes are reachable, without opening the voice path.
+
+**The cohort.** `extraction.Cohort` (`VOICE` | `INSPIRATION`), threaded through
+`_strongest_posts`, `propose_hooks`, `propose_structures` and both extract endpoints
+(`?cohort=inspiration`). Defaults to `VOICE` everywhere, so nothing about today's behaviour
+moves. New setting `inspiration_account: str = "Creator inspiration"` beside `voice_account`.
+One cohort per sample, never mixed — a mixed sample led by whichever cohort ranked higher
+would describe neither.
+
+`excluded_from_extraction` and the non-empty-content filter apply to both. The content
+filter is load-bearing for inspiration specifically: at least one collected creator post is
+an image with no text at all, and it outranks the rest, so it would lead the sample carrying
+no hook. `voice_since` applies to VOICE only — it is an era floor on Monte's own history,
+and the date his current voice began says nothing about someone else's timeline; the two
+cohorts are never ranked against each other, so there is nothing to make comparable.
+
+**Provenance — a deviation, flagged.** The brief said to record the cohort in the Template's
+`provenance` JSONB. `provenance` is typed `list[str]` of post ids, has 28 live rows holding
+bare arrays, is read positionally by `generation._exemplars`, and is rendered as
+`t.provenance.length` in `TemplateManager.tsx`. Reshaping it to `{cohort, post_ids}` means
+13 files plus an Alembic data backfill to keep the running app working. Cohort went into
+`body` instead — also existing JSONB, no column added, no migration, no legacy row broken,
+and already dumped verbatim in the template UI, so `"cohort": "inspiration"` is visible
+today with zero frontend change. Say the word and it moves.
+
+**The guard.** `generation._exemplars` is the one path that hands a real post to the model
+as a voice to imitate. It now filters `Post.account_username == settings.voice_account` in
+the query — a positive allowlist, not a claim the template makes about itself, so it holds
+even for a hook whose provenance was hand-edited to cite a creator. Pinned by
+`test_a_creator_post_is_never_handed_to_the_model_as_a_voice_to_imitate`: the creator post
+is named in the hook's own provenance and outranks Monte's, and the assertion is that its
+text never appears in the prompt. Verified by mutation — deleting the `where` fails that
+test and its `regenerate_text` twin, not a SQL-string comparison.
+
+Ranking metric untouched (`engaged_actions desc`), `voice_account`, `voice_since` and the
+two hand-excluded posts untouched. 237 tests (226 + 11), `make check` green. Extraction has
+not been run against the live LLM — Nikhil reviews the sample first.

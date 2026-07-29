@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     # X and Reddit land.
     voice_account: str = "Monte Desai"
 
+    # Other creators' posts, collected as reference material. They are allowed to teach a
+    # hook shape or a post structure — those are borrowable patterns — but never a voice.
+    # See `extraction.Cohort` for the split and `generation._exemplars` for the guard.
+    inspiration_account: str = "Creator inspiration"
+
     # How far back the current voice reaches. The corpus goes further back than this, but
     # the older posts are a different genre — AI-industry commentary rather than the
     # Amazon-listing work Pixii publishes now — and ranked on engagement alone they crowd
