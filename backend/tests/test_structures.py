@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import pytest
 
 from app.config import settings
@@ -40,6 +42,8 @@ def add_post(session, zid: str, engaged: int, content: str) -> Post:
         content=content,
         engaged_actions=engaged,
         account_username=settings.voice_account,
+        # Comfortably after `settings.voice_since`, so the post counts as current.
+        published_at=datetime(2026, 6, 1),
     )
     session.add(post)
     session.flush()

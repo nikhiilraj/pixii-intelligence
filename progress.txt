@@ -777,3 +777,36 @@ account names differ per platform (`Pixii_ai` on twitter, `pixii.creates` on you
 `POST /templates/extract/hooks?platform=twitter` returns zero proposals rather than an error.
 Confirmed live: `_strongest_posts` returns 12 for linkedin, 0 for twitter and youtube. Marked
 `ponytail:` in `config.py`; the upgrade is a per-platform mapping when X and Reddit land.
+
+---
+
+## Extraction: a publish-date floor on the voice sample
+
+**Why.** The corpus was widened back to 2024, and Monte's 2024 posts are a different genre —
+AI-industry commentary (Sora, GPT-4 model roundups, Google, Meta) rather than the
+Amazon-listing content Pixii publishes now. Ranked on `engaged_actions` alone, six of the
+top twelve were 2024 posts (43, 40, 32, 30, 29, 29), so the templates would have described a
+voice the company no longer writes in. Cross-era engagement is not comparable either: those
+posts reached a different audience, and the rows carry no impressions to normalise against.
+
+**The filter.** New setting `voice_since: datetime = datetime(2025, 1, 1)` in `config.py`,
+alongside `voice_account`. Applied in `_strongest_posts` as
+`.where(col(Post.published_at) >= settings.voice_since)` — in the query, before the limit,
+like every other exclusion, so an out-of-era post never costs a current post its slot.
+A `NULL published_at` fails the comparison and is excluded by plain SQL three-valued logic;
+no second predicate, but the behaviour is pinned by `test_an_undated_post_is_not_evidence`
+so it can never drift silently. Undated is treated as not-current: an undated post cannot be
+shown to belong to the present era.
+
+**The sample this produces** — 12 posts, `engaged_actions` 185 → 20, spanning 2025-03 to
+2026-07. The six 2024 slots were filled by posts at 26, 23, 23, 21, 21 and 20, so the tail
+got thinner again (floor moved 29 → 20). Eligible pool: 54 of 67 non-empty, non-excluded
+Monte LinkedIn posts; 13 fall before the floor, 0 are undated. A concurrent workstream is
+still scraping 2025-08→2026-01 posts in, so these counts will move.
+
+**Ceiling — undated manual pastes are now invisible to extraction.** `add_manual_post`
+leaves `published_at` at `None`, so a Monte post pasted without a date stops shaping voice
+templates, the same trap `author` already has. Left alone deliberately; the fix is to make
+both effectively required at the API and form.
+
+Ranking metric untouched: `engaged_actions desc`. 226 tests (223 + 3), `make check` green.

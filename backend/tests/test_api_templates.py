@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
@@ -106,6 +108,7 @@ def test_extraction_endpoint_creates_proposals_awaiting_approval(session):
             content="A hook.",
             engaged_actions=185,
             account_username=settings.voice_account,
+            published_at=datetime(2026, 6, 1),
         )
     )
     session.flush()
@@ -143,6 +146,7 @@ def test_a_model_that_returns_the_wrong_shape_is_reported_not_silently_ignored(s
             content="A hook.",
             engaged_actions=1,
             account_username=settings.voice_account,
+            published_at=datetime(2026, 6, 1),
         )
     )
     session.flush()

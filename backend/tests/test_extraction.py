@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import pytest
 
 from app.config import settings
@@ -41,12 +43,17 @@ TWO_HOOKS = {
 }
 
 
+# Comfortably after `settings.voice_since`, so a post is current unless a test says so.
+CURRENT = datetime(2026, 6, 1)
+
+
 def add_post(
     session,
     zid: str,
     engaged: int,
     content: str = "A hook line.\n\nBody text.",
     author: str | None = None,
+    published_at: datetime | None = CURRENT,
 ) -> Post:
     post = Post(
         zernio_id=zid,
@@ -55,6 +62,7 @@ def add_post(
         engaged_actions=engaged,
         impressions=engaged * 30,
         account_username=author or settings.voice_account,
+        published_at=published_at,
     )
     session.add(post)
     session.flush()
@@ -188,6 +196,48 @@ def test_a_post_excluded_from_extraction_is_not_evidence(session):
 
     assert "A repeatable hook." in llm.user
     assert "Breaking out of stealth." not in llm.user
+
+
+def test_a_post_from_before_the_voice_era_is_not_evidence(session):
+    # The corpus reaches back further than the voice does. The old posts are a different
+    # genre — AI-industry commentary rather than the Amazon-listing work Pixii publishes
+    # now — so templates drawn from them would describe a voice the company has left.
+    stale = datetime(2024, 6, 1)
+    add_post(session, "old", 900, content="Sora just changed everything.", published_at=stale)
+    add_post(session, "win-1", 185, content="A repeatable hook.")
+
+    llm = FakeLLM(TWO_HOOKS)
+    propose_hooks(session, llm)
+
+    assert "A repeatable hook." in llm.user
+    assert "Sora just changed everything." not in llm.user
+
+
+def test_an_undated_post_is_not_evidence(session):
+    # Nothing shows an undated post is current, and the whole point of the floor is
+    # currency, so it cannot be allowed to pass by default.
+    add_post(session, "undated", 900, content="No date on this one.", published_at=None)
+    add_post(session, "win-1", 185, content="A repeatable hook.")
+
+    llm = FakeLLM(TWO_HOOKS)
+    propose_hooks(session, llm)
+
+    assert "A repeatable hook." in llm.user
+    assert "No date on this one." not in llm.user
+
+
+def test_a_pre_era_post_does_not_consume_a_sample_slot(session):
+    # It outranks everything, so it is drawn first and would otherwise cost a current post
+    # its place in the sample.
+    stale = datetime(2024, 6, 1)
+    add_post(session, "old", 500, content="Sora just changed everything.", published_at=stale)
+    for index in range(3):
+        add_post(session, f"real{index}", engaged=index, content=f"Hook number {index}.")
+
+    llm = FakeLLM(TWO_HOOKS)
+    propose_hooks(session, llm, sample_size=3)
+
+    assert [f"Hook number {i}." in llm.user for i in range(3)] == [True, True, True]
 
 
 def test_an_excluded_post_stays_in_the_corpus(session):
