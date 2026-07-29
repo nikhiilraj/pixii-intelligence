@@ -52,3 +52,22 @@ def test_an_unknown_post_is_not_found(session):
 
     assert response.status_code == 404
     app.dependency_overrides.clear()
+
+
+def test_a_post_can_be_held_out_of_extraction_and_let_back_in(session):
+    post = saved(session)
+    client = client_with(session)
+
+    held_out = client.post(f"/posts/{post.id}/exclude", json={"excluded": True}).json()
+    assert held_out["excluded_from_extraction"] is True
+
+    let_back = client.post(f"/posts/{post.id}/exclude", json={"excluded": False}).json()
+    assert let_back["excluded_from_extraction"] is False
+    app.dependency_overrides.clear()
+
+
+def test_excluding_an_unknown_post_is_not_found(session):
+    response = client_with(session).post("/posts/999999/exclude", json={"excluded": True})
+
+    assert response.status_code == 404
+    app.dependency_overrides.clear()

@@ -1,5 +1,7 @@
+from sqlalchemy import func
 from sqlmodel import Session, col, select
 
+from app.config import settings
 from app.llm import LLM
 from app.models.post import Post
 from app.models.template import Template, TemplateKind
@@ -88,14 +90,25 @@ def _hook_of(content: str) -> str:
 
 
 def _strongest_posts(session: Session, platform: str, sample_size: int) -> list[Post]:
+    """The sample the model learns from.
+
+    Every exclusion is in the query, before the limit, so a post that cannot be evidence
+    never costs a real post its slot.
+    """
     statement = (
         select(Post)
         .where(Post.platform == platform)
+        # Templates claim to describe one person's voice. Creator posts stay in the corpus
+        # as reference material; they just do not get to shape that claim.
+        .where(Post.account_username == settings.voice_account)
+        # Held out by hand — strong for a reason that cannot repeat.
+        .where(col(Post.excluded_from_extraction).is_(False))
+        # A post with no text carries no hook, so it is no evidence.
+        .where(func.trim(col(Post.content)) != "")
         .order_by(col(Post.engaged_actions).desc())
         .limit(sample_size)
     )
-    # A post with no text carries no hook, so it is no evidence.
-    return [p for p in session.exec(statement).all() if p.content.strip()]
+    return list(session.exec(statement).all())
 
 
 def _build_prompt(posts: list[Post]) -> str:

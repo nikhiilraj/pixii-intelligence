@@ -55,6 +55,11 @@ class Post(SQLModel, table=True):
     # True for posts Zernio synced from the platform rather than published itself.
     is_external: bool = False
 
+    # Held out of template extraction. For posts that ranked high for reasons that cannot
+    # repeat — a launch announcement, a network firing once — so the generator does not
+    # learn a trick that only worked the first time. The post stays in the corpus.
+    excluded_from_extraction: bool = False
+
     impressions: int = 0
     reach: int = 0
     likes: int = 0

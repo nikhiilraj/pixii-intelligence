@@ -3,6 +3,8 @@ import { notFound } from "next/navigation";
 
 import { API_BASE, getJson, type Post } from "@/lib/api";
 
+import ExcludeToggle from "./ExcludeToggle";
+
 export const dynamic = "force-dynamic";
 
 const nf = new Intl.NumberFormat("en-US");
@@ -90,6 +92,8 @@ export default async function PostDetail({ params }: { params: Promise<{ id: str
       <article className="mt-8 whitespace-pre-wrap text-[15px] leading-relaxed">
         {post.content}
       </article>
+
+      <ExcludeToggle postId={post.id} excluded={post.excluded_from_extraction} />
     </main>
   );
 }

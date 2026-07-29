@@ -12,6 +12,7 @@ export type Post = {
   thumbnail_url: string | null;
   local_media_path: string | null;
   is_external: boolean;
+  excluded_from_extraction: boolean;
   impressions: number;
   reach: number;
   likes: number;

@@ -228,6 +228,27 @@ def get_post(post_id: int, session: SessionDep) -> Post:
     return post
 
 
+class ExcludeIn(BaseModel):
+    excluded: bool
+
+
+@app.post("/posts/{post_id}/exclude")
+def set_excluded(post_id: int, payload: ExcludeIn, session: SessionDep) -> Post:
+    """Hold a post out of template extraction, or let it back in.
+
+    For posts that rank high for reasons that cannot repeat — a launch, a network firing
+    once. The post stays in the corpus and keeps its metrics; it just stops being taught.
+    """
+    post = session.get(Post, post_id)
+    if post is None:
+        raise HTTPException(status_code=404, detail=f"no post {post_id}")
+    post.excluded_from_extraction = payload.excluded
+    session.add(post)
+    session.commit()
+    session.refresh(post)
+    return post
+
+
 @app.post("/corpus/ingest")
 def trigger_ingest(session: SessionDep, with_media: bool = True) -> dict:
     """Pull every post and its metrics from Zernio into the corpus.

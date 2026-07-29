@@ -1,5 +1,6 @@
 import pytest
 
+from app.config import settings
 from app.extraction import ExtractionError, compatible_hooks, propose_structures
 from app.models.post import Post
 from app.models.template import TemplateKind, TemplateStatus
@@ -33,7 +34,13 @@ OFFER_REWARD = {
 
 
 def add_post(session, zid: str, engaged: int, content: str) -> Post:
-    post = Post(zernio_id=zid, platform="linkedin", content=content, engaged_actions=engaged)
+    post = Post(
+        zernio_id=zid,
+        platform="linkedin",
+        content=content,
+        engaged_actions=engaged,
+        account_username=settings.voice_account,
+    )
     session.add(post)
     session.flush()
     return post
