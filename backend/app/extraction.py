@@ -190,6 +190,10 @@ def propose_hooks(
     than posts that merely reached far. `cohort` selects whose posts are read; a hook is a
     borrowable shape, so a creator's posts can teach one.
     """
+    # Coerced at the boundary: Cohort is a StrEnum, so a bare "voice" compares equal to
+    # Cohort.VOICE but fails the identity checks below and has no .value — it would route
+    # silently to the wrong cohort. Normalising here keeps everything downstream an enum.
+    cohort = Cohort(cohort)
     posts = _strongest_posts(session, platform, sample_size, cohort)
     if not posts:
         return []
@@ -275,6 +279,10 @@ def propose_structures(
     `cohort` selects whose posts are read; a structure is a borrowable shape, so a
     creator's posts can teach one.
     """
+    # Coerced at the boundary: Cohort is a StrEnum, so a bare "voice" compares equal to
+    # Cohort.VOICE but fails the identity checks below and has no .value — it would route
+    # silently to the wrong cohort. Normalising here keeps everything downstream an enum.
+    cohort = Cohort(cohort)
     posts = _strongest_posts(session, platform, sample_size, cohort)
     if not posts:
         return []

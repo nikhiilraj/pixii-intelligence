@@ -200,6 +200,22 @@ def test_the_inspiration_cohort_reads_creator_posts_instead_of_montes(session):
     assert "Monte's own hook." not in llm.user
 
 
+def test_the_cohort_is_matched_by_value_so_a_plain_string_still_routes_correctly(session):
+    """`Cohort` is a StrEnum, so `"voice" == Cohort.VOICE` while `"voice" is Cohort.VOICE`
+    is False. An identity check would send any caller passing the bare string — a value
+    that compares equal everywhere else — silently down the *inspiration* branch, and
+    Monte's voice templates would quietly be built from other people's writing.
+    """
+    add_post(session, "theirs", 1240, content="Someone else's hook.", author=INSPIRATION)
+    add_post(session, "ours", 185, content="Monte's own hook.")
+
+    llm = FakeLLM(TWO_HOOKS)
+    propose_hooks(session, llm, cohort="voice")  # type: ignore[arg-type]
+
+    assert "Monte's own hook." in llm.user
+    assert "Someone else's hook." not in llm.user
+
+
 def test_the_voice_era_floor_does_not_gate_inspiration_posts(session):
     # `voice_since` marks where Monte's current era begins. A creator's posts are never
     # ranked against his, and his era says nothing about their timeline.
