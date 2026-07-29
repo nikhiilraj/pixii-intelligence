@@ -771,3 +771,9 @@ shaping voice templates. `author` is optional in the API and the form, but is ef
 required in practice. Left alone deliberately this round.
 
 Ranking metric untouched: `engaged_actions desc`. 223 tests, `make check` green.
+
+**Second ceiling — extraction is LinkedIn-only now.** `voice_account` is one string, and the
+account names differ per platform (`Pixii_ai` on twitter, `pixii.creates` on youtube), so
+`POST /templates/extract/hooks?platform=twitter` returns zero proposals rather than an error.
+Confirmed live: `_strongest_posts` returns 12 for linkedin, 0 for twitter and youtube. Marked
+`ponytail:` in `config.py`; the upgrade is a per-platform mapping when X and Reddit land.
