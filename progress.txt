@@ -651,9 +651,16 @@ the other so the single existing upsert serves both.
   video, plus added 4 instagram rows nobody asked for. LinkedIn only until the other
   channels get their own slice.
 
-Verified live: corpus LinkedIn rows **27 → 34**, `min(published_at)` **2026-04-30 →
-2026-02-17**. The date shift is the real proof; the count alone would not distinguish a
-recovery from a duplication. Re-running recovered 0 more.
+Verified live: `POST /corpus/ingest` returned
+`{fetched: 50, created: 0, updated: 50, history_fetched: 155, history_recovered: 7}` —
+the 155 confirms all four pages were walked. Corpus LinkedIn rows **27 → 34** and
+`min(published_at)` moved **2026-06-05 → 2026-02-17**. The date shift is the real proof;
+the count alone would not distinguish a recovery from a duplication. A second run
+recovered 0.
+
+The seven, all at `engaged_actions = 0`: 2026-02-17, 02-18, 03-30, 03-31, 04-01, 04-02 and
+04-23 — exactly the seven a read-only probe of `/v1/posts` predicted, and all older than
+the analytics window, which is why that window will never return them on its own.
 
 **What this does not do, and it matters for the "cheapest quality jump" claim.**
 Extraction selects its sample with `order_by(engaged_actions desc).limit(12)`
