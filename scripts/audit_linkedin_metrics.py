@@ -55,6 +55,53 @@ def xml_escape(text: str) -> str:
     )
 
 
+TAG_RE = re.compile(
+    r"<w:t[^>]*>(?P<text>.*?)</w:t>|(?P<br><w:br\b[^>]*/>)|(?P<pend></w:p>)|(?P<pstart><w:p\b[^>]*>)"
+    r"|(?P<draw><w:drawing\b)|(?P<link><w:hyperlink\b)",
+    re.DOTALL,
+)
+
+
+def unescape(text: str) -> str:
+    return (
+        text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", '"')
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+    )
+
+
+def condense(fragment: str, max_text: int = 40) -> str:
+    """Render an XML fragment as a readable token sequence.
+
+    Shows exactly where paragraph and line breaks fall, which is the whole point:
+    it makes visible that post 1's Likes/Comment lines are <w:br/>-separated runs
+    sitting inside the image's paragraph rather than paragraphs of their own.
+    """
+    out = []
+    for m in TAG_RE.finditer(fragment):
+        if m.group("text") is not None:
+            text = unescape(m.group("text"))
+            if len(text) > max_text:
+                text = text[: max_text - 1] + "…"
+            out.append('"%s"' % text)
+        elif m.group("br"):
+            out.append("<br/>")
+        elif m.group("pend"):
+            out.append("¶END")
+        elif m.group("pstart"):
+            out.append("¶START")
+        elif m.group("draw"):
+            out.append("[IMAGE]")
+        elif m.group("link"):
+            out.append("[link]")
+    joined = " ".join(out)
+    while "¶END ¶START" in joined or "¶ ¶" in joined:
+        joined = joined.replace("¶END ¶START", "¶").replace("¶ ¶", "¶")
+    return joined
+
+
 def metric_lines(body: str):
     """Metric-only lines in a segment, split into the terminating run and any strays."""
     run, stray, started, ended = [], [], False, False
@@ -84,7 +131,7 @@ def main():
         raise SystemExit("segment/post count mismatch: %d vs %d" % (len(segments), len(doc["posts"])))
 
     cursor = 0  # walks forward so repeated literals resolve to the right occurrence
-    failures = []
+    failures, rows = [], []
     print("%-5s | %-46s | %-11s | %-16s | %s" % ("post", "metric lines in docx (document order)", "xml offset", "json L/C/S", "verdict"))
     print("-" * 108)
 
@@ -135,6 +182,34 @@ def main():
             str(got),
             verdict,
         ))
+        rows.append((i + 1, run, offsets, got, post.get("image_url")))
+
+    # Per-post source quotation: the literal XML the metrics were read out of,
+    # from the start of the paragraph holding the first metric to the end of the
+    # last, so paragraph and <w:br/> boundaries are visible.
+    print()
+    print("=" * 108)
+    print("SOURCE SUBSTRINGS  (¶ = paragraph boundary, <br/> = w:br, [IMAGE] = w:drawing)")
+    print("=" * 108)
+    for index, run, offsets, got, image_url in rows:
+        starts = [o for o in offsets if o != -1]
+        print()
+        print("post %-2d  likes=%s comments=%s shares=%s" % (index, got[0], got[1], got[2]))
+        if not starts:
+            print("    (no metric literals located)")
+            continue
+        para_start = raw.rfind("<w:p ", 0, starts[0])
+        if para_start == -1:
+            para_start = max(0, starts[0] - 200)
+        last = starts[-1]
+        frag_end = raw.find("</w:p>", last)
+        frag_end = len(raw) if frag_end == -1 else frag_end + len("</w:p>")
+        print("    xml [%d..%d]:" % (para_start, frag_end))
+        text = condense(raw[para_start:frag_end])
+        for chunk in [text[j : j + 96] for j in range(0, len(text), 96)]:
+            print("      " + chunk)
+        if image_url:
+            print("    image_url: %s" % image_url)
 
     print()
     if failures:
