@@ -12,7 +12,7 @@ from sqlmodel import col, select
 from app.api_drafts import router as drafts_router
 from app.api_templates import router as templates_router
 from app.config import settings
-from app.corpus import ManualPostRejected, add_manual_post, ingest_posts
+from app.corpus import ManualPostRejected, add_manual_post, ingest_history, ingest_posts
 from app.db import engine
 from app.deps import SessionDep
 from app.metrics import sync_metrics, template_performance
@@ -185,12 +185,18 @@ def get_post(post_id: int, session: SessionDep) -> Post:
 def trigger_ingest(session: SessionDep, with_media: bool = True) -> dict:
     """Pull every post and its metrics from Zernio into the corpus.
 
+    Two sources, because neither is the whole account. `/analytics` carries the metrics
+    but only for a recent 50-row window; `/v1/posts` is the full history but reports no
+    metrics. Analytics runs first so a post that has metrics is stored with them, and the
+    history pass then adds only what the window missed.
+
     Safe to re-run: posts are upserted on Zernio's own id, and metrics move as posts
     accumulate engagement.
     """
     client = ZernioClient()
     try:
         payloads = client.fetch_posts()
+        history = client.list_posts()
     except ZernioResponseError as exc:
         # A silently-empty response must not read as "no posts" — it means the request
         # was rejected in a way the API does not report as an error.
@@ -199,8 +205,17 @@ def trigger_ingest(session: SessionDep, with_media: bool = True) -> dict:
         client.close()
 
     result = ingest_posts(session, payloads, with_media=with_media)
+    # ponytail: recovered posts arrive without their media. They exist so extraction can
+    # read their text; fetching images for rows that carry no metrics can wait.
+    recovered = ingest_history(session, history)
     session.commit()
-    return {"fetched": len(payloads), "created": result.created, "updated": result.updated}
+    return {
+        "fetched": len(payloads),
+        "created": result.created,
+        "updated": result.updated,
+        "history_fetched": len(history),
+        "history_recovered": recovered.created,
+    }
 
 
 @app.post("/metrics/sync")

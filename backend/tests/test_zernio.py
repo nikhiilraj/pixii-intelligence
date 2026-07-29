@@ -81,6 +81,40 @@ def test_an_http_error_is_raised_rather_than_swallowed():
         client_returning(handler).fetch_posts()
 
 
+def test_list_posts_pages_the_whole_account_not_just_the_first_page():
+    """An unpaged read returns page 1 of 4 and looks exactly like a complete account."""
+    requested = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page_num = int(request.url.params["page"])
+        requested.append((page_num, request.url.params["limit"]))
+        posts = [post(f"p{page_num}-{i}") for i in range(50 if page_num < 4 else 5)]
+        return httpx.Response(200, json=page(posts, page_num=page_num, pages=4, total=155))
+
+    posts = client_returning(handler).list_posts()
+
+    assert requested == [(1, "50"), (2, "50"), (3, "50"), (4, "50")]
+    assert len(posts) == 155
+
+
+def test_list_posts_fails_when_fewer_posts_arrive_than_the_total_promises():
+    """Silent truncation is this API's signature failure, so the count is checked."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=page([post("a")], page_num=1, pages=1, total=155))
+
+    with pytest.raises(ZernioResponseError):
+        client_returning(handler).list_posts()
+
+
+def test_list_posts_treats_a_missing_pagination_object_as_a_failure():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"posts": []})
+
+    with pytest.raises(ZernioResponseError):
+        client_returning(handler).list_posts()
+
+
 def test_sends_the_api_key_as_a_bearer_token():
     seen = {}
 

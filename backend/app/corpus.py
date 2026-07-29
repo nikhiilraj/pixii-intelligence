@@ -28,6 +28,9 @@ _ENGAGED = ("likes", "comments", "shares", "saves")
 class IngestResult:
     created: int = 0
     updated: int = 0
+    # Posts deliberately left as they are — the history backfill never overwrites a row
+    # the analytics window already filled in.
+    skipped: int = 0
 
     @property
     def total(self) -> int:
@@ -104,6 +107,87 @@ def ingest_posts(
         session.add(post)
 
     session.flush()
+    return result
+
+
+# The only channel this backfill covers. See `ingest_history` for why.
+_LINKEDIN = "linkedin"
+
+
+def _history_payload(payload: dict, entry: dict) -> dict:
+    """Reshape a `/v1/posts` row into the shape `/analytics` returns, so one upsert serves
+    both endpoints.
+
+    The two describe the same post differently: `_id` here is what analytics calls
+    `latePostId`, there is no `analytics` block at all, and the platform, publication time
+    and post URL live on the per-platform entry rather than at the top level. `isExternal`
+    and `thumbnailUrl` have no equivalent here and are left unset.
+    """
+    account = entry.get("accountId")
+    media_items = payload.get("mediaItems") or []
+    return {
+        # The platform entry's own id: unique per (post, channel), so a crosspost keeps
+        # one row per channel exactly as the analytics window would have delivered it.
+        "_id": entry.get("_id") or f"{payload['_id']}:{entry.get('platform')}",
+        "latePostId": payload.get("_id"),
+        "content": payload.get("content"),
+        "status": payload.get("status"),
+        "publishedAt": entry.get("publishedAt"),
+        "scheduledFor": payload.get("scheduledFor"),
+        "platform": entry.get("platform"),
+        "platformPostUrl": entry.get("platformPostUrl"),
+        "mediaItems": media_items,
+        "mediaType": media_items[0].get("type") if media_items else None,
+        "platforms": [
+            {
+                **entry,
+                "accountUsername": account.get("username")
+                if isinstance(account, dict)
+                else None,
+            }
+        ],
+    }
+
+
+def ingest_history(
+    session: Session, payloads: list[dict], *, with_media: bool = False
+) -> IngestResult:
+    """Recover published LinkedIn posts that the analytics window never carried.
+
+    `/analytics` is a recent 50-row window, not the account: 34 of Monte's LinkedIn posts
+    are published but only 27 reached the corpus. The missing ones carry no metrics — but
+    they carry text, and text is what template extraction reads.
+
+    **Insert-only.** These payloads have no metrics at all, so applying one over a row the
+    analytics endpoint already filled in would zero it. A post already in the corpus is
+    matched on `(latePostId, platform)` and left untouched.
+
+    ponytail: LinkedIn only, and published only. Youtube's analytics rows carry no
+    `latePostId` at all, so they cannot be matched against `/v1/posts` and backfilling
+    them would duplicate every video; drafts are not evidence about anything. Widen this
+    when the other channels get their own slice.
+    """
+    known = {
+        (post.late_post_id, post.platform)
+        for post in session.exec(select(Post).where(Post.source == PostSource.ZERNIO)).all()
+    }
+
+    skipped = 0
+    fresh: list[dict] = []
+    for payload in payloads:
+        post_id = payload.get("_id")
+        if not post_id or payload.get("status") != "published":
+            continue
+        for entry in payload.get("platforms") or []:
+            if entry.get("platform") != _LINKEDIN:
+                continue
+            if (post_id, _LINKEDIN) in known:
+                skipped += 1
+                continue
+            fresh.append(_history_payload(payload, entry))
+
+    result = ingest_posts(session, fresh, with_media=with_media)
+    result.skipped = skipped
     return result
 
 

@@ -49,15 +49,17 @@ class ZernioClient:
         params: dict[str, str | int] = {"limit": PAGE_SIZE, "page": page}
         if platform:
             params["platform"] = platform
+        return self._get_page("/analytics", params)
 
-        response = self._client.get("/analytics", params=params)
+    def _get_page(self, path: str, params: dict[str, str | int]) -> dict:
+        response = self._client.get(path, params=params)
         response.raise_for_status()
         body = response.json()
 
         if "pagination" not in body:
             raise ZernioResponseError(
-                f"analytics page {page} returned no pagination object — the request was "
-                f"rejected in a way that looks like an empty account. Params: {params}"
+                f"{path} returned no pagination object — the request was rejected in a "
+                f"way that looks like an empty account. Params: {params}"
             )
         return body
 
@@ -75,12 +77,32 @@ class ZernioClient:
             )
         return response.json()
 
-    def list_posts(self, limit: int = PAGE_SIZE, page: int = 1) -> list[dict]:
-        """Posts as Zernio holds them. Unlike /analytics, this carries `metadata`."""
-        response = self._client.get("/posts", params={"limit": limit, "page": page})
-        response.raise_for_status()
-        body = response.json()
-        return body.get("posts") or []
+    def list_posts(self) -> list[dict]:
+        """Every post on the account, paged to completion.
+
+        Unlike `/analytics` — a recent 50-row window — this is the account itself, and it
+        carries `metadata`. It truncates two ways and neither looks like a failure: a
+        `limit` above 50 answers HTTP 200 with nothing, and an unpaged read returns page 1
+        of 4 that reads as a complete account. So the pages are walked and the collected
+        count is checked against the total the API itself reported.
+        """
+        posts: list[dict] = []
+        page, pages, total = 1, 1, None
+        while True:
+            body = self._get_page("/posts", {"limit": PAGE_SIZE, "page": page})
+            posts.extend(body.get("posts") or [])
+            pages = body["pagination"].get("pages", 1)
+            total = body["pagination"].get("total")
+            if page >= pages:
+                break
+            page += 1
+
+        if total is not None and len(posts) != total:
+            raise ZernioResponseError(
+                f"/posts reported {total} posts across {pages} pages but yielded "
+                f"{len(posts)} — the response was truncated silently."
+            )
+        return posts
 
     def close(self) -> None:
         self._client.close()

@@ -618,3 +618,51 @@ prescribed method ("create a post, then look it up in analytics") does not termi
 way. An unpaged `limit=50` looks exactly like a complete account, just as an over-limit
 request looks exactly like an empty one. **Check `pagination.total` and `pages` before
 believing any count from this API.**
+
+### V2-1 — Page `/v1/posts` for the full published history (done 2026-07-29)
+
+The corpus sourced posts only from `GET /v1/analytics`, which is a recent 50-row window
+rather than the account. 34 published LinkedIn posts exist; 27 were in the corpus. The
+missing ones carry no metrics but do carry text, and text is what extraction reads.
+
+Delivered: a paged `ZernioClient.list_posts()` that walks `/v1/posts` to completion and
+checks the collected count against the `pagination.total` the API itself reported;
+`ingest_history` + `_history_payload` in `app/corpus.py`; and a second pass inside the
+existing `POST /corpus/ingest` — analytics first, then history. No flag, no new endpoint,
+no migration.
+
+**`list_posts()` replaced the unpaged `list_posts(limit, page)` added by US-010.** It had
+no callers anywhere in the repo — that older version *was* the page-1-of-4 trap.
+
+**The two payload shapes are not the same, and this is the part that cost the time.**
+`/v1/posts` names the post `_id` where analytics says `latePostId`; carries no `analytics`
+block at all; and puts `platform`, `publishedAt`, `platformPostUrl` and the account name
+on the per-platform entry instead of at the top level. `_history_payload` reshapes one into
+the other so the single existing upsert serves both.
+
+**Insert-only, and LinkedIn-only. Both are load-bearing:**
+- Applying a metric-less history payload over a row analytics had already filled would
+  zero it. A post already present — matched on `(latePostId, platform)` — is skipped.
+- `late_post_id` is **not unique**: 3 crossposts each produce two analytics rows (LinkedIn
+  and X) sharing one `latePostId`. Any upsert keyed on it would collapse them and make
+  them flip-flop on every sync. Hence the composite match.
+- The 13 youtube analytics rows carry **no `latePostId` at all**, so they cannot be
+  matched against `/v1/posts` — backfilling other channels would have duplicated every
+  video, plus added 4 instagram rows nobody asked for. LinkedIn only until the other
+  channels get their own slice.
+
+Verified live: corpus LinkedIn rows **27 → 34**, `min(published_at)` **2026-04-30 →
+2026-02-17**. The date shift is the real proof; the count alone would not distinguish a
+recovery from a duplication. Re-running recovered 0 more.
+
+**What this does not do, and it matters for the "cheapest quality jump" claim.**
+Extraction selects its sample with `order_by(engaged_actions desc).limit(12)`
+(`app/extraction.py:94`). The 7 recovered posts arrive at `engaged_actions = 0`, so they
+rank last and **do not enter the default extraction sample**. They are reachable through
+`focus` and a larger `sample_size`, and they are in the explorer, but widening the corpus
+did not by itself widen what extraction sees. Ranking by a metric these rows do not have
+is the reason.
+
+Also: backfilled rows are never snapshotted — `sync_metrics` selects on
+`Post.zernio_id in (analytics ids)` and these rows are keyed on the platform-entry id.
+Correct, since they have no metrics to track, but it is why their history stays empty.
