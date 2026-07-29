@@ -856,3 +856,54 @@ test and its `regenerate_text` twin, not a SQL-string comparison.
 Ranking metric untouched (`engaged_actions desc`), `voice_account`, `voice_since` and the
 two hand-excluded posts untouched. 237 tests (226 + 11), `make check` green. Extraction has
 not been run against the live LLM — Nikhil reviews the sample first.
+
+---
+
+## Corpus: the 14 creator inspiration posts, in the database
+
+**Why.** They existed only as a parsed JSON file in `.scratch/`. Every post lives in the
+database — that is the standing rule, and until they are rows the cohort filter added last
+session has nothing to select.
+
+`corpus.ingest_inspiration_posts` inserts them as `source=MANUAL`, `platform="linkedin"`,
+`is_external=True`, `status="external"`, under **`settings.inspiration_account`** read from
+settings rather than spelled out. That string is the whole join: `_strongest_posts` selects
+on `Post.account_username == settings.inspiration_account`, so a hardcoded copy that drifts
+by one character drops all 14 from extraction while the ingest still reports success.
+`test_the_cohort_is_named_by_settings_not_by_hand` and
+`test_an_ingested_creator_post_reaches_inspiration_extraction` pin it from both ends —
+verified by mutation (a trailing space on the username fails two tests).
+
+**Ids are `inspiration:linkedin-archive:<index>`** — the post's position in the document,
+with the slug a **constant in `scripts/ingest_inspiration.py`, deliberately not derived from
+the document's filename**: a rename or a re-parse must not mint 14 new ids. Insert-only, so
+a second run creates 0 and disturbs nothing already there. ponytail: correcting a bad parse
+therefore means deleting the rows and ingesting again, not re-running over the top.
+
+**`published_at` is None.** The archive records no dates. `voice_since` gates on
+`Cohort.VOICE` only, so undated inspiration rows are still evidence — the round-trip test
+proves it rather than assuming it.
+
+**Metrics — three posts' `engaged_actions` are lower bounds.** Each metric holds its own
+figure (not `add_manual_post`'s `likes = engaged_actions` shortcut, which would make every
+creator post read as unshared). **Posts 4, 9 and 11 record no share count** — *unrecorded in
+the document*, not zero. The `Post` metric columns are non-null ints and no migration was
+worth that distinction, so it is stored as 0 and their engaged actions (20, 415, 27) are
+floors. The nulls themselves survive in the committed
+`.scratch/corpus-widening/creator-inspiration.json`.
+
+**Images.** The 12 extracted PNGs are copied from `.scratch/corpus-widening/creator-images/`
+into `settings.media_dir` as `inspiration_linkedin-archive_<index>.png` — the post id with
+its colons flattened, so the name needs no quoting in a URL path. **Nothing is
+re-downloaded**: the `media.licdn.com` addresses the document annotates two posts with have
+expired, and fetching one would replace a file we have with a 403. `media_items` is left
+empty for the same reason — there is no URL for anything to retry.
+
+Live run: 14 created, corpus 93 → 107. Second run: `created=0 skipped=14`. 252 tests
+(237 + 15), `make check` green.
+
+**Open, for Nikhil.** One older row sits under `account_username = 'External creator'`
+(`engaged_actions` 1240) — a creator post that predates this cohort and is invisible to
+`Cohort.INSPIRATION` because the username does not match. It also carries the
+`likes = engaged_actions` shortcut, so its `likes` figure is not real. Left untouched:
+folding it in means deciding what its real metrics were.
