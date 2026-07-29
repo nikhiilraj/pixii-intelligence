@@ -66,9 +66,15 @@ def _apply(post: Post, payload: dict) -> None:
     post.is_external = bool(payload.get("isExternal"))
 
     for metric in _METRICS:
-        setattr(post, metric, int(analytics.get(metric) or 0))
+        observed = int(analytics.get(metric) or 0)
+        # ponytail: Zernio sends 0 for metrics it does not measure — LinkedIn reposts are
+        # always 0 — which is indistinguishable from a real zero, so a sync must not use one
+        # to erase a count another source observed. Engagement counters only climb, so
+        # keeping the larger value is safe. Revisit if a platform ever corrects one downward.
+        setattr(post, metric, max(observed, int(getattr(post, metric) or 0)))
     post.engagement_rate = float(analytics.get("engagementRate") or 0.0)
-    post.engaged_actions = sum(int(analytics.get(name) or 0) for name in _ENGAGED)
+    # Summed from the row, not the payload, so a metric the payload omits still counts.
+    post.engaged_actions = sum(int(getattr(post, name) or 0) for name in _ENGAGED)
     post.metrics_updated_at = datetime.now(UTC)
 
 
