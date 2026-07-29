@@ -3,7 +3,7 @@ from datetime import datetime
 import pytest
 
 from app.config import settings
-from app.extraction import ExtractionError, propose_hooks
+from app.extraction import Cohort, ExtractionError, propose_hooks
 from app.models.post import Post
 from app.models.template import TemplateKind, TemplateStatus
 from app.templates import latest_versions, usable_templates
@@ -45,6 +45,9 @@ TWO_HOOKS = {
 
 # Comfortably after `settings.voice_since`, so a post is current unless a test says so.
 CURRENT = datetime(2026, 6, 1)
+
+# The account other creators' posts are collected under.
+INSPIRATION = settings.inspiration_account
 
 
 def add_post(
@@ -182,6 +185,89 @@ def test_only_the_voice_accounts_own_posts_shape_templates(session):
 
     assert "Monte's own hook." in llm.user
     assert "Someone else's hook." not in llm.user
+
+
+def test_the_inspiration_cohort_reads_creator_posts_instead_of_montes(session):
+    # A hook is a borrowable shape, so a creator's posts may teach one. The cohorts are
+    # never mixed: whichever ranked higher would otherwise lead the sample.
+    add_post(session, "theirs", 1240, content="Someone else's hook.", author=INSPIRATION)
+    add_post(session, "ours", 185, content="Monte's own hook.")
+
+    llm = FakeLLM(TWO_HOOKS)
+    propose_hooks(session, llm, cohort=Cohort.INSPIRATION)
+
+    assert "Someone else's hook." in llm.user
+    assert "Monte's own hook." not in llm.user
+
+
+def test_the_voice_era_floor_does_not_gate_inspiration_posts(session):
+    # `voice_since` marks where Monte's current era begins. A creator's posts are never
+    # ranked against his, and his era says nothing about their timeline.
+    add_post(
+        session,
+        "theirs",
+        900,
+        content="An older creator hook.",
+        author=INSPIRATION,
+        published_at=datetime(2024, 6, 1),
+    )
+
+    llm = FakeLLM(TWO_HOOKS)
+    propose_hooks(session, llm, cohort=Cohort.INSPIRATION)
+
+    assert "An older creator hook." in llm.user
+
+
+def test_a_textless_inspiration_post_is_not_evidence(session):
+    # At least one collected creator post is an image with no text at all, and it outranks
+    # the rest, so it would otherwise lead the sample carrying no hook.
+    add_post(session, "image-only", 2000, content="   ", author=INSPIRATION)
+    add_post(session, "theirs", 185, content="Someone else's hook.", author=INSPIRATION)
+
+    llm = FakeLLM(TWO_HOOKS)
+    propose_hooks(session, llm, cohort=Cohort.INSPIRATION, sample_size=1)
+
+    assert "Someone else's hook." in llm.user
+    assert "image-only" not in llm.user
+
+
+def test_an_excluded_inspiration_post_is_not_evidence(session):
+    held_out = add_post(session, "viral", 5000, content="A one-off.", author=INSPIRATION)
+    held_out.excluded_from_extraction = True
+    session.add(held_out)
+    session.flush()
+    add_post(session, "theirs", 185, content="Someone else's hook.", author=INSPIRATION)
+
+    llm = FakeLLM(TWO_HOOKS)
+    propose_hooks(session, llm, cohort=Cohort.INSPIRATION)
+
+    assert "Someone else's hook." in llm.user
+    assert "A one-off." not in llm.user
+
+
+def test_a_hook_records_the_cohort_it_was_extracted_from(session):
+    # "Borrowed from a creator" has to stay distinguishable from "proven in Monte's own
+    # posts" long after the extraction run.
+    add_post(session, "ours", 185)
+    add_post(session, "theirs", 185, author=INSPIRATION)
+
+    voice = propose_hooks(session, FakeLLM(TWO_HOOKS))
+    borrowed = propose_hooks(session, FakeLLM(TWO_HOOKS), cohort=Cohort.INSPIRATION)
+
+    assert {t.body["cohort"] for t in voice} == {"voice"}
+    assert {t.body["cohort"] for t in borrowed} == {"inspiration"}
+
+
+def test_extraction_reads_the_voice_cohort_unless_told_otherwise(session):
+    add_post(session, "ours", 185, content="Monte's own hook.")
+    add_post(session, "theirs", 1240, content="Someone else's hook.", author=INSPIRATION)
+
+    llm = FakeLLM(TWO_HOOKS)
+    proposals = propose_hooks(session, llm)
+
+    assert "Monte's own hook." in llm.user
+    assert "Someone else's hook." not in llm.user
+    assert all(t.body["cohort"] == "voice" for t in proposals)
 
 
 def test_a_post_excluded_from_extraction_is_not_evidence(session):

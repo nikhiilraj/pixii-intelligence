@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 from sqlmodel import Session, col, select
 
+from app.config import settings
 from app.llm import LLM
 from app.models.draft import Draft
 from app.models.post import Post
@@ -118,6 +119,11 @@ def _exemplars(session: Session, hook: Template) -> list[Post]:
     statement = (
         select(Post)
         .where(col(Post.zernio_id).in_(hook.provenance))
+        # The hard line. A hook may be borrowed from another creator, but this is the one
+        # path where a post is handed to the model as a voice to imitate, so it is
+        # restricted to Monte's own writing here rather than trusted to whatever cohort
+        # the hook claims. Widening this makes Pixii's drafts sound like someone else.
+        .where(Post.account_username == settings.voice_account)
         .order_by(col(Post.engaged_actions).desc())
         .limit(EXEMPLAR_LIMIT)
     )

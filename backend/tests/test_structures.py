@@ -3,7 +3,7 @@ from datetime import datetime
 import pytest
 
 from app.config import settings
-from app.extraction import ExtractionError, compatible_hooks, propose_structures
+from app.extraction import Cohort, ExtractionError, compatible_hooks, propose_structures
 from app.models.post import Post
 from app.models.template import TemplateKind, TemplateStatus
 from app.templates import approve, create_template
@@ -170,3 +170,27 @@ def test_a_structure_without_sections_is_rejected(session):
 
     with pytest.raises(ExtractionError):
         propose_structures(session, FakeLLM({"structures": [{"name": "hollow", "sections": []}]}))
+
+
+def test_the_inspiration_cohort_reads_creator_posts_instead_of_montes(session):
+    # A structure is a borrowable shape, so a creator's posts may teach one.
+    theirs = add_post(session, "theirs", 1240, "Someone else's post body.")
+    theirs.account_username = settings.inspiration_account
+    session.add(theirs)
+    session.flush()
+    add_post(session, "ours", 185, "Monte's own post body.")
+
+    llm = FakeLLM(OFFER_REWARD)
+    structures = propose_structures(session, llm, cohort=Cohort.INSPIRATION)
+
+    assert "Someone else's post body." in llm.user
+    assert "Monte's own post body." not in llm.user
+    assert structures[0].body["cohort"] == "inspiration"
+
+
+def test_a_structure_records_the_voice_cohort_by_default(session):
+    add_post(session, "win-1", 185, "Body.")
+
+    structures = propose_structures(session, FakeLLM(OFFER_REWARD))
+
+    assert structures[0].body["cohort"] == "voice"
