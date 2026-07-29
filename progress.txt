@@ -907,3 +907,18 @@ Live run: 14 created, corpus 93 → 107. Second run: `created=0 skipped=14`. 252
 `Cohort.INSPIRATION` because the username does not match. It also carries the
 `likes = engaged_actions` shortcut, so its `likes` figure is not real. Left untouched:
 folding it in means deciding what its real metrics were.
+
+**A second caveat, same shape as the shares one.** Posts 11 and 12 carry parser `notes`:
+the archive's `Post-` delimiter for 12 was pasted a few lines late, so **post 12's opening
+lines were moved back from post 11**. Post 12 is now the top-ranked inspiration post (4331
+engaged actions) and `_hook_of` reads a hook from exactly those opening lines — so the
+strongest hook in the cohort rests on that boundary judgment, and post 11 is left 81
+characters long. The metrics were audited against the document; the content boundaries were
+not. Both notes survive in the committed JSON.
+
+Two consequences worth knowing. `DEFAULT_SAMPLE_SIZE` is 12, so the default inspiration
+sample takes 12 of the 14 — indices 1 (12 engaged actions) and 4 (20) fall below the cut.
+All 14 are eligible; nothing is excluded. And `/posts` sorts by `engaged_actions` with no
+account scope, so the default corpus view is now led by creator posts (4331, 1195) sitting
+far above Monte's previous top of ~185. Cosmetic only — `template_performance` requires
+lineage, so no aggregate moves.
