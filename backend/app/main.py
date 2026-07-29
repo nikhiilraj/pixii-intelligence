@@ -104,6 +104,7 @@ def list_posts(
     limit: int = 500,
     platform: str | None = None,
     source: PostSource | None = None,
+    account: str | None = None,
     since: date | None = None,
     until: date | None = None,
     template_family: str | None = None,
@@ -122,6 +123,12 @@ def list_posts(
         statement = statement.where(Post.platform == platform)
     if source:
         statement = statement.where(Post.source == source)
+    if account:
+        # The only filter that separates the cohorts: Monte's scraped posts and the creator
+        # reference posts are both MANUAL, so `source` cannot tell them apart. Exact
+        # equality, matching `extraction._strongest_posts`, so the account the dashboard
+        # calls a cohort is the same set of rows extraction reads.
+        statement = statement.where(Post.account_username == account)
     if since:
         statement = statement.where(col(Post.published_at) >= datetime.combine(since, time.min))
     if until:

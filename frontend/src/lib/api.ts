@@ -24,6 +24,9 @@ export type Post = {
 };
 
 export type TemplateKind = "hook" | "structure" | "visual";
+// The body of work a template was read from — `Cohort` in backend/app/extraction.py.
+// Sent as the plain string value; FastAPI coerces it into the StrEnum.
+export type Cohort = "voice" | "inspiration";
 export type TemplateStatus = "proposed" | "approved" | "retired";
 
 export type Template = {
