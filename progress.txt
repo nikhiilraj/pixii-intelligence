@@ -722,3 +722,16 @@ cover image only.
 
 No migration: every column already existed, and no `PostSource` value was added — `alembic/env.py`
 wraps migrations in a transaction, which makes `ALTER TYPE … ADD VALUE` a trap.
+
+**Ceiling — the next Zernio sync wipes shares off a *merged* row.** `sync_metrics` calls
+`ingest_posts`, which re-applies the analytics payload over every column in `_METRICS`; Zernio
+reports `shares: 0` on every LinkedIn row, so a merged post still inside the 50-row analytics
+window loses its repost count on the next scheduled sync and `engaged_actions` drops with it.
+Rows the scrape *created* are safe — no sync knows them — and so is any post older than the
+window, which is where all 43 reposts currently live. Pinned by
+`test_the_next_zernio_sync_wipes_the_shares_a_merge_wrote`. The fix belongs in `_apply` (stop
+trusting a zero for a metric the source never observes), which was out of scope here.
+
+Provenance note: the input, `.scratch/corpus-widening/monte-linkedin-2024-2026.json`, and the
+scraper, `scripts/linkedin_extract.js`, are **untracked** — 35 corpus rows currently have no
+versioned source. `.scratch/v1/` is tracked, so committing them would be consistent.

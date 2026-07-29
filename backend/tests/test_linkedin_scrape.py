@@ -203,6 +203,28 @@ def test_a_video_post_records_its_type_and_downloads_nothing(session):
     assert post.local_media_path is None
 
 
+def test_the_next_zernio_sync_wipes_the_shares_a_merge_wrote(session):
+    """**A known ceiling, pinned so nobody assumes otherwise.**
+
+    `sync_metrics` re-applies the analytics payload over every row it covers, and Zernio
+    reports `shares: 0` on every LinkedIn row — so enrichment of a post still inside the
+    50-row analytics window is undone by the next scheduled sync. Rows the scrape created
+    are safe (no sync knows them), and so is any post older than the window.
+
+    The fix belongs wherever analytics metrics are re-applied — `_apply` would have to
+    stop trusting a zero it never observes — not here.
+    """
+    zernio_row(session)
+    upsert_linkedin_posts(session, [scraped()])
+
+    ingest_posts(
+        session,
+        [{"_id": "z1", "platform": "linkedin", "content": CONTENT, "analytics": {"likes": 12}}],
+    )
+
+    assert session.exec(select(Post)).one().shares == 0
+
+
 def test_the_endpoint_ingests_a_scrape_payload(session):
     body = client_with(session).post(
         "/corpus/linkedin",
