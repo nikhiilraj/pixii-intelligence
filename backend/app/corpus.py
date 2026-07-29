@@ -1,10 +1,13 @@
 import re
+import shutil
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
 from sqlmodel import Session, select
 
+from app.config import settings
 from app.media import download_post_media
 from app.models.post import Post, PostSource
 
@@ -239,6 +242,92 @@ def add_manual_post(
     session.add(post)
     session.flush()
     return post
+
+
+def _inspiration_media(post: Post, source: Path, media_dir: Path) -> str | None:
+    """Copy an already-extracted image into the directory `/media` serves.
+
+    Nothing is downloaded. The images came out of the source document, and the LinkedIn
+    CDN addresses some of them were annotated with have expired — fetching one would
+    replace a file we have with a 403. Named after the post the way
+    `media.download_post_media` names its files, with the id's colons flattened so the
+    name needs no quoting in a URL path or a shell.
+    """
+    if not source.exists():
+        return None
+    name = f"{post.zernio_id.replace(':', '_')}{source.suffix.lower()}"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, media_dir / name)
+    return name
+
+
+def ingest_inspiration_posts(
+    session: Session,
+    posts: list[dict],
+    *,
+    doc_slug: str,
+    images_dir: Path | None = None,
+    media_dir: Path | None = None,
+) -> IngestResult:
+    """Add creator posts collected by hand into a document to the corpus.
+
+    This is other people's writing, and the corpus has to keep knowing that: the rows are
+    recorded under `settings.inspiration_account`, which is what `extraction.Cohort`
+    selects on and what `generation._exemplars` refuses to hand the model as a voice. A
+    username that does not match that setting leaves all of them invisible to extraction
+    while looking ingested, so it is read from settings and never spelled out here.
+
+    **Insert-only, keyed on the post's position in the document.** The document is a fixed
+    snapshot rather than a feed, so a second run creates nothing and touches nothing.
+    ponytail: correcting a bad parse therefore means deleting the rows and ingesting
+    again, not re-running over the top.
+
+    `published_at` stays None — the document records no dates, and `voice_since`
+    deliberately does not apply to this cohort, so an undated row is still evidence.
+    """
+    result = IngestResult()
+    for item in posts:
+        zernio_id = f"inspiration:{doc_slug}:{item['index']}"
+        if session.exec(select(Post).where(Post.zernio_id == zernio_id)).first():
+            result.skipped += 1
+            continue
+
+        post = Post(
+            zernio_id=zernio_id,
+            source=PostSource.MANUAL,
+            platform=_LINKEDIN,
+            content=(item.get("content") or "").strip(),
+            status="external",
+            is_external=True,
+            account_username=settings.inspiration_account,
+            metrics_updated_at=datetime.now(UTC),
+        )
+        # Each metric carries its own figure — not `add_manual_post`'s shortcut of storing
+        # the total as likes, which would make every one of these posts read as unshared
+        # and uncommented. A metric the document never recorded arrives as None and is
+        # stored as 0, because the column cannot hold the difference: those posts'
+        # `engaged_actions` is a lower bound. The nulls survive in the committed JSON.
+        post.likes = int(item.get("likes") or 0)
+        post.comments = int(item.get("comments") or 0)
+        post.shares = int(item.get("shares") or 0)
+        post.engaged_actions = sum(int(getattr(post, name)) for name in _ENGAGED)
+
+        # ponytail: the first image only, as with a scraped carousel — every post in this
+        # archive has at most one.
+        images = item.get("image_files") or []
+        if images and images_dir is not None:
+            stored = _inspiration_media(
+                post, images_dir / images[0], media_dir or settings.media_dir
+            )
+            if stored:
+                post.local_media_path = stored
+                post.media_type = "image"
+
+        session.add(post)
+        result.created += 1
+
+    session.flush()
+    return result
 
 
 def _content_key(content: str) -> str:
