@@ -3,9 +3,38 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-import { API_BASE, type Template, type TemplateKind } from "@/lib/api";
+import { API_BASE, type Cohort, type Template, type TemplateKind } from "@/lib/api";
 
 const KINDS: TemplateKind[] = ["hook", "structure", "visual"];
+
+// Which body of work extraction reads. A hook or a structure is a borrowable shape, so
+// either cohort may teach one; a voice is not borrowable, and the backend enforces that
+// independently of what is chosen here.
+const COHORTS: { value: Cohort; label: string }[] = [
+  { value: "voice", label: "from our own posts" },
+  { value: "inspiration", label: "from creator posts" },
+];
+
+const COHORT_LABEL: Record<string, string> = {
+  voice: "proven in our own posts",
+  inspiration: "borrowed from a creator",
+};
+
+const COHORT_STYLE: Record<string, string> = {
+  voice: "bg-black/8 dark:bg-white/10",
+  inspiration: "bg-violet-500/15 text-violet-700 dark:text-violet-300",
+};
+
+/** The cohort extraction recorded, or null for a hand-authored template that has none.
+ *
+ * It lives in `body`, not `provenance` — that list is typed `list[str]` and read
+ * positionally by `generation._exemplars`. A template written through the form below never
+ * has one, and naming a cohort it was not read from would be worse than naming none.
+ */
+function cohortOf(template: Template): string | null {
+  const cohort = template.body.cohort;
+  return typeof cohort === "string" ? cohort : null;
+}
 
 const BLANK_BODY: Record<TemplateKind, string> = {
   hook: JSON.stringify({ pattern: "{value} turned into {outcome}", tone: "direct" }, null, 2),
@@ -29,9 +58,25 @@ function Badge({ status }: { status: string }) {
   );
 }
 
+/** Whose posts a template was read from.
+ *
+ * While reviewing a proposal this is the difference between a shape proven in our own
+ * posts and one borrowed from a creator. Nothing renders when no cohort was recorded.
+ */
+function CohortTag({ template }: { template: Template }) {
+  const cohort = cohortOf(template);
+  if (!cohort) return null;
+  return (
+    <span className={`rounded px-1.5 py-0.5 text-xs ${COHORT_STYLE[cohort] ?? ""}`}>
+      {COHORT_LABEL[cohort] ?? cohort}
+    </span>
+  );
+}
+
 export default function TemplateManager({ initial }: { initial: Template[] }) {
   const router = useRouter();
   const [kind, setKind] = useState<TemplateKind>("hook");
+  const [cohort, setCohort] = useState<Cohort>("voice");
   const [name, setName] = useState("");
   const [body, setBody] = useState(BLANK_BODY.hook);
   const [editing, setEditing] = useState<Template | null>(null);
@@ -136,9 +181,26 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
   return (
     <div className="mt-8 grid gap-10 lg:grid-cols-[1fr_20rem]">
       <section>
-        <div className="mb-4 flex items-center gap-3">
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <select
+            value={cohort}
+            onChange={(e) => setCohort(e.target.value as Cohort)}
+            disabled={busy}
+            className="rounded-md border border-black/15 bg-transparent px-2 py-1.5 text-sm dark:border-white/20"
+            aria-label="extraction cohort"
+          >
+            {COHORTS.map((c) => (
+              <option key={c.value} value={c.value}>
+                {c.label}
+              </option>
+            ))}
+          </select>
           <button
-            onClick={() => send("/templates/extract/hooks", { method: "POST" })}
+            onClick={() =>
+              send(`/templates/extract/hooks?${new URLSearchParams({ cohort })}`, {
+                method: "POST",
+              })
+            }
             disabled={busy}
             className="rounded-md border border-black/20 px-3 py-1.5 text-sm disabled:opacity-50 dark:border-white/25"
           >
@@ -146,7 +208,15 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
           </button>
           <button
             onClick={() =>
-              send("/templates/extract/structures?sample_size=27", { method: "POST" })
+              // Query string built rather than concatenated: this endpoint already carries
+              // a param and the other does not, so `?` vs `&` is not the same by hand.
+              send(
+                `/templates/extract/structures?${new URLSearchParams({
+                  sample_size: "27",
+                  cohort,
+                })}`,
+                { method: "POST" },
+              )
             }
             disabled={busy}
             className="rounded-md border border-black/20 px-3 py-1.5 text-sm disabled:opacity-50 dark:border-white/25"
@@ -154,8 +224,8 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
             Extract structures
           </button>
           <span className="text-xs opacity-50">
-            Proposes patterns from the strongest posts. Nothing becomes usable until you
-            approve it.
+            Proposes patterns from the strongest posts in the chosen cohort. Nothing becomes
+            usable until you approve it.
           </span>
         </div>
 
@@ -176,6 +246,7 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
                     {t.kind} · v{t.version}
                   </span>
                   <Badge status={t.status} />
+                  <CohortTag template={t} />
                   <span className="ml-auto flex gap-3 text-xs">
                     {t.status !== "retired" && (
                       <button

@@ -25,7 +25,20 @@ const SORTS = [
   "published_at",
 ] as const;
 
+// The two cohorts the corpus is read along, mirroring `settings.voice_account` and
+// `settings.inspiration_account` in backend/app/config.py.
+// ponytail: two stable config strings copied rather than served — the same call the
+// templates page makes for `sample_size=27`. Serve them if they ever go per-platform.
+const VOICE_ACCOUNT = "Monte Desai";
+const INSPIRATION_ACCOUNT = "Creator inspiration";
+
 const nf = new Intl.NumberFormat("en-US");
+
+function accountLabel(account: string): string {
+  if (account === VOICE_ACCOUNT) return `${account} — our voice`;
+  if (account === INSPIRATION_ACCOUNT) return `${account} — creators`;
+  return account;
+}
 
 function firstLine(content: string): string {
   const line = content.split("\n").find((l) => l.trim().length > 0) ?? "";
@@ -39,6 +52,7 @@ function shortDate(value: string | null): string {
 
 type Filters = {
   platform: string;
+  account: string;
   family: string;
   since: string;
   sort: (typeof SORTS)[number];
@@ -52,9 +66,18 @@ export default function Explorer({
   initial: Post[];
   templates: Template[];
 }) {
-  const [posts, setPosts] = useState(initial);
+  // Scoped to our own account on arrival, and filtered here rather than server-side so the
+  // dropdowns can still be built from the whole corpus. The reason for the default: the
+  // corpus holds creator posts collected as reference material, and their numbers are an
+  // order of magnitude above ours (4331 and 1195 engaged actions against our best at 185).
+  // Ranked together they head the table, so an unscoped view reads as though someone
+  // else's posts were our top performers. Creators stay one click away.
+  const [posts, setPosts] = useState(() =>
+    initial.filter((p) => p.account_username === VOICE_ACCOUNT),
+  );
   const [filters, setFilters] = useState<Filters>({
     platform: "",
+    account: VOICE_ACCOUNT,
     family: "",
     since: "",
     sort: "engaged_actions",
@@ -67,6 +90,16 @@ export default function Explorer({
     [initial],
   );
 
+  // Every account in the corpus, not just the two cohorts — the YouTube and X accounts
+  // belong to neither, and a hardcoded pair would put them out of reach.
+  const accounts = useMemo(
+    () =>
+      Array.from(
+        new Set(initial.map((p) => p.account_username).filter((a): a is string => Boolean(a))),
+      ).sort(),
+    [initial],
+  );
+
   // Filtering is a user action, so it refetches from the handler rather than an effect.
   async function apply(change: Partial<Filters>) {
     const next = { ...filters, ...change };
@@ -74,6 +107,7 @@ export default function Explorer({
     setLoading(true);
     const params = new URLSearchParams({ sort: next.sort, order: next.order });
     if (next.platform) params.set("platform", next.platform);
+    if (next.account) params.set("account", next.account);
     if (next.family) params.set("template_family", next.family);
     if (next.since) params.set("since", next.since);
     try {
@@ -106,6 +140,20 @@ export default function Explorer({
   return (
     <>
       <div className="mt-6 flex flex-wrap items-center gap-2">
+        <select
+          value={filters.account}
+          onChange={(e) => apply({ account: e.target.value })}
+          className={field}
+          aria-label="cohort"
+        >
+          <option value="">all accounts</option>
+          {accounts.map((a) => (
+            <option key={a} value={a}>
+              {accountLabel(a)}
+            </option>
+          ))}
+        </select>
+
         <select
           value={filters.platform}
           onChange={(e) => apply({ platform: e.target.value })}
@@ -195,6 +243,7 @@ export default function Explorer({
           <thead>
             <tr className="border-b border-black/15 text-left dark:border-white/20">
               <th className="py-2 pr-4 font-medium">Post</th>
+              <th className="py-2 pr-4 font-medium">Account</th>
               <th className="py-2 pr-4 font-medium">Channel</th>
               <th className="py-2 pr-4 font-medium">Published</th>
               <th className="py-2 pr-4 text-right font-medium">Engaged</th>
@@ -210,6 +259,8 @@ export default function Explorer({
                     {firstLine(post.content)}
                   </Link>
                 </td>
+                {/* Whose post this is, so a number's provenance is visible without a filter. */}
+                <td className="py-3 pr-4 opacity-70">{post.account_username ?? "—"}</td>
                 <td className="py-3 pr-4 opacity-70">{post.platform}</td>
                 <td className="py-3 pr-4 tabular-nums opacity-70">
                   {shortDate(post.published_at)}

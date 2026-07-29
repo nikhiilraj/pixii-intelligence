@@ -7,7 +7,7 @@ from app.db import get_session
 from app.main import app
 from app.models.draft import Draft
 from app.models.metric import MetricSnapshot
-from app.models.post import Post
+from app.models.post import Post, PostSource
 from app.models.template import TemplateKind
 from app.templates import approve, create_template
 
@@ -17,12 +17,24 @@ def client_with(session: Session) -> TestClient:
     return TestClient(app)
 
 
-def add_post(session, zid, *, platform="linkedin", engaged=10, impressions=100, days_ago=0):
+def add_post(
+    session,
+    zid,
+    *,
+    platform="linkedin",
+    engaged=10,
+    impressions=100,
+    days_ago=0,
+    account=None,
+    source=PostSource.ZERNIO,
+):
     post = Post(
         zernio_id=zid,
         late_post_id=f"late-{zid}",
         platform=platform,
         content=f"post {zid}",
+        account_username=account,
+        source=source,
         engaged_actions=engaged,
         impressions=impressions,
         likes=engaged,
@@ -54,6 +66,37 @@ def test_filtering_by_channel(session):
     body = client_with(session).get("/posts?platform=twitter").json()
 
     assert names(body) == ["tw"]
+    app.dependency_overrides.clear()
+
+
+def test_filtering_by_account(session):
+    """The cohorts are only separable by account.
+
+    Monte's scraped posts and the creator reference posts are both `MANUAL`, so `source`
+    puts them in the same bucket — and a creator post outranks Monte's best by 20x, so a
+    ranking that mixes them presents someone else's numbers as ours.
+    """
+    add_post(session, "monte", account="Monte Desai", source=PostSource.MANUAL, engaged=185)
+    add_post(
+        session, "creator", account="Creator inspiration", source=PostSource.MANUAL, engaged=4331
+    )
+    client = client_with(session)
+
+    assert names(client.get("/posts?account=Monte+Desai").json()) == ["monte"]
+    assert names(client.get("/posts?account=Creator+inspiration").json()) == ["creator"]
+    # The filter this replaces, shown failing to separate them.
+    assert sorted(names(client.get("/posts?source=manual").json())) == ["creator", "monte"]
+    app.dependency_overrides.clear()
+
+
+def test_an_account_filter_matches_exactly_not_partially(session):
+    """The UI cohort must select the rows `extraction._strongest_posts` selects."""
+    add_post(session, "monte", account="Monte Desai")
+    add_post(session, "other", account="Monte Desai Jr")
+
+    body = client_with(session).get("/posts?account=Monte+Desai").json()
+
+    assert names(body) == ["monte"]
     app.dependency_overrides.clear()
 
 

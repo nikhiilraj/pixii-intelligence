@@ -922,3 +922,48 @@ All 14 are eligible; nothing is excluded. And `/posts` sorts by `engaged_actions
 account scope, so the default corpus view is now led by creator posts (4331, 1195) sitting
 far above Monte's previous top of ~185. Cosmetic only — `template_performance` requires
 lineage, so no aggregate moves.
+
+### Cohorts in the UI — account filter, scoped corpus, cohort-aware extraction (done 2026-07-30)
+
+The backend had grown three cohorts and the frontend still showed one undifferentiated
+corpus. Four gaps closed: an `account` filter on `/posts`, a cohort selector on the corpus
+view defaulting to our own posts, a voice/inspiration choice on both extract buttons, and
+each template's cohort surfaced while reviewing it.
+
+Delivered: `account: str | None` on `list_posts` (exact equality, matching
+`extraction._strongest_posts` — the UI's idea of a cohort must be the same rows extraction
+reads); a cohort `<select>` plus an `Account` column in `posts/Explorer.tsx`; a cohort
+`<select>` feeding both extract calls in `templates/TemplateManager.tsx`; and a `CohortTag`
+reading `body.cohort`.
+
+Learned:
+
+- **`source` cannot separate the cohorts and never could.** Monte's 35 scraped posts and
+  the 14 creator posts are both `MANUAL`. The account is the only discriminator, which is
+  why the filter had to be added rather than the existing one reused. The test asserts both
+  halves: `account` separates them, `source=manual` returns both.
+- **The corpus holds six accounts, not two.** `Monte Desai` 69 (35 MANUAL + 34 ZERNIO),
+  `Creator inspiration` 14, `pixii.creates` 13, `Pixii_ai` 10, `External creator` 1.
+  **The 24 YouTube/X/legacy rows belong to neither cohort**, so a two-option toggle would
+  have made them unreachable from the browser — the same bug class as the unscoped ranking.
+  The selector derives its options from the corpus itself and adds an "all accounts" entry;
+  only the two cohort names are constants.
+- **The default view is scoped by filtering `initial`, not by refetching.** `page.tsx` still
+  fetches all 107 so both dropdowns can be derived from the whole corpus; `Explorer` seeds
+  its state with `initial.filter(...)`. Scoping the server fetch instead would collapse the
+  platform list to `["linkedin"]` and leave the account list underivable — and refetching
+  on mount is what React 19's `set-state-in-effect` rule forbids.
+- **`body.cohort` is absent on hand-authored templates.** Only `_to_template` and
+  `_to_structure` write it, so anything created through the form has no key and
+  `String(t.body.cohort)` would render the literal `"undefined"`. `cohortOf` returns null
+  and the tag renders nothing.
+- **Both extract query strings are built with `URLSearchParams`.** Hooks carries no param
+  and structures already carries `sample_size`, so `?` vs `&` differs between the two —
+  concatenating by hand ships one working button and one 422.
+- The cohort goes over the wire as the plain string `"voice"` / `"inspiration"` and FastAPI
+  coerces it into the `Cohort` StrEnum. No new representation.
+
+**Noticed, not fixed — `sample_size=27` in the structures button is stale.** It was the
+LinkedIn post count when that button was written; the voice cohort is now 69 posts and the
+inspiration cohort is 14, for which 27 is simply "all of them". Outside these four gaps, so
+left alone.
