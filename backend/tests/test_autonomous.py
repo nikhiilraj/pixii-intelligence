@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,7 +11,7 @@ from app.db import get_session
 from app.deps import get_html_renderer, get_llm
 from app.main import app
 from app.models.draft import Draft
-from app.models.post import Post
+from app.models.post import Post, Verdict
 from app.models.template import TemplateKind
 from app.templates import approve, create_template
 
@@ -152,6 +153,76 @@ def test_topics_are_drawn_from_the_corpus(session):
     propose_topics(session, llm, count=2)
 
     assert "post p1" in llm.calls[-1]
+
+
+# --- US-010: the lessons reach the step that chooses the subject --------------------------
+
+# The topic prompt exactly as it was built before lessons existed, for a corpus of one post.
+# Captured from the code at the commit before this slice, not typed from the format by hand.
+# It is here so "no verdicts changes nothing" is a byte comparison rather than a claim: a
+# stray newline, or a lessons header that leaks in when the list is empty, fails this and
+# nothing else would. There are zero verdicts in the live database, so that empty header
+# would otherwise be in every topic prompt this app ever sends.
+TOPIC_PROMPT_BEFORE_LESSONS = "Propose 2 topics.\n\nRecent posts:\npost p1"
+
+
+def rule(session, zid: str, note: str, content: str = "") -> Post:
+    """Record a human's ruling the way the verdict route does, without going through it.
+
+    `content` defaults to empty so a judged post can teach without also entering the recent
+    posts shown — which keeps the byte comparisons above pinned to one known corpus.
+    """
+    post = Post(
+        zernio_id=zid,
+        platform="linkedin",
+        content=content,
+        verdict=Verdict.WORKED,
+        verdict_note=note,
+        verdict_at=datetime.now(UTC),
+    )
+    session.add(post)
+    session.flush()
+    return post
+
+
+def test_a_recorded_verdict_reaches_the_topic_prompt_as_a_lesson(session):
+    """What to write about is the decision the feedback loop most ought to inform.
+
+    Lessons already reached `generate_draft` and `regenerate_text` — how to write it — and
+    stopped there, so a human ruling could not steer the subject at all.
+    """
+    add_post(session, "p1")
+    rule(session, "judged-1", "the opening number did the work; the ask fell flat")
+    llm = FakeLLM()
+
+    propose_topics(session, llm, count=2)
+
+    assert "the opening number did the work; the ask fell flat" in llm.calls[-1]
+    assert "worked" in llm.calls[-1]
+
+
+def test_with_no_verdicts_recorded_the_topic_prompt_is_byte_identical_to_before(session):
+    add_post(session, "p1")
+    llm = FakeLLM()
+
+    propose_topics(session, llm, count=2)
+
+    assert llm.calls[-1] == TOPIC_PROMPT_BEFORE_LESSONS
+
+
+def test_a_cleared_verdict_stops_teaching_the_topic_prompt(session):
+    """Clearing a ruling empties its note, and an empty note is not a lesson.
+
+    Asserted here as well as at the writing prompts because a retraction that still steers
+    the subject is a retraction that did not take.
+    """
+    add_post(session, "p1")
+    rule(session, "judged-1", "")
+    llm = FakeLLM()
+
+    propose_topics(session, llm, count=2)
+
+    assert llm.calls[-1] == TOPIC_PROMPT_BEFORE_LESSONS
 
 
 def test_a_run_with_no_topics_is_reported_not_silently_empty(session):
