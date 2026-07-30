@@ -221,7 +221,11 @@ export default function AssetLibrary({ initial }: { initial: Asset[] }) {
           }}
           onDragLeave={() => setDropping(false)}
           onDrop={dropped}
-          className={`flex min-h-24 cursor-pointer flex-col items-center justify-center gap-1 rounded-card border border-dashed px-4 py-6 text-center transition-colors ${
+          /* `has-[:focus-visible]` is not decoration: the input inside is `sr-only`, so the
+             global 2px ring in globals.css would draw around a 1px clipped box and a keyboard
+             user tabbing here would see nothing at all move. The dropzone borrows the ring on
+             the input's behalf, with the same width, colour and offset the rule uses. */
+          className={`flex min-h-24 cursor-pointer flex-col items-center justify-center gap-1 rounded-card border border-dashed px-4 py-6 text-center transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent-text ${
             // Accent as a border and a fill behind no text — never as text. #F2610C is
             // 3.09:1 and fails AA for words.
             dropping ? "border-accent bg-surface-2" : "border-border hover:bg-surface-2"
@@ -233,12 +237,23 @@ export default function AssetLibrary({ initial }: { initial: Asset[] }) {
           <span className="text-caption text-muted">
             PNG, JPEG, GIF or WEBP. Anything over 1600px on the long edge is stored downscaled.
           </span>
+          {/* `sr-only`, not styled. The native widget's own chrome — a grey OS button reading
+              "Choose file" beside the words "No file chosen" — is the last unstyled control in
+              the app, and it is redundant here: the `<label>` wrapping it already renders the
+              chosen file's name, already accepts a drop, and already activates the picker when
+              clicked. Hiding it visually keeps every behaviour (label-click, keyboard focus,
+              the three drag handlers, `fileInput.current.value = ""` on reset) and removes the
+              chrome outright, which `file:`-variant styling cannot do — that only restyles the
+              button and leaves "No file chosen" on screen.
+              ponytail: one utility class. Ceiling: a real Button that calls
+              `fileInput.current.click()` the day this needs to look like a button rather than a
+              dropzone. */}
           <input
             ref={fileInput}
             type="file"
             accept="image/png,image/jpeg,image/gif,image/webp"
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-            className="mt-2 text-caption"
+            className="sr-only"
             aria-label="image file"
           />
         </label>

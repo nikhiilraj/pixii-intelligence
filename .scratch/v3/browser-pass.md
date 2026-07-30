@@ -49,11 +49,17 @@ Re-measure all seven routes after the change; the whole table must read 144 / 11
 
 ## F2 — WRONG: the native form controls were never migrated, and they are the loudest thing on two pages
 
-`/studio` renders three raw `<select>` elements (hook, structure, visual) and `/posts` renders four
-more plus a bare `dd/mm/yyyy` date input. They carry OS chrome — native arrow, native focus ring,
-their own border weight and corner radius — sitting directly beside the tokenised `Button`s. On
-Studio the three selects are the visual centre of the page and none of them match the two buttons
-under them.
+`/studio` renders three raw `<select>` elements (hook, structure, visual). They carry OS chrome —
+native arrow, native focus ring, their own border weight and corner radius — sitting directly
+beside the tokenised `Button`s, and they are the visual centre of the page.
+
+**Correction (recorded rather than edited away): I originally wrote that `/posts` rendered "four
+more" raw selects. It did not.** Its four filter controls were migrated to Radix during V2's
+US-004 (`a48bc1c`) and were already correct, sentinel and all, before this run began. What is
+genuinely native on `/posts` is only the `dd/mm/yyyy` date input. I inferred the selects from a
+screenshot instead of reading the file — the same mistake as the mobile-overflow attribution
+below, and from the same cause. The Studio and `/templates` halves were read in source and were
+right.
 
 `Studio.tsx:155` already names this: *"the Select migration is US-004's"*. It did not happen. The
 asset picker (plan item 2.4) was deferred partly on the grounds that it should move when these
