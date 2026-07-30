@@ -14,6 +14,9 @@ dependencies = [
     "httpx>=0.28",
     "apscheduler>=3.11",
     "pillow>=11.0",
+    # FastAPI parses multipart form data only when this is installed, and asset upload is
+    # multipart. Missing, `POST /assets` fails at request time rather than at import.
+    "python-multipart>=0.0.20",
 ]
 
 [project.optional-dependencies]
