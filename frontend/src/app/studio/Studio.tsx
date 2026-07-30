@@ -4,6 +4,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { assetSrc, postJson, type Asset, type Draft, type Template } from "@/lib/api";
 
 type Picked = { hook: number | null; structure: number | null; visual: number | null };
@@ -302,7 +303,20 @@ export default function Studio({
 
       <section className="space-y-4">
         {!draft ? (
-          <p className="text-sm opacity-50">No draft yet.</p>
+          /* The one empty state on this page that is always true on arrival: Studio holds its
+             draft in session state and has no way to load an existing one, so this column is
+             empty every time the page opens and is not reporting anything about the database.
+             So it says what fills it, and it repeats the line that is never negotiable here.
+             `opacity-50` before this — which the PRD names as an AA failure — is now --text-muted. */
+          <Card className="bg-surface-2 text-body">
+            <p className="font-medium">No draft yet.</p>
+            <p className="mt-1 text-muted">
+              Write an idea, choose a hook, a structure and a visual — or let Suggest choose them
+              — and Generate writes the post and renders its picture here, stamped with the
+              templates that produced it. Nothing publishes from here: a draft reaches Zernio
+              only when you push it, and goes live only when a human publishes it there.
+            </p>
+          </Card>
         ) : (
           <>
             <Lineage draft={draft} assets={assets} />

@@ -14,6 +14,7 @@ import {
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import {
   Select,
   SelectContent,
@@ -292,6 +293,32 @@ export default function Explorer({
         </span>
       </div>
 
+      {/* The failure, persistently, with the retry that re-requests it.
+
+          Before this it was a toast and nothing else, so four seconds after a rejected filter
+          the page showed the previous rows with no sign that the filter had not taken — the
+          quietest version of the bug this slice is about. The toast stays as well: it fires
+          next to the control that was just used, and the table it describes is a screen
+          further down.
+
+          `apply({})` is the retry — no change to the filters, so it rebuilds the same query
+          and issues the same request. The rows below are still the previous result until it
+          succeeds, which is what the copy says. */}
+      {error && (
+        <Card role="alert" className="mt-4 border-danger/40 bg-danger/10 text-body">
+          <p className="font-medium">Filter failed — the rows below are the previous result.</p>
+          <p className="mt-1 text-muted">{error}</p>
+          <Button
+            variant="outline"
+            className="mt-3"
+            disabled={loading}
+            onClick={() => apply({})}
+          >
+            {loading ? "Trying…" : "Try again"}
+          </Button>
+        </Card>
+      )}
+
       {series.length > 1 && (
         <div className="mt-6 h-56 w-full">
           <ResponsiveContainer width="100%" height="100%">
@@ -358,9 +385,36 @@ export default function Explorer({
           </tbody>
         </table>
         {/* Suppressed while `error` is set: "nothing matches" is a claim about the data,
-            and after a failed request there is no data to make it about. */}
+            and after a failed request there is no data to make it about. That one boolean is
+            the whole bug class this slice exists to prevent, so it is pinned by test.
+
+            Two empties, told apart by `initial` — the unfiltered server read this component
+            arrived with. Empty there means the corpus itself is empty; non-empty there means
+            the filters excluded everything, and the count is worth naming because "no post
+            matches" beside a corpus of 107 is a filter problem, not a data problem. */}
         {posts.length === 0 && !loading && !error && (
-          <p className="py-6 text-sm opacity-60">Nothing matches those filters.</p>
+          <Card className="mt-6 bg-surface-2 text-body">
+            {initial.length === 0 ? (
+              <>
+                <p className="font-medium">The corpus is empty.</p>
+                <p className="mt-1 text-muted">
+                  Posts arrive from Zernio analytics — every published post on a connected
+                  account lands here on the next sync, and extraction reads its templates out of
+                  them. Nothing is written by hand except an external post added above.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="font-medium">No post matches those filters.</p>
+                <p className="mt-1 text-muted">
+                  The corpus holds {nf.format(initial.length)} post
+                  {initial.length === 1 ? "" : "s"}. Widen the cohort, the channel, the template
+                  family or the date to see more — the view opens on our own account only, so
+                  creator reference posts are one filter away.
+                </p>
+              </>
+            )}
+          </Card>
         )}
       </div>
     </>

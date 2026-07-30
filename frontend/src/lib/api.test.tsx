@@ -134,25 +134,100 @@ describe("postJson", () => {
    ScoreboardPage is the consumer under test because it is a single read with no client
    hooks. It is an async server component, so it is awaited to an element and then rendered;
    RTL cannot render the component type itself. */
+/** A `/metrics/templates` row. The page's `Row` type is local to it, so this mirrors the shape
+ *  rather than importing it — and `sample_count: 0` is the default because that is what every
+ *  row in the real database reads today: no generated draft has ever been published. */
+function row(overrides: Record<string, unknown> = {}) {
+  return {
+    family: "a2bcf8e2",
+    version: 1,
+    kind: "hook",
+    name: "Contrarian open",
+    status: "approved",
+    sample_count: 0,
+    total_engaged_actions: 0,
+    total_impressions: 0,
+    mean_engaged_actions: 0,
+    sufficient: false,
+    min_sample_size: 5,
+    ...overrides,
+  };
+}
+
 describe("a forced 500 renders an error state, not an empty state", () => {
-  it("reports the failure and withholds the empty-state copy", async () => {
+  it("reports the failure and withholds both empty-state claims", async () => {
     stubFetch(jsonResponse(500, { detail: "the database went away mid-query" }));
 
     render(await ScoreboardPage());
 
     expect(screen.getByRole("alert")).toHaveTextContent("Request failed — HTTP 500");
     expect(screen.getByRole("alert")).toHaveTextContent("the database went away mid-query");
+    // Both, because the page chooses between them: asserting only one would let the other be
+    // rendered in its place and still pass.
+    expect(screen.queryByText(/No template version exists yet/i)).not.toBeInTheDocument();
     expect(
-      screen.queryByText(/No template has an attributed post yet/i),
+      screen.queryByText(/No generated post has been published yet/i),
     ).not.toBeInTheDocument();
   });
 
-  it("still shows the empty state when the request genuinely succeeds with no rows", async () => {
+  it("offers a retry beside the failure", async () => {
+    stubFetch(jsonResponse(500, { detail: "the database went away mid-query" }));
+
+    render(await ScoreboardPage());
+
+    // On a server-rendered read the retry is a reload, so what a test can honestly assert is
+    // that the affordance is there and labelled. That it re-requests is asserted where a retry
+    // is a real client call — `app/posts/Explorer.test.tsx`.
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
+  it("says the library is empty when the request genuinely succeeds with no rows", async () => {
     stubFetch(jsonResponse(200, []));
 
     render(await ScoreboardPage());
 
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(screen.getByText(/No template has an attributed post yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/No template version exists yet/i)).toBeInTheDocument();
+    // The other empty state is a different claim and must not double up with this one.
+    expect(
+      screen.queryByText(/No generated post has been published yet/i),
+    ).not.toBeInTheDocument();
+  });
+});
+
+/* The two empties are not the same state, and today's real state is the second one: 37 template
+   proposals exist and zero generated drafts have ever gone live. Collapsing them would either
+   hide a stocked library behind "nothing here" or claim a library that does not exist. */
+describe("a stocked library with no published post", () => {
+  it("states that the circuit has not run, and still lists every version", async () => {
+    stubFetch(jsonResponse(200, [row(), row({ version: 2, name: "Numbers first" })]));
+
+    render(await ScoreboardPage());
+
+    expect(screen.getByText(/No generated post has been published yet/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No template version exists yet/i)).not.toBeInTheDocument();
+
+    // The rows survive the empty state. All-zero sample counts say *which* versions are
+    // waiting; replacing the table with a notice would be the same lie inverted.
+    expect(screen.getByRole("link", { name: "Contrarian open" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Numbers first" })).toBeInTheDocument();
+  });
+
+  it("drops the notice as soon as one row has evidence", async () => {
+    stubFetch(
+      jsonResponse(200, [
+        row(),
+        row({ version: 2, name: "Numbers first", sample_count: 3, total_engaged_actions: 41 }),
+      ]),
+    );
+
+    render(await ScoreboardPage());
+
+    expect(
+      screen.queryByText(/No generated post has been published yet/i),
+    ).not.toBeInTheDocument();
+    // One attributed post is enough to stop the claim — the threshold badge is what reports
+    // that three samples are too thin to read, and that is a different statement.
+    expect(screen.getByText(/too thin \(3\/5\)/)).toBeInTheDocument();
   });
 });

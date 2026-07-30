@@ -174,6 +174,20 @@ describe("a failed /inbox is not an empty inbox", () => {
 
     expect(screen.getByRole("status")).toHaveTextContent(/Backend unreachable/);
     expect(screen.queryByText(/Nothing is waiting on a verdict/)).not.toBeInTheDocument();
+    // The retry sits beside the unreachable notice, not inside it: `make api` in the other
+    // terminal is exactly what a reload would then pick up.
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
+  it("offers a retry beside the failure", async () => {
+    stubFetch({ inbox: jsonResponse(500, { detail: "the database went away mid-query" }) });
+
+    render(await InboxPage());
+
+    // Every read on this page is a server-component fetch, so the retry is a reload and what a
+    // test can honestly assert is that it is present and labelled. That a retry re-requests is
+    // asserted where one is a real client call — `app/posts/Explorer.test.tsx`.
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
   });
 });
 
@@ -220,5 +234,8 @@ describe("the health footer", () => {
     );
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByText(/Backend unreachable/)).not.toBeInTheDocument();
+    // And no retry. A footer gets a footer-sized sentence: offering to reload the whole page
+    // because the status strip failed would put the queues at risk to recover a strip.
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
   });
 });

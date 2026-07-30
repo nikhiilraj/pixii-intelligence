@@ -68,6 +68,22 @@ function stubFetch(response: Response) {
   return fetchStub;
 }
 
+/** One response per call, in order, and a throw on the call after the last.
+ *
+ *  The throw is deliberate rather than a clamp: it makes an unexpected extra request a failed
+ *  test instead of a silently reused (and already-consumed) `Response`, which is what pins
+ *  "the retry is one request per click" — nothing here loops or backs off on its own. */
+function stubFetchSequence(...responses: Response[]) {
+  let call = 0;
+  const fetchStub = vi.fn((url: string) => {
+    const next = responses[call++];
+    if (!next) throw new Error(`unexpected fetch #${call} for ${url}`);
+    return Promise.resolve(next);
+  });
+  vi.stubGlobal("fetch", fetchStub);
+  return fetchStub;
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
   toastError.mockClear();
@@ -124,11 +140,13 @@ describe("a failed filter", () => {
   // Both directions, as US-003 established: asserting only the failure case would let
   // "never show the empty state" pass, and asserting only the success case would let
   // "always show it" pass.
-  it("raises a toast carrying the API's detail and withholds the empty-state claim", async () => {
+  it("reports the failure and withholds every empty-state claim", async () => {
     stubFetch(jsonResponse(422, { detail: "sort must be one of engaged_actions, impressions" }));
     render(<Explorer initial={[]} templates={[]} />);
 
-    expect(screen.getByText("Nothing matches those filters.")).toBeInTheDocument();
+    // The corpus-is-empty wording, because `initial` is empty. There is nothing wrong with
+    // saying so *here* — the read succeeded and returned nothing.
+    expect(screen.getByText("The corpus is empty.")).toBeInTheDocument();
 
     // The order toggle, not a Select — a plain button on the identical `apply` path, so the
     // failure handling is exercised without driving Radix in jsdom.
@@ -140,7 +158,17 @@ describe("a failed filter", () => {
           "sort must be one of engaged_actions, impressions — the rows below are the previous result.",
       }),
     );
-    expect(screen.queryByText("Nothing matches those filters.")).not.toBeInTheDocument();
+
+    /* THE assertion. The 422 is reported, with the API's own words, and neither empty state is
+       on the page — an emptiness claim needs data to be about, and a failed request has none.
+       Both are checked because the component picks between them: asserting only the one that
+       was showing would let the other be substituted and still pass. */
+    expect(screen.getByRole("alert")).toHaveTextContent("Filter failed");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "sort must be one of engaged_actions, impressions",
+    );
+    expect(screen.queryByText("The corpus is empty.")).not.toBeInTheDocument();
+    expect(screen.queryByText("No post matches those filters.")).not.toBeInTheDocument();
   });
 
   it("still shows the empty state when the request genuinely succeeds with no rows", async () => {
@@ -150,8 +178,42 @@ describe("a failed filter", () => {
     fireEvent.click(screen.getByRole("button", { name: "toggle sort direction" }));
 
     await waitFor(() =>
-      expect(screen.getByText("Nothing matches those filters.")).toBeInTheDocument(),
+      expect(screen.getByText("No post matches those filters.")).toBeInTheDocument(),
     );
+    // The filtered wording, not the corpus-is-empty wording: `initial` has a post in it, so
+    // this is the filters excluding everything and the copy names the count it excluded from.
+    expect(screen.getByText(/The corpus holds 1 post\./)).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(toastError).not.toHaveBeenCalled();
+  });
+
+  /* The other half of an honest error state: the retry has to actually go back to the API.
+     A "Try again" that re-renders the same failure is the more embarrassing version of the bug
+     this slice is about, because it looks like it works. */
+  it("re-requests when Try again is clicked, and clears the failure when the retry succeeds", async () => {
+    const fetchStub = stubFetchSequence(
+      jsonResponse(500, { detail: "the database went away mid-query" }),
+      jsonResponse(200, [post({ id: 2, content: "the row that arrived on the retry" })]),
+    );
+    render(<Explorer initial={[post()]} templates={[]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "toggle sort direction" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    // Two calls, not one: the click reached `getJson` and left the machine.
+    await waitFor(() => expect(fetchStub).toHaveBeenCalledTimes(2));
+    // And at the same URL — a retry that quietly requested something else would satisfy a
+    // call count while answering a different question.
+    expect(fetchStub.mock.calls[1][0]).toBe(fetchStub.mock.calls[0][0]);
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("link", { name: /the row that arrived on the retry/ }),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

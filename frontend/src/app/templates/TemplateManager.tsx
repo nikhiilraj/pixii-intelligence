@@ -5,6 +5,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { postBlob, postJson, type Cohort, type Template, type TemplateKind } from "@/lib/api";
 
 const KINDS: TemplateKind[] = ["hook", "structure", "visual"];
@@ -212,9 +213,18 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
         </div>
 
         {initial.length === 0 ? (
-          <p className="text-sm opacity-60">
-            No templates yet. Author one, or run hook extraction once it exists.
-          </p>
+          /* Designed rather than apologetic: it states what this list holds and the two ways
+             something gets into it. This is a genuinely empty library and never a failed read —
+             `page.tsx` renders ApiFailureNotice in place of this whole component when the read
+             fails, so nothing can reach here as `[]` because of an error. */
+          <Card className="bg-surface-2 text-body">
+            <p className="font-medium">No template exists yet.</p>
+            <p className="mt-1 text-muted">
+              Extraction reads the corpus and proposes hooks, structures and visuals — the two
+              buttons above — and nothing it proposes becomes usable until you approve it. A
+              template can also be written by hand in the form beside this list.
+            </p>
+          </Card>
         ) : (
           <ul className="space-y-2">
             {initial.map((t) => (
