@@ -72,9 +72,18 @@ function firstLine(content: string): string {
   return line.length > 80 ? `${line.slice(0, 80)}…` : line;
 }
 
+/* Corpus spans 2024→2026, so day+month is ambiguous in both surfaces this feeds: the axis looks
+ * unsorted when it isn't, and the engagement-sorted table can stack two "15 Jun"s two years
+ * apart. `year: "2-digit"` is the shortest label that fixes it; recharts thins the ~69 ticks
+ * itself, so the extra characters cost ticks, not legibility.
+ * ponytail: one more Intl option, not a hand-rolled formatter. */
 function shortDate(value: string | null): string {
   if (!value) return "—";
-  return new Date(value).toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+  return new Date(value).toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "2-digit",
+  });
 }
 
 export type Filters = {
