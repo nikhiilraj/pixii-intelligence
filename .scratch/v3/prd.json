@@ -2,13 +2,13 @@
   {
     "id": "US-001",
     "title": "The shell actually is the shell",
-    "description": "Every page's <main> currently shrink-wraps its content instead of filling the max-w-6xl shell, and /templates blows the document out to 10384px at a 1440px viewport. Both are the same family of bug: a container whose width is decided by its content. Fix (proven at runtime in the browser before being written): drop `flex flex-col` from <body> in layout.tsx — an auto margin on the cross axis disables flex stretch, which is why mx-auto never worked — and add min-w-0 to the grid children in TemplateManager.tsx:170 and Studio.tsx:160, because a `1fr` track's implicit min-width:auto resolves to min-content and grows past any overflow-x-auto on a descendant. Nothing uses the body flex; there is no sticky footer.",
+    "description": "Every page's <main> currently shrink-wraps its content instead of filling the max-w-6xl shell, and /templates blows the document out to 10384px at a 1440px viewport. Both are the same family of bug: a container whose width is decided by its content. Fix (proven at runtime in the browser before being written): drop `flex flex-col` from <body> in layout.tsx \u2014 an auto margin on the cross axis disables flex stretch, which is why mx-auto never worked \u2014 and add min-w-0 to the grid children in TemplateManager.tsx:170 and Studio.tsx:160, because a `1fr` track's implicit min-width:auto resolves to min-content and grows past any overflow-x-auto on a descendant. Nothing uses the body flex; there is no sticky footer.",
     "acceptanceCriteria": [
       "At 1440px, main.x == 144 and main.width == 1152 on /, /studio, /posts, /templates, /assets, /scoreboard",
-      "/posts/[id] stays at 336/768 — max-w-3xl is a deliberate reading measure, do not widen it",
+      "/posts/[id] stays at 336/768 \u2014 max-w-3xl is a deliberate reading measure, do not widen it",
       "document.scrollWidth == 1440 on all seven routes at a 1440px viewport",
       "/posts and /scoreboard no longer exceed 390px scrollWidth at a 390px viewport; wide tables scroll inside their own container",
-      "Measurements come from getBoundingClientRect in a real browser, recorded in progress.txt — not inferred from classnames",
+      "Measurements come from getBoundingClientRect in a real browser, recorded in progress.txt \u2014 not inferred from classnames",
       "slice tests green"
     ],
     "priority": 1,
@@ -17,15 +17,15 @@
   {
     "id": "US-002",
     "title": "Dates carry their year",
-    "description": "Explorer.tsx:77 formats dates as {day, month} with no year, on a corpus spanning 2024-01-25 to 2026-07-17. The engagement chart's axis reads 26 Jan / 27 Feb / 14 Mar / 17 Sept / 01 Apr and looks unsorted. It is not — series at :200 sorts ascending by published_at. The label is what lies. The table's Published column has the same formatter and is worse, because the table sorts by engagement so two rows both reading '15 Jun' can be two years apart.",
+    "description": "Explorer.tsx:77 formats dates as {day, month} with no year, on a corpus spanning 2024-01-25 to 2026-07-17. The engagement chart's axis reads 26 Jan / 27 Feb / 14 Mar / 17 Sept / 01 Apr and looks unsorted. It is not \u2014 series at :200 sorts ascending by published_at. The label is what lies. The table's Published column has the same formatter and is worse, because the table sorts by engagement so two rows both reading '15 Jun' can be two years apart.",
     "acceptanceCriteria": [
       "Chart axis and table Published column both disambiguate the year across a multi-year corpus",
       "A test pins that two posts on the same day-and-month in different years render differently",
-      "The existing ascending published_at sort in `series` is untouched — it was always correct",
+      "The existing ascending published_at sort in `series` is untouched \u2014 it was always correct",
       "slice tests green"
     ],
     "priority": 2,
-    "passes": false
+    "passes": true
   },
   {
     "id": "US-003",
@@ -33,7 +33,7 @@
     "description": "US-004 in the V2 run recorded 'the Select migration is US-004's' and it never happened. /studio renders three raw <select> elements, /posts four more plus a bare dd/mm/yyyy date input, /templates one, and /assets an unstyled native file input. They carry OS chrome next to tokenised Buttons and are the loudest visual inconsistency in the app. Radix Select is already vendored. Note the known trap: Radix Select cannot hold an empty-string value, so 'all' options need a sentinel, and if that sentinel reaches the query string filtering breaks silently while everything still renders.",
     "acceptanceCriteria": [
       "No raw <select> remains on /studio, /posts, /templates",
-      "The 'all'/'let it suggest' sentinel never reaches the query string — a test asserts the built query for the default filter state",
+      "The 'all'/'let it suggest' sentinel never reaches the query string \u2014 a test asserts the built query for the default filter state",
       "Keyboard: the control opens, arrow-keys and Escape work; assert our own logic, not Radix's internals",
       "The native file input on /assets is styled or replaced without losing drag-and-drop",
       "slice tests green"
@@ -47,7 +47,7 @@
     "description": "Status lands at x=646 under HOOK, x=666 under STRUCTURE and x=504 under VISUAL, with Posts/Engaged/Mean/Evidence shifting behind it. Three tables of identical shape that read as unrelated because each sizes its own columns to its own content.",
     "acceptanceCriteria": [
       "The three tables' column edges align; verified by measurement in a browser, not by eye",
-      "No aggregate loses its sample count and no 'not ranked' copy is removed — those are load-bearing",
+      "No aggregate loses its sample count and no 'not ranked' copy is removed \u2014 those are load-bearing",
       "slice tests green"
     ],
     "priority": 4,
@@ -64,17 +64,18 @@
       "slice tests green"
     ],
     "priority": 5,
-    "passes": false
+    "passes": true
   },
   {
     "id": "US-006",
     "title": "A verdict can be cleared, not only changed",
-    "description": "PRD.md:178 said {verdict: null} clears a ruling; main.py:272 makes VerdictIn.verdict required, so it cannot. Do NOT widen it to a bare `Verdict | None` — that makes the field optional-with-default, so an empty body or a mistyped key would silently wipe a ruling instead of returning 422. Use an explicit clear path: either DELETE /posts/{id}/verdict, or required-but-nullable via Field(...).",
+    "description": "PRD.md:178 said {verdict: null} clears a ruling; main.py:272 makes VerdictIn.verdict required, so it cannot. Do NOT widen it to a bare `Verdict | None` \u2014 that makes the field optional-with-default, so an empty body or a mistyped key would silently wipe a ruling instead of returning 422. Use an explicit clear path: either DELETE /posts/{id}/verdict, or required-but-nullable via Field(...).",
     "acceptanceCriteria": [
       "Clearing a verdict nulls verdict_at, empties verdict_note, and returns the post to Inbox queue 4",
-      "An empty request body is still a 422, not an accidental clear — this is the whole point of the slice",
+      "An empty request body is still a 422, not an accidental clear \u2014 this is the whole point of the slice",
       "An unknown verdict string is still a 422 naming the three allowed values",
-      "slice tests green"
+      "slice tests green",
+      "A ruling can be retracted from /posts/[id] \u2014 the API-only version is the exact shape that blocked the V2 merge (a verdict route with no form)"
     ],
     "priority": 6,
     "passes": false
@@ -86,20 +87,20 @@
     "acceptanceCriteria": [
       "The API row reflects health.data.status and can render not-ok",
       "A test drives the not-ok path and asserts it renders as a failure",
-      "The existing failure sentence for an unreachable backend is unchanged — it is deliberately not ApiFailureNotice",
+      "The existing failure sentence for an unreachable backend is unchanged \u2014 it is deliberately not ApiFailureNotice",
       "slice tests green"
     ],
     "priority": 7,
-    "passes": false
+    "passes": true
   },
   {
     "id": "US-008",
     "title": "Closed circuits: N",
-    "description": "PRD.md:209 marked this Build and it was silently dropped. N = drafts with went_live_at set whose post carries a verdict — one full lap of generate -> push -> publish -> rule. It reads 0 today, and showing that 0 is the entire point: the Inbox currently gives no way to know the loop has never run.",
+    "description": "PRD.md:209 marked this Build and it was silently dropped. N = drafts with went_live_at set whose post carries a verdict \u2014 one full lap of generate -> push -> publish -> rule. It reads 0 today, and showing that 0 is the entire point: the Inbox currently gives no way to know the loop has never run.",
     "acceptanceCriteria": [
       "The Inbox shows the count of completed circuits",
       "It reads 0 against today's database and the copy makes 0 legible as 'never', not as an error",
-      "Setting a verdict on a post with draft lineage moves it to 1 — asserted in a test",
+      "Setting a verdict on a post with draft lineage moves it to 1 \u2014 asserted in a test",
       "Naive/aware datetime comparison goes through main._utc; every datetime column is timestamp without time zone and mixing the two raises",
       "slice tests green"
     ],
@@ -109,11 +110,11 @@
   {
     "id": "US-009",
     "title": "Post detail shows its engagement curve and what generated it",
-    "description": "GET /posts/{id}/history and draft_for_post both exist, are tested, and are called by nothing. PRD.md:186 promised both on the post page. Add the curve and the 'generated from hook X v2 / structure Y v1 / visual Z v2' lineage block. IMPORTANT: this slice adds content only — /posts/[id]'s un-tokenised styling stays deferred, and the browser pass confirmed it has no dark-mode or legibility failure. Do not opportunistically restyle the page.",
+    "description": "GET /posts/{id}/history and draft_for_post both exist, are tested, and are called by nothing. PRD.md:186 promised both on the post page. Add the curve and the 'generated from hook X v2 / structure Y v1 / visual Z v2' lineage block. IMPORTANT: this slice adds content only \u2014 /posts/[id]'s un-tokenised styling stays deferred, and the browser pass confirmed it has no dark-mode or legibility failure. Do not opportunistically restyle the page.",
     "acceptanceCriteria": [
       "A published post with draft lineage renders its engagement curve and its three template versions",
       "A post with no draft behind it renders neither, and says so rather than showing an empty chart",
-      "Lineage reads the draft's own (family, version) via generated_from — never the newest version, which was G2 finding #3",
+      "Lineage reads the draft's own (family, version) via generated_from \u2014 never the newest version, which was G2 finding #3",
       "No styling changes outside the two new blocks",
       "slice tests green"
     ],
@@ -123,10 +124,10 @@
   {
     "id": "US-010",
     "title": "Lessons reach the step that decides what to write about",
-    "description": "PRD.md:132. verdict_lessons currently reaches generate_draft and regenerate_text only. autonomous.propose_topics — the step that chooses the subject — never sees them, so the feedback loop skips the decision it most ought to inform.",
+    "description": "PRD.md:132. verdict_lessons currently reaches generate_draft and regenerate_text only. autonomous.propose_topics \u2014 the step that chooses the subject \u2014 never sees them, so the feedback loop skips the decision it most ought to inform.",
     "acceptanceCriteria": [
       "propose_topics' prompt carries the verdict lessons; asserted against the built prompt",
-      "With no verdicts recorded the prompt is unchanged from today's — no empty 'Lessons:' header",
+      "With no verdicts recorded the prompt is unchanged from today's \u2014 no empty 'Lessons:' header",
       "slice tests green"
     ],
     "priority": 10,
@@ -135,10 +136,10 @@
   {
     "id": "US-011",
     "title": "A paid run says what it cost",
-    "description": "There is no spend counter anywhere in this app. POST /drafts/autonomous-run clamps its cap hard (that was fixed at G2) but reports nothing about what it spent. Required before US-013 lands, because variants multiply paid calls. Separately: leave enable_autonomous alone — scheduler.py:76 is its only reader, three existing tests call this endpoint with the flag off, and gating a deliberate human click behind a scheduler switch is the wrong control. Record that decision in a comment so it stops reading as an open trap.",
+    "description": "There is no spend counter anywhere in this app. POST /drafts/autonomous-run clamps its cap hard (that was fixed at G2) but reports nothing about what it spent. Required before US-013 lands, because variants multiply paid calls. Separately: leave enable_autonomous alone \u2014 scheduler.py:76 is its only reader, three existing tests call this endpoint with the flag off, and gating a deliberate human click behind a scheduler switch is the wrong control. Record that decision in a comment so it stops reading as an open trap.",
     "acceptanceCriteria": [
       "The run response reports llm_calls and image_calls actually made",
-      "The counts are observed, not predicted from the cap — a run that fails partway reports what it spent before failing",
+      "The counts are observed, not predicted from the cap \u2014 a run that fails partway reports what it spent before failing",
       "A comment at the endpoint records why enable_autonomous does not gate it",
       "No test makes a live network call; Azure and Zernio stay behind their fakes",
       "slice tests green"
@@ -165,7 +166,7 @@
     "title": "One idea, several drafts, keep one",
     "description": "Generate N drafts of the same idea across different approved hook/structure/visual combinations, show them side by side, keep one and discard the rest. This is the honest form of template comparison while the corpus cannot support ranking: a human choosing between three concrete drafts is judgement, not statistics. Nothing here may rank or score the variants.",
     "acceptanceCriteria": [
-      "N is clamped server-side to a new settings.variants_max using the min(requested, ceiling) pattern at api_drafts.py:279 — a large N must be impossible, for the same reason ?cap=500 was",
+      "N is clamped server-side to a new settings.variants_max using the min(requested, ceiling) pattern at api_drafts.py:279 \u2014 a large N must be impossible, for the same reason ?cap=500 was",
       "The clamp is a bound, not a default: a test asserts an over-large request produces at most variants_max",
       "The response reports llm_calls and image_calls for the whole batch (US-011)",
       "Discarded variants are deleted, not left as orphan drafts polluting Inbox queue 2",
@@ -178,10 +179,10 @@
   {
     "id": "US-014",
     "title": "Re-topic: same templates, new subject",
-    "description": "Nikhil's original pillar, verbatim: 'have the template and hooks and visuals as kind of template so that we can easily recreate them using another topic.' Take any past post or existing draft and generate a NEW draft on a new idea that inherits its exact template versions. generated_from already resolves a draft's own (family, version) — this creates a new row that inherits them, rather than a rewrite that moves lineage.",
+    "description": "Nikhil's original pillar, verbatim: 'have the template and hooks and visuals as kind of template so that we can easily recreate them using another topic.' Take any past post or existing draft and generate a NEW draft on a new idea that inherits its exact template versions. generated_from already resolves a draft's own (family, version) \u2014 this creates a new row that inherits them, rather than a rewrite that moves lineage.",
     "acceptanceCriteria": [
       "The new draft's hook/structure/visual family+version equal the source's, resolved via generated_from and not by latest version",
-      "The source draft or post is unmodified — its lineage, text and metrics do not move",
+      "The source draft or post is unmodified \u2014 its lineage, text and metrics do not move",
       "Re-topicking from a retired template version still works: the version history is the attribution record",
       "slice tests green"
     ],
@@ -191,10 +192,10 @@
   {
     "id": "US-015",
     "title": "Asset picker is a grid, not a select per slot",
-    "description": "PRD.md:167 specified a dialog with a grid, search and upload-in-place; Studio.tsx:198 ships a native <select> per image slot with a thumbnail. Last on purpose — it is the one phase-2 item that is presentation, and it should move together with US-003's Select migration rather than leaving four controls in one form behaving two different ways.",
+    "description": "PRD.md:167 specified a dialog with a grid, search and upload-in-place; Studio.tsx:198 ships a native <select> per image slot with a thumbnail. Last on purpose \u2014 it is the one phase-2 item that is presentation, and it should move together with US-003's Select migration rather than leaving four controls in one form behaving two different ways.",
     "acceptanceCriteria": [
-      "Slots come from the template's declared type only — never guessed from the slot name (a name heuristic asks for an asset where the model writes prose and vice versa)",
-      "An unpicked slot is omitted from asset_values, not sent as empty string — the backend reads absent as 'use the template default'",
+      "Slots come from the template's declared type only \u2014 never guessed from the slot name (a name heuristic asks for an asset where the model writes prose and vice versa)",
+      "An unpicked slot is omitted from asset_values, not sent as empty string \u2014 the backend reads absent as 'use the template default'",
       "Changing the visual resets the picker to the new template's defaults",
       "Arrow-key navigable and Escape-dismissable",
       "full suite green"
