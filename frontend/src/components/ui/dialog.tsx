@@ -42,18 +42,18 @@ export function DialogContent({
 }: React.ComponentProps<typeof DialogPrimitive.Content>) {
   return (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/40 transition-opacity duration-200 ease-standard starting:opacity-0" />
+      <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/40 transition-opacity duration-[var(--duration-structural)] ease-standard starting:opacity-0" />
       <DialogPrimitive.Content
         className={cn(
           "fixed top-1/2 left-1/2 z-50 w-[calc(100%-3rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-dialog border border-border bg-surface p-5 shadow-overlay",
-          "transition-[opacity,transform] duration-200 ease-standard starting:scale-95 starting:opacity-0",
+          "transition-[opacity,transform] duration-[var(--duration-structural)] ease-standard starting:scale-95 starting:opacity-0",
           className,
         )}
         {...props}
       >
         {children}
         <DialogPrimitive.Close
-          aria-label="close"
+          aria-label="Close"
           className="absolute top-3 right-3 inline-flex min-h-8 min-w-8 items-center justify-center rounded-input text-muted transition-colors hover:bg-surface-2 hover:text-text"
         >
           <Close />
