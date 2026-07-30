@@ -35,6 +35,61 @@ def writable_slots(visual: Template) -> list[str]:
         if str(slot.get("type") or "") in WRITABLE_SLOT_TYPES
     ]
 
+
+def asset_slots(visual: Template) -> list[str]:
+    """The slots an asset is picked for — `image_url`, the ones the model may never write.
+
+    The mirror image of `writable_slots`, read off the template's declared `type` for the
+    same reason: `left_image_url` reads as an asset and `subject`, `logo` and `hero` do not,
+    so guessing from the name reintroduces exactly the silent wrongness the type check
+    closes. `.get`, never `slot["type"]` — VISUAL rows authored before `type` existed carry
+    no key at all.
+    """
+    return [str(slot.get("name")) for slot in visual.slots if slot.get("type") == "image_url"]
+
+
+def chosen_assets(visual: Template, picked: dict[str, str]) -> dict[str, str]:
+    """The asset id for each of this visual's image slots: what was picked, else the default.
+
+    Two things happen here, and both are load-bearing.
+
+    **`picked` is filtered to image slots.** It arrives from a request body, so accepting it
+    wholesale would hand a caller a second, unguarded way to write `big_number` — the exact
+    hole `WRITABLE_SLOT_TYPES` exists to close, reopened one column over. A key naming
+    anything but an `image_url` slot is dropped.
+
+    **A slot may carry `default_asset_id`**, a 4th optional key in the `slots` JSONB. That is
+    what lets a template complete with nobody picking: an unattended run supplies no assets at
+    all, and a visual whose image slots all have defaults still renders. Stored as text
+    because that is what `visual_values` already holds and what the delete guard compares —
+    a slot written `{"default_asset_id": 7}` and a picker sending `"7"` must be one reference,
+    not two.
+
+    An image slot with neither a pick nor a default is left absent, so `fill()` names it in a
+    `MissingSlotValue` an operator can act on rather than rendering an empty box.
+    """
+    values: dict[str, str] = {}
+    for slot in visual.slots:
+        if slot.get("type") != "image_url":
+            continue
+        name = str(slot.get("name"))
+        default = slot.get("default_asset_id")
+        ref = str(picked.get(name) or "").strip() or str(default if default is not None else "")
+        if ref.strip():
+            values[name] = ref.strip()
+    return values
+
+
+def render_values(draft: Draft) -> dict[str, str]:
+    """Everything a draft's visual is filled from: the words, plus the assets over the top.
+
+    Two columns, one dict, and only at the moment of rendering. `asset_values` wins on a
+    collision because a draft generated against `stat-hero` v1 — four untyped slots, two of
+    them an `<img src>` — has model prose sitting in what v2 declares an image slot, and that
+    prose is the empty-box failure this slice closes.
+    """
+    return {**draft.visual_values, **draft.asset_values}
+
 _WRITE_SYSTEM = """\
 You write LinkedIn posts in an established voice, following a given hook pattern and post
 structure.
@@ -190,11 +245,11 @@ def _draw_visual(
     Asset resolution happens here rather than in either caller, and deliberately so:
     `regenerate_visual` is handed no values at all — it redraws from what the draft
     already holds — so resolving at the call sites would leave every re-render embedding
-    nothing. The resolved values stay local; `draft.visual_values` keeps the asset id,
+    nothing. The resolved values stay local; `draft.asset_values` keeps the asset id,
     which is what makes the next re-render resolvable too.
     """
     try:
-        values = resolve_asset_values(session, visual, draft.visual_values)
+        values = resolve_asset_values(session, visual, render_values(draft))
         draft.visual_image = render_visual(visual, values, renderer)
         draft.visual_error = None
     except Exception as exc:  # noqa: BLE001 — any failure here must not cost the words
@@ -211,12 +266,17 @@ def generate_draft(
     hook_id: int | None = None,
     structure_id: int | None = None,
     visual_id: int | None = None,
+    asset_values: dict[str, str] | None = None,
     mode: str = "directed",
 ) -> Draft:
     """Turn an idea into a reviewable draft, stamped with what produced it.
 
     Any template not named explicitly is suggested. Nothing here publishes; the draft is
     reviewed and only then pushed.
+
+    `asset_values` is slot name -> asset id, for the visual's `image_url` slots. Absent keys
+    fall back to the slot's `default_asset_id`, which is what lets an unattended run — which
+    passes none — still render a visual carrying images.
     """
     hook = _resolve(session, TemplateKind.HOOK, hook_id)
     structure = _resolve(session, TemplateKind.STRUCTURE, structure_id)
@@ -245,6 +305,7 @@ def generate_draft(
         hook_text=str(written.get("hook") or "").strip(),
         body_text=str(written.get("body") or "").strip(),
         visual_values=_written_values(written, visual),
+        asset_values=chosen_assets(visual, asset_values or {}),
     )
     _draw_visual(session, draft, visual, renderer)
 
@@ -279,6 +340,8 @@ def regenerate_text(session: Session, llm: LLM, draft: Draft) -> Draft:
     draft.hook_text = str(written.get("hook") or "").strip()
     draft.body_text = str(written.get("body") or "").strip()
     draft.visual_values = _written_values(written, visual)
+    # `asset_values` is untouched. Rewriting the words is not a reason to discard the assets
+    # someone picked for the picture, and the model has no say in them either way.
     session.add(draft)
     session.flush()
     return draft

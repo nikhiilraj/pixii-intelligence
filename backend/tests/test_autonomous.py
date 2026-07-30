@@ -210,6 +210,70 @@ def test_a_run_reports_what_it_did(session):
     assert any("2" in m for m in notifier.messages)
 
 
+class BrokenRenderer:
+    """A renderer that cannot produce the picture.
+
+    Stands in for what `run_autonomous` really meets: it passes no `visual_id`, so
+    `suggest_templates` LLM-picks from every APPROVED visual — including `stat-hero` v2, whose
+    two `image_url` slots nothing fills unless the template carries defaults. Either way the
+    failure lands inside `_draw_visual`, which records it on the draft and keeps the words.
+    """
+
+    def screenshot(self, html: str, width: int, height: int) -> bytes:
+        raise RuntimeError("rendering service unavailable")
+
+
+def test_a_draft_whose_visual_failed_is_not_reported_as_a_clean_success(session):
+    """The silence this closes: `_draw_visual` swallows the failure into `visual_error` and
+    `result.created += 1` fires anyway, so the run used to report "1 draft(s) created" with no
+    signal that the picture never came out.
+
+    The tolerance is correct and stays — a draft whose words are good is worth keeping — so it
+    is still created and still counted. What changes is that the run says so.
+    """
+    library(session)
+    add_post(session, "p1")
+    notifier = RecordingNotifier()
+
+    result = run_autonomous(session, FakeLLM(), BrokenRenderer(), cap=1, notify=notifier)
+
+    assert result.created == 1
+    assert result.failed == 0
+    assert result.visuals_failed == 1
+    assert drafts(session)[0].visual_error is not None
+    assert drafts(session)[0].hook_text == "A hook."
+
+
+def test_the_run_summary_names_the_missing_visuals(session):
+    """Every entry point reads the summary and not the drafts — the notifier, the scheduler's
+    log line, the endpoint's response. A reader who sees only the last message must still be
+    told."""
+    library(session)
+    add_post(session, "p1")
+    notifier = RecordingNotifier()
+
+    run_autonomous(session, FakeLLM(topics=THREE_TOPICS), BrokenRenderer(), cap=2, notify=notifier)
+
+    assert "no visual" in notifier.messages[-1]
+    assert "2" in notifier.messages[-1]
+    # And named per draft as well, with the reason: the count says a redraw is needed, the
+    # message says whether one could possibly help.
+    assert any("rendering service unavailable" in m for m in notifier.messages)
+
+
+def test_a_clean_run_says_nothing_about_visuals(session):
+    """The other direction. A summary that mentioned visuals unconditionally would let a
+    broken count pass, and would train whoever reads it to skip the clause."""
+    library(session)
+    add_post(session, "p1")
+    notifier = RecordingNotifier()
+
+    result = run_autonomous(session, FakeLLM(), FakeRenderer(), cap=1, notify=notifier)
+
+    assert result.visuals_failed == 0
+    assert "visual" not in notifier.messages[-1]
+
+
 def test_a_run_refuses_when_the_library_is_not_ready(session):
     add_post(session, "p1")
     notifier = RecordingNotifier()

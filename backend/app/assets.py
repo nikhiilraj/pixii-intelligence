@@ -276,9 +276,16 @@ def _embeddable(session: Session, slot: str, ref: str) -> str:
     )
 
 
-# The two places an asset id is stored, narrowed in Postgres so only candidate rows are read
-# back. A draft holds one as a *value* in `visual_values` (JSONB object, slot -> value); a
+# The three places an asset id is stored, narrowed in Postgres so only candidate rows are
+# read back. A draft holds one in `asset_values` (JSONB object, slot -> asset id) — and, for
+# drafts generated before that column existed, possibly as a *value* in `visual_values`; a
 # template holds one under a slot's optional `default_asset_id` (JSONB array of objects).
+#
+# **`asset_values` is in this predicate because US-009 moved the writer there.** The guard
+# read `visual_values` alone when it was the only place an id could be, and leaving it that
+# way would have made a passing test suite hide a regression of the whole point: deleting the
+# only copy of a file a draft still renders from. `visual_values` stays in the predicate
+# rather than being replaced, because the drafts already in Postgres are still there.
 #
 # `jsonb_each_text` / `jsonb_array_elements` compare as text on purpose: `visual_values`
 # arrives from `_embeddable`, which accepts an asset reference when `ref.isdigit()`, so the
@@ -286,6 +293,8 @@ def _embeddable(session: Session, slot: str, ref: str) -> str:
 # so a slot written as `{"default_asset_id": 7}` matches the same predicate as `"7"`.
 _DRAFT_HOLDS_ASSET = text(
     "EXISTS (SELECT 1 FROM jsonb_each_text(draft.visual_values) AS v WHERE v.value = :asset_ref)"
+    " OR EXISTS (SELECT 1 FROM jsonb_each_text(draft.asset_values) AS a"
+    " WHERE a.value = :asset_ref)"
 )
 _TEMPLATE_HOLDS_ASSET = text(
     "EXISTS (SELECT 1 FROM jsonb_array_elements(template.slots) AS s"
@@ -321,14 +330,14 @@ def holders_of(session: Session, asset_id: int) -> list[str]:
 
     Two holders exist, and they are checked against the real shapes rather than assumed:
 
-    - **a draft**, whose `visual_values` holds the id in an `image_url` slot. The SQL finds
-      drafts holding the id as *any* value; the slot type is then confirmed against the
-      draft's own visual template, because a `big_number` slot reading `"7"` is a coincidence
-      and blaming it would name the wrong holder.
+    - **a draft**, whose `asset_values` holds the id under an `image_url` slot — or whose
+      `visual_values` does, for the drafts generated before that column existed. The SQL finds
+      drafts holding the id as *any* value in either dict; the slot type is then confirmed
+      against the draft's own visual template, because a `big_number` slot reading `"7"` is a
+      coincidence and blaming it would name the wrong holder.
     - **a template**, whose slot carries `default_asset_id`. That key is a 4th optional key in
-      the `slots` JSONB and nothing writes it yet — US-009 does. The guard is here now because
-      the *file* deletion is what is irreversible, and a guard added after the writer is a
-      guard that was missing for one slice.
+      the `slots` JSONB, written by US-009. The guard was here before the writer was, because
+      the *file* deletion is what is irreversible.
 
     Templates are not filtered by status. A RETIRED version is invisible to
     `usable_templates`, but `generation._resolve` fetches a template by caller-supplied id and
@@ -345,10 +354,18 @@ def holders_of(session: Session, asset_id: int) -> list[str]:
         .order_by(col(Draft.id))
     ).all()
     for draft in drafts:
+        # Both dicts, and still confirmed against the template's declared slot types. A key
+        # in `asset_values` is only ever an image slot by construction, but a value in
+        # `visual_values` matching the id may be a coincidence, and one loop that trusts
+        # neither is shorter than two that trust different things.
         held = [
             name
             for name in _image_slot_names(session, draft)
-            if str(draft.visual_values.get(name, "")).strip() == ref
+            if ref
+            in {
+                str(draft.visual_values.get(name, "")).strip(),
+                str(draft.asset_values.get(name, "")).strip(),
+            }
         ]
         if held:
             holders.append(f"draft {draft.id} (slot {held[0]!r})")

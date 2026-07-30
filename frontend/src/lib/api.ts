@@ -60,6 +60,15 @@ export type Asset = {
   created_at: string;
 };
 
+/** Where the backend serves an asset's file, from the `/media` mount.
+ *
+ *  Here rather than in a component because two pages need it — the library grid and the
+ *  Studio picker's preview — and importing it from `assets/AssetLibrary` would pull that
+ *  whole client component into Studio's bundle for one template string. */
+export function assetSrc(asset: Asset): string {
+  return `${API_BASE}/media/assets/${asset.filename}`;
+}
+
 export type LineageEntry = { family: string; version: number; name: string } | null;
 
 export type Draft = {
@@ -70,6 +79,10 @@ export type Draft = {
   body_text: string;
   full_text: string;
   visual_values: Record<string, string>;
+  // Slot name -> asset id, for the visual's `image_url` slots. A separate field from
+  // `visual_values` because the renderer, the delete guard and the Zernio metadata all have to
+  // tell "the number a model wrote" from "the file a human picked".
+  asset_values: Record<string, string>;
   visual_error: string | null;
   visual_png: string | null;
   zernio_post_id: string | null;
