@@ -20,7 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { API_BASE, getJson, postForm, postJson, type Asset, type AssetKind } from "@/lib/api";
+import { assetSrc, getJson, postForm, postJson, type Asset, type AssetKind } from "@/lib/api";
 
 const KINDS: AssetKind[] = ["logo", "product", "screenshot", "brand", "photo"];
 
@@ -62,10 +62,6 @@ export function tagList(raw: string): string[] {
     .split(",")
     .map((t) => t.trim())
     .filter(Boolean);
-}
-
-function srcOf(asset: Asset): string {
-  return `${API_BASE}/media/assets/${asset.filename}`;
 }
 
 /** What a screen reader is told about the picture. Never empty: a grid of images whose alt is
@@ -329,7 +325,7 @@ export default function AssetLibrary({ initial }: { initial: Asset[] }) {
                     makes it an unused directive. */}
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={srcOf(asset)}
+                  src={assetSrc(asset)}
                   alt={altOf(asset)}
                   className="h-28 w-full rounded-input bg-surface-2 object-contain"
                 />

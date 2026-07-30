@@ -35,6 +35,20 @@ class Draft(SQLModel, table=True):
     body_text: str = ""
 
     visual_values: dict = Field(default_factory=dict, sa_column=Column(JSONB))
+    # The assets chosen for this draft's `image_url` slots, slot name -> asset id as text.
+    #
+    # A separate column from `visual_values` rather than more keys in it. One dict holding
+    # two kinds of value — prose the model wrote and an asset id a human picked — cannot be
+    # read back unambiguously: `"7"` in a `big_number` slot is a number and `"7"` in an
+    # `image_url` slot is a reference to a file on disk, and the renderer, the delete guard
+    # and the Zernio metadata all need to tell those apart.
+    #
+    # `nullable=False` where `visual_values` is nullable, deliberately: every reader merges
+    # this dict, and a `None` on the rows that predate the column would make each of them
+    # guard for it. The migration backfills `{}`.
+    asset_values: dict = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
     visual_image: bytes | None = Field(default=None, sa_column=Column(LargeBinary))
     # Why the visual could not be produced. The words survive a failed image.
     visual_error: str | None = None

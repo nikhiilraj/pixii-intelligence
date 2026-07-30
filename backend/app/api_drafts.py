@@ -28,10 +28,21 @@ class IdeaIn(BaseModel):
     hook_id: int | None = None
     structure_id: int | None = None
     visual_id: int | None = None
+    # Slot name -> asset id, for the visual's `image_url` slots. Ignored for any other slot
+    # (`generation.chosen_assets`), so this is not a second route to writing prose into a
+    # template. Absent slots fall back to the slot's own `default_asset_id`.
+    asset_values: dict[str, str] = {}
 
 
 class DraftOut(BaseModel):
-    """A draft plus the lineage, spelled out so review shows what produced it."""
+    """A draft plus the lineage, spelled out so review shows what produced it.
+
+    **Hand-mapped, and every field has to be added in two places** — here and in `_out`.
+    Nothing derives this from the model, so a new `Draft` column arrives with a green
+    migration, a green query and a green test while the frontend sees nothing at all.
+    `pushed_at` and `created_at` are on the model and still missing here; `asset_values` is
+    not, and `test_a_new_draft_column_reaches_the_api` is what keeps it that way.
+    """
 
     id: int
     idea: str
@@ -40,6 +51,7 @@ class DraftOut(BaseModel):
     body_text: str
     full_text: str
     visual_values: dict
+    asset_values: dict
     visual_error: str | None
     visual_png: str | None
     zernio_post_id: str | None
@@ -78,6 +90,7 @@ def _out(session: SessionDep, draft: Draft) -> DraftOut:
         body_text=draft.body_text,
         full_text=draft.full_text,
         visual_values=draft.visual_values,
+        asset_values=draft.asset_values,
         visual_error=draft.visual_error,
         visual_png=(
             base64.b64encode(draft.visual_image).decode() if draft.visual_image else None
@@ -154,6 +167,7 @@ def create_draft(
             hook_id=payload.hook_id,
             structure_id=payload.structure_id,
             visual_id=payload.visual_id,
+            asset_values=payload.asset_values,
         )
     except NoUsableTemplates as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -229,4 +243,12 @@ def autonomous_run(
     except AutonomousRunFailed as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     session.commit()
-    return {"created": result.created, "failed": result.failed, "topics": result.topics}
+    return {
+        "created": result.created,
+        "failed": result.failed,
+        # A draft that was created and has no picture. Reported beside `created` rather than
+        # left to whoever opens the queue: this endpoint's answer is the only thing a caller
+        # sees, and "3 created" with the images missing is the failure US-009 came to close.
+        "visuals_failed": result.visuals_failed,
+        "topics": result.topics,
+    }
