@@ -34,7 +34,7 @@ const GATES = [
 
 export default function InboxLoading() {
   return (
-    <main className="mx-auto max-w-5xl px-6 py-16" aria-busy="true">
+    <main className="mx-auto max-w-6xl px-6 py-16" aria-busy="true">
       <span role="status" className="sr-only">
         Loading the Inbox…
       </span>

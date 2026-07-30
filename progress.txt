@@ -1519,3 +1519,60 @@ policy.
 `globals.css` and `components/ui/`. Zero collisions across two concurrent frontend slices.
 
 Backend **399**. Frontend 53 -> **62** across 7 files. Build clean.
+
+### US-018 — IA collapse and the V2 run record (done 2026-07-30) — V2 COMPLETE
+
+Nav collapsed from six entries to **five destinations**, in the order a post moves through them:
+`Inbox` (`/`) · `Studio` · `Corpus` (`/posts`) · `Templates` · `Assets`. Scoreboard was demoted out
+of the nav and now hangs off the Templates page lede — it reads `/metrics/templates`, so it is that
+library's evidence rather than a sixth area, and `scoreboard/page.tsx` already linked back, so the
+pair is bidirectional. **PRD.md:381's IA line is a route inventory, not a nav spec** (it includes
+`/posts/[id]`); seven routes exist, five are destinations, and the comment at `layout.tsx:22` says so
+to stop a future slice "restoring" Scoreboard. Nothing is orphaned — every route has a named inbound
+link, listed in HANDOFF.md.
+
+**Shell width → `max-w-6xl`, all eight containers.** The nav sat at 5xl while `posts/`, `studio/` and
+`assets/` rendered at 6xl, so on exactly the table pages the width exists for, the nav's first link
+began 4rem inboard of the content under it. Widening only the nav relocates that 64px seam onto the
+other three pages instead of closing it, and "the shell at max-w-6xl" cannot mean chrome-only — so
+`layout.tsx` plus the `(inbox)`/`templates`/`scoreboard` pages **and their `loading.tsx` twins** all
+moved. A skeleton at a different width than its page is a visible layout jump, which is the defect
+class US-016 existed to remove. `/posts/[id]` and `route-error.tsx` stay at 3xl deliberately: a
+single post is a reading measure, and each agrees with its own skeleton.
+
+⚠ **No test asserts nav contents** — `pnpm test` reports 62 whether the nav is right or wrong. This
+slice's nav claim was verified by grep **plus a live render** (`curl` against `next dev`: exactly the
+five destinations on `/`, the Scoreboard link on `/templates`), not by an assertion.
+
+**`.scratch/v2/HANDOFF.md` written** — the durable record, on the assumption the conversation that
+produced V2 is gone. What V2 is, the three tracks, how to run it, the authoritative files, and every
+deferred item with the trigger that reopens it: impressions CSV (Monte's export), the ~25 missing
+posts 2025-08→2026-01, the optimizer (~300 lineage-tagged posts, a threshold not a backlog item),
+the channel cut-list triggers, `AzureImageRenderer`'s unfixed 429 at `rendering.py:211`, animated-GIF
+flattening above the 1600px ceiling, and the two human gates (37 proposals, draft 48).
+
+**The exit criterion is recorded as NOT MET, because it is not.** V2's exit is operational, not
+technical: one closed circuit — a generated draft published, metrics joined, a verdict recorded, the
+scoreboard's first non-zero row. Re-verified live against the real database at close of slice:
+
+    proposals_awaiting_review    37
+    built_awaiting_push           4
+    pushed_awaiting_monte         2
+    published_awaiting_verdict    0
+
+Identical to US-014's reading. Queue 4 is zero because `went_live_at IS NULL` for all 6 drafts — no
+generated draft has ever been published. `/scoreboard` renders "No generated post has been published
+yet" against the real 50-row library. Noted in the handoff and worth repeating: **both rows in queue
+3 are probes** — draft 48 is the Zernio id PRD.md:411 flags as a test draft awaiting deletion, and
+draft 555's idea is "about cat on moon hypothesis". So the first real lap has not been attempted, let
+alone completed. Software made the lap cheap; Monte publishing is the throughput limit.
+
+One cosmetic change came with the link: `templates/page.tsx` was still on raw `text-2xl` /
+`text-sm opacity-60`, and putting a link inside a 60%-opacity paragraph is an a11y problem, so that
+lede moved onto the US-001 tokens. Other holdouts (e.g. `TemplateManager.tsx:291`'s hardcoded border)
+were left alone and recorded as follow-ups instead.
+
+Backend **399**. Frontend **62**. `pnpm build` clean, 7 routes. Vault note
+`~/Nikhil-workshop/03-tools/Pixii-Intelligence.md` rewritten to describe V2 as built.
+
+**V2 COMPLETE — 18 of 18 slices.** Tracks A, B and C all landed. What remains is not a slice.

@@ -19,15 +19,26 @@ export const metadata: Metadata = {
   description: "Content generation, improvement and analysis for Pixii.",
 };
 
+/* Five destinations, in the order a post moves through them: what's waiting, where you build,
+   what has been written, what you build from, what you build with.
+
+   Two pages are deliberately NOT here, and both are still reachable:
+   - **Status** was a destination; the Inbox is. The health rows it named now live in that page's
+     footer ((inbox)/page.tsx), so nothing advertises Status as somewhere to go.
+   - **Scoreboard** reads `/metrics/templates` — it is what the template library has done, not a
+     sixth area of the app. It hangs off the Templates page lede, and its own empty state already
+     links back, so the pair is bidirectional. Nav-level billing would also imply the scoreboard
+     is somewhere you go to *decide* something; at 0 attributed posts it is somewhere you go to
+     see that nothing has been decided yet.
+
+   PRD.md:381's IA line lists six routes plus `/posts/[id]` — that is a route inventory, not a nav
+   spec. Seven routes exist; five are destinations. Do not "restore" Scoreboard here. */
 const NAV = [
-  // "Status" was a destination; the Inbox is. The health rows it named now live in that page's
-  // footer (page.tsx), so nothing advertises Status as somewhere to go.
   { href: "/", label: "Inbox" },
+  { href: "/studio", label: "Studio" },
   { href: "/posts", label: "Corpus" },
   { href: "/templates", label: "Templates" },
   { href: "/assets", label: "Assets" },
-  { href: "/studio", label: "Studio" },
-  { href: "/scoreboard", label: "Scoreboard" },
 ];
 
 export default function RootLayout({
@@ -42,7 +53,14 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         <nav className="border-b border-black/10 dark:border-white/15">
-          <div className="mx-auto flex max-w-5xl gap-5 px-6 py-3 text-sm">
+          {/* One shell width, `max-w-6xl`, and it has to be every page or none. The nav sat at
+              5xl while posts/, studio/ and assets/ rendered at 6xl, so on exactly the table pages
+              the extra width exists for, the nav's first link began 4rem inboard of the content
+              under it. Widening only the nav would have moved that 64px seam onto the other three
+              pages, not closed it — so US-018 took all eight containers (nav, and each page with
+              its loading.tsx twin) to 6xl. Prose is capped at max-w-2xl independently, so nothing
+              over-widens into an unreadable measure. */}
+          <div className="mx-auto flex max-w-6xl gap-5 px-6 py-3 text-sm">
             {NAV.map((item) => (
               <Link key={item.href} href={item.href} className="opacity-70 hover:opacity-100">
                 {item.label}

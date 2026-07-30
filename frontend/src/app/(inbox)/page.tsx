@@ -130,7 +130,7 @@ export default async function InboxPage() {
   ]);
 
   return (
-    <main className="mx-auto max-w-5xl px-6 py-16">
+    <main className="mx-auto max-w-6xl px-6 py-16">
       <h1 className="text-title font-semibold tracking-tight">Inbox</h1>
       <p className="mt-1 max-w-2xl text-body text-muted">
         Everything waiting on a human, and for how long — the four gates of the lineage circuit,

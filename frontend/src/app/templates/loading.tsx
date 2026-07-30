@@ -6,7 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
    place once the list arrives. */
 export default function TemplatesLoading() {
   return (
-    <main className="mx-auto max-w-5xl px-6 py-16" aria-busy="true">
+    <main className="mx-auto max-w-6xl px-6 py-16" aria-busy="true">
       <span role="status" className="sr-only">
         Loading the template library…
       </span>
