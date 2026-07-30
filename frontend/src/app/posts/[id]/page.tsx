@@ -5,6 +5,7 @@ import { ApiFailureNotice } from "@/components/api-failure";
 import { API_BASE, getJson, type Post } from "@/lib/api";
 
 import ExcludeToggle from "./ExcludeToggle";
+import VerdictForm from "./VerdictForm";
 
 export const dynamic = "force-dynamic";
 
@@ -107,6 +108,10 @@ export default async function PostDetail({ params }: { params: Promise<{ id: str
       <article className="mt-8 whitespace-pre-wrap text-[15px] leading-relaxed">
         {post.content}
       </article>
+
+      {/* The page the Inbox's fourth queue links to, and therefore the page that has to be able
+          to clear it. */}
+      <VerdictForm postId={post.id} verdict={post.verdict} note={post.verdict_note} />
 
       <ExcludeToggle postId={post.id} excluded={post.excluded_from_extraction} />
     </main>

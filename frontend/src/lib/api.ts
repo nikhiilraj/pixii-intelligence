@@ -1,5 +1,18 @@
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
+// `Verdict` in backend/app/models/post.py. One human's ruling on one published post. Sent as
+// the plain string value; FastAPI coerces it into the StrEnum, and an unknown value is refused
+// with a 422 naming the three allowed ones rather than being coerced into one of them.
+export type Verdict = "worked" | "didnt" | "mixed";
+
+/** `VERDICT_NOTE_MAX` at backend/app/main.py:265 — the cap the verdict route enforces.
+ *
+ *  The column underneath is an unbounded String, so this number is the whole contract, and it
+ *  lives here rather than in the form because it is the API's limit and not the textarea's
+ *  preference. The form holds the same line so a long note is stopped while it is being
+ *  written, instead of coming back as a 422 after the human has finished thinking. */
+export const VERDICT_NOTE_MAX = 500;
+
 export type Post = {
   id: number;
   zernio_id: string;
@@ -21,6 +34,14 @@ export type Post = {
   saves: number;
   engagement_rate: number;
   engaged_actions: number;
+
+  // A human's ruling on how the post landed, and why. A `null` verdict *is* the fourth Inbox
+  // queue — a published post nobody has judged yet — so absence is a normal state, not a gap.
+  // `GET /posts` and `GET /posts/{id}` answer with the raw row (unlike `DraftOut`), so these
+  // three arrive on the wire already and need no hand-mapping.
+  verdict: Verdict | null;
+  verdict_note: string;
+  verdict_at: string | null;
 };
 
 export type TemplateKind = "hook" | "structure" | "visual";
