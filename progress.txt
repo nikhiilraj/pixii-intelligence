@@ -1379,3 +1379,30 @@ enum**: `pushed_at` and `went_live_at` derive every state and cannot disagree wi
 `went_live_at` exposed in `DraftOut` at `api_drafts.py:61` and `:103`.
 
 15 new tests.
+
+### US-012 — Verdicts on published posts (done 2026-07-30)
+
+`Post.verdict` / `verdict_note` / `verdict_at` (migration `c8d42ea1f5b3`, pre-made by the master),
+`Verdict` StrEnum (worked/didnt/mixed), `POST /posts/{post_id}/verdict` with
+`VERDICT_NOTE_MAX = 500` enforced at the route (`main.py:263`). Re-settable — a human changes
+their mind. `GET /posts` returns raw `list[Post]`, so the columns reach the frontend with no
+hand-mapping (unlike `DraftOut`).
+
+**The property that lets verdicts live on `Post` at all is now pinned by test.** `corpus._apply`
+writes an explicit field list and its only dynamic write is `setattr` over `_METRICS`, so a
+metrics sync cannot clobber a verdict — `test_a_metrics_sync_does_not_clear_a_verdict` asserts it,
+so whoever next edits `_apply` finds out immediately rather than silently erasing human judgement
+on the next 6-hour sync.
+
+The cap is tested on **both** sides of the boundary
+(`test_a_note_at_the_cap_is_accepted_and_one_over_is_rejected`), and an unknown verdict value is
+rejected rather than coerced. No CHECK constraint and no verdict-history table: real cardinality
+is one ruling per post, and a database constraint would make a fourth verdict a migration instead
+of an edit.
+
+Framing that must survive into UI copy: a verdict is **judgement at n=1, never statistics**.
+Engagement spans 12.7x at ~3 samples per template, so nothing here may imply ranking.
+
+Backend **365** tests. Slices US-011 and US-012 ran concurrently on disjoint files and both
+landed clean — the shared resource was the Alembic head, which the master serialised by writing
+both migrations up front.
