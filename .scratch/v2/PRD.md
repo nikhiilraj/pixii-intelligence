@@ -443,8 +443,15 @@ Named per the standing blind-AI-trust rule — review these at the granular leve
      preview-on-keystroke is off the table.
    - **The stated reason to downscale >1600px assets is void.** Resizing still earns its place
      (disk, upload time, a 1080×1350 composite), but no slice may cite a payload limit.
-2. **Exact brand orange.** Sample the wordmark hex from a corpus visual in `media/`
-   (placeholder `#E8590C` until then).
+2. ~~**Exact brand orange.**~~ **RESOLVED 2026-07-30 — `#F2610C`.** Extracted from the `html`
+   bodies of the APPROVED visual templates in Postgres, i.e. the markup that actually renders
+   Pixii's post visuals, which outranks a sampled pixel. The full real palette, by frequency:
+   `#F2610C` accent (5) · `#111` display black (4) · `#F5F0E8` cream (3, matches the spec) ·
+   `#E4DAC6` deeper tan (2, vs the spec's guessed `#E4E1D8` border) · `#6B635A` muted ink
+   (1, vs the spec's guessed `#6F6C64`). Prefer the real values over the spec's guesses.
+   Caveat carried into US-001: these are *post-visual* colours — the UI takes the same
+   temperature without cosplaying as a post, so cream stays a raised surface, not the page
+   background, and `#F2610C` needs an AA check before it is used for text on light.
 3. **LinkedIn analytics export columns.** The CSV route assumes post-text + impressions
    columns joinable on content; needs one real export file from Monte to pin the parser.
    The route ships behind that file's arrival — parser is the last slice of Track B.

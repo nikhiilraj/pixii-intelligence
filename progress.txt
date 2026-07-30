@@ -1135,3 +1135,32 @@ Six V2 slices carried "asserted" criteria that were therefore vacuous.
 
 Rule that follows: a slice reports what it actually verified. "Verified by hand, here is what I
 exercised" is acceptable; claiming an assertion that does not exist is not.
+
+### US-003 — Honest API layer + the Vitest harness (done 2026-07-30)
+
+`getJson` used to collapse network errors, 500s, 404s and legitimately-empty results all into
+`null`. Now:
+
+    export type ApiResult<T> = { ok: true; data: T } | ApiFailure
+    getJson<T>(path): Promise<ApiResult<T>>
+    postJson<T>(path, ...): Promise<ApiResult<T>>
+    postBlob(path, body?): Promise<ApiResult<Blob>>
+
+Migrated all six call sites (Studio, AddExternal, TemplateManager x2, ExcludeToggle, home) and
+deleted the duplicate `API_BASE` that page.tsx re-declared. Where the mutation code was already
+being edited, those buttons moved onto the US-002 `Button` primitive too — that removes the
+pasted class strings US-002 was scoped out of reaching.
+
+FastAPI's `detail` is a **string on HTTPException but a list of objects on validation errors**.
+Both shapes are handled; the list form is flattened to words, so `/posts`' 422 (which carries
+the allowed sort values) reads as a sentence instead of `[object Object]`.
+
+**Harness landed here** (approved mid-slice): `vitest`, `@testing-library/react`,
+`@testing-library/jest-dom`, `jsdom` as dev deps, `"test": "vitest run"`, and `pnpm test`
+appended to the frontend CI job (`ci.yml:53`). 9 tests.
+
+The assertion that matters tests **both directions**: a forced 500 reports the failure and
+withholds the empty-state copy, AND a genuine empty success still shows the empty state.
+One direction alone would let "always render an error" pass.
+
+Verified: ruff, mypy, eslint, tsc green; 258 backend tests; 9 frontend tests; build clean.
