@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -110,6 +111,71 @@ export function draftPayload(
   };
 }
 
+/** One row of the drafts list — enough to recognise a draft and open it, and nothing else.
+ *
+ *  A deliberate narrowing of `Draft` rather than the thing itself: `GET /drafts` answers with
+ *  the full `DraftOut` of every draft, base64 PNG included, which is 530KB over seven rows
+ *  today. All of that would be serialized into this client component's payload to render a
+ *  list of seven links. `page.tsx` maps it down to these three fields before it crosses.
+ *
+ *  Local rather than in `lib/api.ts` because it is this page's projection, not the API's
+ *  shape — the API's shape is `Draft`, which is already there. */
+export type DraftSummary = { id: number; idea: string; zernio_post_id: string | null };
+
+/** The drafts that exist, as links that open them.
+ *
+ *  `null` means the list could not be read, which is not an empty list — same distinction as
+ *  `assets`, and it matters more here: "no drafts yet" on a failed read would be this page
+ *  claiming the database is empty while six drafts sit in it, which is the exact conflation
+ *  US-012 exists to remove.
+ *
+ *  ponytail: a plain list, unfiltered, unsorted here and uncapped below the backend's own
+ *  `limit=100`. Ordered newest-first by the API and rendered in the order it gave. No search,
+ *  no thumbnails, no status filter, no pagination. Ceiling: any of those once the list is long
+ *  enough to scroll past — at seven drafts a filter would be furniture. */
+function Drafts({ drafts, current }: { drafts: DraftSummary[] | null; current: number | null }) {
+  return (
+    <div className="space-y-2 rounded-lg border border-black/10 p-3 dark:border-white/15">
+      <div className="text-xs font-medium uppercase tracking-widest opacity-50">Drafts</div>
+
+      {drafts === null ? (
+        <p className="text-sm text-amber-700 dark:text-amber-400">
+          The draft list could not be read. This is a failed request, not an empty database —
+          drafts may exist that this list cannot show.
+        </p>
+      ) : drafts.length === 0 ? (
+        <p className="text-sm text-muted">
+          No draft has been generated yet. Every draft written here stays listed until it is
+          deleted, whether or not it has reached Zernio.
+        </p>
+      ) : (
+        <ul>
+          {drafts.map((d) => (
+            <li key={d.id}>
+              <Link
+                href={`/studio?draft=${d.id}`}
+                aria-current={d.id === current ? "page" : undefined}
+                /* `min-w-0` + `truncate` on the label, and it is load-bearing at 390px: the
+                   left column is a grid child whose implicit `min-width: auto` is min-content,
+                   so one idea carrying a long unbroken token — a URL — would grow the track
+                   past the viewport instead of being cut. Latent today (every idea in the
+                   database happens to wrap) for the same reason the right column's `min-w-0`
+                   is, which is why it is pinned rather than left to luck. */
+                className="flex items-baseline justify-between gap-3 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-surface-2 aria-[current]:bg-surface-2 aria-[current]:font-medium"
+              >
+                <span className="min-w-0 truncate">{d.idea || `draft #${d.id}`}</span>
+                <span className="shrink-0 text-xs text-muted">
+                  {d.zernio_post_id ? "in Zernio" : `#${d.id}`}
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function Lineage({ draft, assets }: { draft: Draft; assets: Asset[] | null }) {
   const rows = [
     ["Hook", draft.lineage.hook],
@@ -150,14 +216,32 @@ export default function Studio({
   // `null` means the library could not be read, which is not the same as an empty library. The
   // picker says which, rather than telling someone to upload an asset they already have.
   assets,
+  // The drafts that already exist, and the one `?draft=` asked for. `initialDraft` seeds the
+  // state the session's own generated draft lands in, so a loaded draft and a just-written one
+  // are the same value and every action on this page treats them identically — which is what
+  // makes "pushing a loaded draft behaves exactly like pushing a fresh one" true by
+  // construction rather than by a second code path that has to agree with the first.
+  //
+  // Seeded through `useState`'s initial value and NOT synced by an effect: React 19 forbids
+  // syncing derived state that way and the compiler is on. `page.tsx` gives this component a
+  // `key` of the requested id, so navigating from one draft to another remounts it — see the
+  // comment there.
+  drafts,
+  initialDraft = null,
+  // Why the requested draft is not here. Distinct from `initialDraft === null`, which is a
+  // fresh session with nothing asked for.
+  missing = null,
 }: {
   templates: Template[];
   assets: Asset[] | null;
+  drafts: DraftSummary[] | null;
+  initialDraft?: Draft | null;
+  missing?: string | null;
 }) {
   const [idea, setIdea] = useState("");
   const [picked, setPicked] = useState<Picked>({ hook: null, structure: null, visual: null });
   const [reason, setReason] = useState<string | null>(null);
-  const [draft, setDraft] = useState<Draft | null>(null);
+  const [draft, setDraft] = useState<Draft | null>(initialDraft);
   const [busy, setBusy] = useState<string | null>(null);
   const [assetValues, setAssetValues] = useState<Record<string, string>>({});
 
@@ -205,7 +289,10 @@ export default function Studio({
 
   return (
     <div className="mt-8 grid gap-10 lg:grid-cols-[22rem_1fr]">
-      <section className="space-y-3">
+      {/* `min-w-0` for the same reason the draft column carries it, and here it is the one that
+          can actually move: at 390px this grid is a single column, so this section is the `1fr`
+          track and a draft idea in the list below is the longest string on the page. */}
+      <section className="min-w-0 space-y-3">
         <textarea
           value={idea}
           onChange={(e) => setIdea(e.target.value)}
@@ -358,6 +445,17 @@ export default function Studio({
             Nothing approved yet. Approve a hook, a structure and a visual first.
           </p>
         )}
+
+        {/* The list is what the page was read with, so it does not gain the draft the button
+            above just wrote — this is a server-rendered list on a `force-dynamic` page, and a
+            reload is what refreshes it. Named rather than fixed: making the list live would
+            mean either a client-side fetch or a router refresh after every generate, and
+            neither is worth it for a list whose newest entry is already on screen in full. */}
+        {/* `draft`, not `initialDraft`: generating something else on a `?draft=424` URL replaces
+            what the right column is showing, and a row still marked as open would be pointing
+            at a draft that is no longer on screen. A freshly generated draft is not in this
+            list, so nothing is marked — which is the truth. */}
+        <Drafts drafts={drafts} current={draft?.id ?? null} />
       </section>
 
       {/* `min-w-0` for the same reason as TemplateManager's: the `1fr` track's implicit
@@ -365,22 +463,13 @@ export default function Studio({
           the track past the viewport instead of scrolling inside it. Latent here rather than
           live — today's drafts happen to wrap — which is exactly why it is worth pinning. */}
       <section className="min-w-0 space-y-4">
-        {!draft ? (
-          /* The one empty state on this page that is always true on arrival: Studio holds its
-             draft in session state and has no way to load an existing one, so this column is
-             empty every time the page opens and is not reporting anything about the database.
-             So it says what fills it, and it repeats the line that is never negotiable here.
-             `opacity-50` before this — which the PRD names as an AA failure — is now --text-muted. */
-          <Card className="bg-surface-2 text-body">
-            <p className="font-medium">No draft yet.</p>
-            <p className="mt-1 text-muted">
-              Write an idea, choose a hook, a structure and a visual — or let Suggest choose them
-              — and Generate writes the post and renders its picture here, stamped with the
-              templates that produced it. Nothing publishes from here: a draft reaches Zernio
-              only when you push it, and goes live only when a human publishes it there.
-            </p>
-          </Card>
-        ) : (
+        {/* A draft in hand wins over both notices, and the order is load-bearing rather than
+            arbitrary. `missing` is a prop and never clears, but the left column keeps working
+            on that route: landing on `?draft=999` from a stale link and clicking Generate
+            writes a real row, and with the alert tested first the column would go on reporting
+            a 404 for a draft that now exists on screen. A write that renders as a failure is
+            the same conflation as an error that renders as an empty state. */}
+        {draft ? (
           <>
             <Lineage draft={draft} assets={assets} />
 
@@ -428,6 +517,10 @@ export default function Studio({
               >
                 Redraw visual
               </Button>
+              {/* Identical for a loaded draft and a just-written one, because they are the same
+                  value in the same state — `initialDraft` seeds it. Disabled once
+                  `zernio_post_id` is set: pushing creates a Zernio DRAFT and nothing here ever
+                  publishes. */}
               <Button
                 disabled={busy !== null || draft.zernio_post_id !== null}
                 onClick={async () => {
@@ -439,6 +532,35 @@ export default function Studio({
               </Button>
             </div>
           </>
+        ) : missing ? (
+          /* "We looked for that draft and it is not there" — never the empty state below.
+             Those two are different claims and rendering one as the other is what US-012 came
+             to fix at the Inbox end of the same link: an empty column that means "nothing
+             asked for" would read as "this draft is blank" to whoever followed a link to it. */
+          <Card role="alert" className="border-danger/40 bg-danger/10 text-body">
+            <p className="font-medium">That draft could not be opened.</p>
+            <p className="mt-1 text-muted">{missing}</p>
+            <p className="mt-1 text-muted">
+              This is a report about the draft that was asked for, not an empty session — the
+              drafts that do exist are listed on the left.
+            </p>
+          </Card>
+        ) : (
+          /* The empty state of a fresh session, and now only that: a page opened with no
+             `?draft=` and nothing generated yet. It is still not a claim about the database —
+             the list on the left is what speaks for the database — so it says what fills this
+             column, and repeats the line that is never negotiable here. `opacity-50` before
+             this — which the PRD names as an AA failure — is now --text-muted. */
+          <Card className="bg-surface-2 text-body">
+            <p className="font-medium">No draft yet.</p>
+            <p className="mt-1 text-muted">
+              Write an idea, choose a hook, a structure and a visual — or let Suggest choose them
+              — and Generate writes the post and renders its picture here, stamped with the
+              templates that produced it. Or open one of the drafts listed on the left. Nothing
+              publishes from here: a draft reaches Zernio only when you push it, and goes live
+              only when a human publishes it there.
+            </p>
+          </Card>
         )}
       </section>
     </div>

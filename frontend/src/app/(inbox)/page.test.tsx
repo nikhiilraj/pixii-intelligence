@@ -83,15 +83,18 @@ describe("the four queues", () => {
       "href",
       "/templates",
     );
+    // Queues 2 and 3 hold drafts, and an `InboxItem.id` is the id of the thing its gate acts
+    // on — so these are draft ids and each link opens that draft. Both read a bare `/studio`
+    // until US-012, which was a link to a page that was empty on every single visit.
     expect(screen.getByRole("link", { name: /Why listings rot/ })).toHaveAttribute(
       "href",
-      "/studio",
+      "/studio?draft=11",
     );
     expect(screen.getByRole("link", { name: /The 12\.7x spread/ })).toHaveAttribute(
       "href",
-      "/studio",
+      "/studio?draft=12",
     );
-    // Queue 4 is the only one whose item has a page of its own, so its link is item-scoped.
+    // Queue 4's item is a post, not a draft, so it is scoped to a different page entirely.
     expect(screen.getByRole("link", { name: /A post that went live/ })).toHaveAttribute(
       "href",
       "/posts/40",

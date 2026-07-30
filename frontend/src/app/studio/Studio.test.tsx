@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Asset, Draft, Template } from "@/lib/api";
 
+import StudioPage from "./page";
 import Studio, {
   NONE,
   assetPayload,
@@ -144,7 +145,7 @@ function typeIdea() {
  *  `onValueChange` calls. */
 async function setUp(slots: Record<string, unknown>[], assets: Asset[] | null = LIBRARY) {
   const fetchStub = stubApi();
-  render(<Studio templates={library(slots)} assets={assets} />);
+  render(<Studio templates={library(slots)} assets={assets} drafts={[]} />);
   typeIdea();
   fireEvent.click(screen.getByRole("button", { name: /suggest templates/i }));
   // The reason line only renders once the suggestion has been applied, so it is the signal that
@@ -257,7 +258,7 @@ describe("the sentinel never leaves the component", () => {
     // leaves has three nulls in it. Asserting the raw string as well as the parsed object,
     // because the sentinel could ride out in a key or a value and only one of those is typed.
     const fetchStub = stubApi();
-    render(<Studio templates={library(statHeroSlots())} assets={LIBRARY} />);
+    render(<Studio templates={library(statHeroSlots())} assets={LIBRARY} drafts={[]} />);
     typeIdea();
 
     fireEvent.click(screen.getByRole("button", { name: /generate draft/i }));
@@ -381,5 +382,239 @@ describe("the produced draft", () => {
     // field would be absent here and these rows would silently not render.
     await waitFor(() => expect(screen.getByText(/Pixii wordmark \(#7\)/)).toBeInTheDocument());
     expect(screen.getByText(/Product shot \(#9\)/)).toBeInTheDocument();
+  });
+});
+
+/* US-012. Six drafts sat in the database with `GET /drafts` and `GET /drafts/{id}` both tested,
+ * both working and both called by nothing, while the Inbox linked two of its queues at a bare
+ * `/studio` that was empty on every visit.
+ *
+ * The bug class here is the one this app keeps removing: a column that is empty for one reason
+ * rendering as though it were empty for another. "Nothing asked for" and "we looked and it is
+ * not there" are different claims, so the negative assertions anchor on the empty state's own
+ * words — which are really in the document — and never on a Select's contents. */
+const LOADED: Draft = {
+  ...DRAFT,
+  id: 424,
+  idea: "Amazon bundles might be the anti-coupon strategy",
+  full_text: "Bundles are the anti-coupon.\n\nSame margin, no discount habit.",
+};
+
+const PUSHED: Draft = { ...LOADED, id: 555, zernio_post_id: "6a695286ead2fabfa56f3c27" };
+
+function pushButton(): HTMLElement {
+  return screen.getByRole("button", { name: /zernio/i });
+}
+
+describe("opening a draft that already exists", () => {
+  it("shows the draft it was given instead of the empty state", () => {
+    render(<Studio templates={library([])} assets={LIBRARY} drafts={[]} initialDraft={LOADED} />);
+
+    expect(screen.getByText(/Bundles are the anti-coupon/)).toBeInTheDocument();
+    expect(screen.queryByText("No draft yet.")).not.toBeInTheDocument();
+  });
+
+  it("pushes the loaded draft's own id, not the session's", async () => {
+    // The assertion that discriminates "this draft" from "some draft": a label-only test passes
+    // on a component that posts to the wrong id, and pushing the wrong row is not recoverable —
+    // it creates a Zernio draft for a post nobody was looking at.
+    const fetchStub = stubApi();
+    render(<Studio templates={library([])} assets={LIBRARY} drafts={[]} initialDraft={LOADED} />);
+
+    fireEvent.click(pushButton());
+
+    await waitFor(() => expect(fetchStub).toHaveBeenCalled());
+    // `stubApi`'s mock is typed by its one declared argument, so the init object is read the
+    // same way `sentRaw` above reads it.
+    const [url, init] = fetchStub.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(url)).toMatch(/\/drafts\/424\/push$/);
+    expect(init.method).toBe("POST");
+  });
+
+  it("cannot push a draft that is already in Zernio", () => {
+    // The constraint the whole page is built around, at the one place US-012 could have broken
+    // it: a loaded draft carrying a `zernio_post_id` must arrive with the button already spent.
+    render(<Studio templates={library([])} assets={LIBRARY} drafts={[]} initialDraft={PUSHED} />);
+
+    expect(pushButton()).toBeDisabled();
+    expect(pushButton()).toHaveTextContent("In Zernio");
+    expect(screen.getByText(/Publishing stays a human act/)).toBeInTheDocument();
+  });
+
+  it("says the draft is missing rather than rendering the empty state", () => {
+    render(
+      <Studio
+        templates={library([])}
+        assets={LIBRARY}
+        drafts={[]}
+        missing="HTTP 404: no draft 999"
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("no draft 999");
+    // The conflation, asserted directly. This string is really in the document when the empty
+    // state renders, so its absence is a real absence.
+    expect(screen.queryByText("No draft yet.")).not.toBeInTheDocument();
+  });
+
+  it("shows a draft generated on a bad ?draft= url instead of going on reporting the 404", async () => {
+    // `missing` is a prop and never clears, but the left column keeps working on that route.
+    // Land on `?draft=999` from a stale link, type an idea, Generate: a row is written. A
+    // column still reporting "no draft 999" would be describing a failure that a real write
+    // has just contradicted — the same class of lie as an error rendering as an empty state.
+    const fetchStub = stubApi();
+    render(
+      <Studio
+        templates={library(statHeroSlots())}
+        assets={LIBRARY}
+        drafts={[]}
+        missing="HTTP 404: no draft 999"
+      />,
+    );
+    typeIdea();
+
+    fireEvent.click(screen.getByRole("button", { name: /generate draft/i }));
+
+    await waitFor(() => expect(fetchStub).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText(/A 9-figure exit/)).toBeInTheDocument());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
+describe("the drafts list", () => {
+  const SUMMARIES = [
+    { id: 424, idea: "Amazon bundles might be the anti-coupon strategy", zernio_post_id: null },
+    { id: 555, idea: "about cat on moon hypothesis", zernio_post_id: "6a695286" },
+  ];
+
+  it("links every draft to its own url", () => {
+    render(<Studio templates={library([])} assets={LIBRARY} drafts={SUMMARIES} />);
+
+    expect(screen.getByRole("link", { name: /Amazon bundles/ })).toHaveAttribute(
+      "href",
+      "/studio?draft=424",
+    );
+    expect(screen.getByRole("link", { name: /cat on moon/ })).toHaveAttribute(
+      "href",
+      "/studio?draft=555",
+    );
+  });
+
+  it("marks the one that is open", () => {
+    render(
+      <Studio
+        templates={library([])}
+        assets={LIBRARY}
+        drafts={SUMMARIES}
+        initialDraft={{ ...LOADED, id: 555 }}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: /cat on moon/ })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(screen.getByRole("link", { name: /Amazon bundles/ })).not.toHaveAttribute(
+      "aria-current",
+    );
+  });
+
+  it("does not claim there are no drafts when the list could not be read", () => {
+    // `assets: Asset[] | null` all over again, and it costs more here: "no draft has been
+    // generated yet" on a failed read is this page asserting the database is empty while six
+    // drafts sit in it.
+    render(<Studio templates={library([])} assets={LIBRARY} drafts={null} />);
+
+    expect(screen.getByText(/could not be read/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No draft has been generated yet/i)).not.toBeInTheDocument();
+  });
+
+  it("says the list is empty when it really is", () => {
+    render(<Studio templates={library([])} assets={LIBRARY} drafts={[]} />);
+
+    expect(screen.getByText(/No draft has been generated yet/i)).toBeInTheDocument();
+  });
+});
+
+/* The page itself, because `?draft=` is read there and the guard that keeps a malformed param
+ * from becoming a request lives there too. Rendered the way `posts/[id]/page.test.tsx` renders
+ * its detail page: the server component is an async function, so it is awaited and its output
+ * handed to RTL. */
+function stubPage(drafts: unknown[], draftResponse?: Response) {
+  const fetchStub = vi.fn((url: string) => {
+    const path = String(url).replace(/^https?:\/\/[^/]+/, "");
+    if (path === "/templates") return Promise.resolve(jsonResponse(200, library([])));
+    if (path === "/assets") return Promise.resolve(jsonResponse(200, LIBRARY));
+    if (path === "/drafts") return Promise.resolve(jsonResponse(200, drafts));
+    if (draftResponse) return Promise.resolve(draftResponse);
+    return Promise.reject(new Error(`unexpected request: ${path}`));
+  });
+  vi.stubGlobal("fetch", fetchStub);
+  return fetchStub;
+}
+
+describe("the ?draft= parameter", () => {
+  it("loads the draft the url names", async () => {
+    const fetchStub = stubPage([], jsonResponse(200, LOADED));
+
+    render(await StudioPage({ searchParams: Promise.resolve({ draft: "424" }) }));
+
+    expect(fetchStub.mock.calls.map(([url]) => String(url))).toContainEqual(
+      expect.stringMatching(/\/drafts\/424$/),
+    );
+    expect(screen.getByText(/Bundles are the anti-coupon/)).toBeInTheDocument();
+    expect(screen.queryByText("No draft yet.")).not.toBeInTheDocument();
+  });
+
+  it("reports an unknown id in the API's own words", async () => {
+    const fetchStub = stubPage([], jsonResponse(404, { detail: "no draft 999" }));
+
+    render(await StudioPage({ searchParams: Promise.resolve({ draft: "999" }) }));
+
+    expect(fetchStub.mock.calls.map(([url]) => String(url))).toContainEqual(
+      expect.stringMatching(/\/drafts\/999$/),
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("no draft 999");
+    expect(screen.queryByText("No draft yet.")).not.toBeInTheDocument();
+  });
+
+  it("refuses a non-numeric id without asking the API about it", async () => {
+    // The guard, proved by the request that was never made — otherwise the message below could
+    // be a 422 the backend happened to phrase well, and `?draft=` on its own would still go out
+    // as a request for `/drafts/`.
+    const fetchStub = stubPage([]);
+
+    render(await StudioPage({ searchParams: Promise.resolve({ draft: "abc" }) }));
+
+    expect(fetchStub.mock.calls.map(([url]) => String(url))).not.toContainEqual(
+      expect.stringContaining("/drafts/"),
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(/"abc" is not a draft id/);
+    expect(screen.queryByText("No draft yet.")).not.toBeInTheDocument();
+  });
+
+  it("shows the fresh-session empty state when nothing was asked for", async () => {
+    // The other side of every negative assertion above: without this, "the empty state is not
+    // rendered" would pass on a page that had stopped rendering it at all.
+    stubPage([]);
+
+    render(await StudioPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByText("No draft yet.")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("lists the drafts without shipping their pictures", async () => {
+    // `GET /drafts` answers with every draft's full `DraftOut`, base64 PNG included — 530KB over
+    // the rows in the database today. The list needs three fields of it.
+    stubPage([{ ...LOADED, visual_png: "iVBORw0KGgoAAAANSUhEUg" }]);
+
+    const { container } = render(await StudioPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByRole("link", { name: /Amazon bundles/ })).toHaveAttribute(
+      "href",
+      "/studio?draft=424",
+    );
+    expect(container.innerHTML).not.toContain("iVBORw0KGgoAAAANSUhEUg");
   });
 });
