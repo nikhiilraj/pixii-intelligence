@@ -417,11 +417,40 @@ def regenerate_text(session: Session, llm: LLM, draft: Draft) -> Draft:
     return draft
 
 
+def generated_from(session: Session, family: str | None, version: int | None) -> Template:
+    """The exact version a draft was generated from — never whatever is newest now.
+
+    Keyed on `(family_id, version)`, like `assets._image_slot_names`, and for its reason:
+    editing a template writes a new row, so the latest version of the family is a different
+    template than the one the draft's lineage names. Redrawing from the latest stored a
+    picture v3 produced while `visual_version` still said 2 — `publishing.lineage_metadata`
+    then pushed `visual_version: 2` to Zernio and `metrics.template_performance` credited v2
+    with v3's work. Nothing raised; the draft looked fine.
+
+    A RETIRED recorded version still redraws. A redraw is a re-render of what this draft
+    already is, not a new generation, so the honest picture is the one its lineage claims;
+    `usable_templates` is what keeps retired versions out of everything that *chooses* a
+    template. A version that is not there at all, or a draft that records none, cannot be
+    redrawn faithfully and says so.
+    """
+    if version is None:
+        raise NoUsableTemplates(
+            f"draft records no version for template family {family} — cannot redraw"
+        )
+    template = session.exec(
+        select(Template).where(Template.family_id == family, Template.version == version)
+    ).first()
+    if template is None:
+        raise NoUsableTemplates(f"template family {family} v{version} no longer exists")
+    return template
+
+
 def regenerate_visual(
     session: Session, draft: Draft, renderer: HtmlRenderer | ImageRenderer
 ) -> Draft:
     """Redraw the image from the values already written. The words are untouched."""
-    _draw_visual(session, draft, _current(session, draft.visual_family), renderer)
+    visual = generated_from(session, draft.visual_family, draft.visual_version)
+    _draw_visual(session, draft, visual, renderer)
     session.add(draft)
     session.flush()
     return draft

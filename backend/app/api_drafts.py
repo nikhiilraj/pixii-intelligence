@@ -121,10 +121,18 @@ def _load(session: SessionDep, draft_id: int) -> Draft:
 
 
 def _renderer(session: SessionDep, draft: Draft, html_renderer, image_renderer):
-    """Whichever renderer the draft's visual template declares."""
+    """Whichever renderer the draft's own visual version declares.
+
+    `(family_id, version)`, not the newest version of the family: the redraw renders the
+    version the draft's lineage names, so reading `renderer` off a newer row would hand an
+    HTML template to the image renderer — or the reverse — as soon as one edit changes it.
+    Still tolerant of a missing row, because `regenerate_visual` is what refuses that case.
+    """
     template = session.exec(
-        select(Template).where(Template.family_id == draft.visual_family)
-        .order_by(desc(col(Template.version)))
+        select(Template).where(
+            Template.family_id == draft.visual_family,
+            Template.version == draft.visual_version,
+        )
     ).first()
     declared = template.body.get("renderer") if template else "html"
     return image_renderer if declared == "ai" else html_renderer
@@ -212,9 +220,17 @@ def redraw(
     image_renderer: ImageRendererDep,
     draft_id: int,
 ) -> DraftOut:
-    """Redraw the image from the values already written. The words are untouched."""
+    """Redraw the image from the values already written. The words are untouched.
+
+    Renders the version the draft was generated from, even a retired one — see
+    `generation.generated_from`. A recorded version that is no longer in the table is a 409,
+    not a 500: it is the same "the library cannot serve this" conflict as generation's.
+    """
     draft = _load(session, draft_id)
-    regenerate_visual(session, draft, _renderer(session, draft, html_renderer, image_renderer))
+    try:
+        regenerate_visual(session, draft, _renderer(session, draft, html_renderer, image_renderer))
+    except NoUsableTemplates as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     session.commit()
     session.refresh(draft)
     return _out(session, draft)
@@ -244,13 +260,25 @@ def autonomous_run(
     html_renderer: HtmlRendererDep,
     cap: int | None = None,
 ) -> dict:
-    """Run unattended generation now, capped. Produces drafts here; pushes nothing."""
+    """Run unattended generation now, capped. Produces drafts here; pushes nothing.
+
+    `settings.autonomous_max_drafts` is the ceiling, not merely the default: a `cap` above it
+    is clamped down to it. `run_autonomous` promises its cap is hard, and this is the only
+    entry point where the number arrives from a caller — unclamped, `?cap=500` bought 1001
+    billed chat completions and 500 renders inside one request, 250x the configured limit,
+    against no spend counter anywhere in this app.
+    """
     try:
         result = run_autonomous(
             session,
             llm,
             html_renderer,
-            cap=cap if cap is not None else settings.autonomous_max_drafts,
+            # ponytail: clamped silently rather than rejected with a 422. The ceiling is
+            # configuration, not part of this endpoint's contract, so "you asked for more
+            # than is allowed" has no useful answer for the caller beyond the run it gets.
+            cap=min(cap, settings.autonomous_max_drafts)
+            if cap is not None
+            else settings.autonomous_max_drafts,
             notify=notify,
         )
     except AutonomousRunFailed as exc:

@@ -200,6 +200,11 @@ def test_an_unfilled_image_slot_still_reports_the_slot_by_name(session):
         hook_family="hook",
         structure_family="structure",
         visual_family="stat-hero",
+        # Stamped like every draft `generate_draft` writes. A redraw resolves its visual by
+        # `(family, version)`, so a hand-built draft that records no version is not the
+        # `generate_draft` outcome this test stands in for — it is a draft that cannot be
+        # redrawn at all. `draft_using` above already carries it.
+        visual_version=1,
         visual_values={"big_number": "$325M"},
     )
     session.add(draft)
