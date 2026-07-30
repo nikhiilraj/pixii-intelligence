@@ -42,6 +42,24 @@ export type Template = {
   notes: string;
 };
 
+// `AssetKind` in backend/app/models/asset.py. A kind is a filter, not a permission.
+export type AssetKind = "logo" | "product" | "screenshot" | "brand" | "photo";
+
+export type Asset = {
+  id: number;
+  // Basename under the /media mount: served at `${API_BASE}/media/assets/${filename}`.
+  filename: string;
+  label: string;
+  kind: AssetKind;
+  tags: string[];
+  // The dimensions of the file on disk, after any downscale — not of what was uploaded.
+  width: number;
+  height: number;
+  sha256: string;
+  source_post_id: number | null;
+  created_at: string;
+};
+
 export type LineageEntry = { family: string; version: number; name: string } | null;
 
 export type Draft = {
@@ -166,6 +184,17 @@ export function postJson<T>(
     },
     (res) => res.json() as Promise<T>,
   );
+}
+
+/** `postJson`'s twin for the one endpoint that takes bytes — `POST /assets` is multipart.
+ *
+ *  The header is the whole reason this exists rather than a flag on `postJson`: a hand-set
+ *  `Content-Type: multipart/form-data` omits the boundary, which FastAPI cannot parse, so the
+ *  upload would fail on every file. `fetch` derives the full header from the FormData when it
+ *  is left alone. Same three outcomes as every other call — an upload that reports success on
+ *  a 422 is how an asset library ends up missing the file someone just chose. */
+export function postForm<T>(path: string, body: FormData): Promise<ApiResult<T>> {
+  return request<T>(path, { method: "POST", body }, (res) => res.json() as Promise<T>);
 }
 
 /** ponytail: `postJson`'s twin for the one endpoint that answers with bytes —

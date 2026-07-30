@@ -4,7 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from sqlmodel import col, select
 
-from app.assets import UnreadableUpload, sha256_of, store_image
+from app.assets import AssetInUse, UnreadableUpload, delete_asset, sha256_of, store_image
 from app.deps import SessionDep
 from app.models.asset import Asset, AssetKind
 
@@ -71,3 +71,28 @@ def list_assets(
         statement = statement.where(col(Asset.tags).contains([tag]))
     statement = statement.order_by(col(Asset.id).desc()).limit(limit)
     return list(session.exec(statement).all())
+
+
+@router.delete("/{asset_id}")
+def remove_asset(session: SessionDep, asset_id: int) -> dict[str, int]:
+    """Delete an asset and **remove its file from disk**. The library holds the only copy.
+
+    - `404` — no such asset.
+    - `409` — a draft or template still references it, and the message names which. Returned
+      rather than cascading: the alternative is deleting the bytes a render depends on and
+      letting it discover that as an empty box, which is the failure mode this codebase has
+      spent three slices closing.
+    - `200 {"deleted": id}` — gone. A body rather than a `204` because the frontend's one
+      request helper reads every success as JSON, and a 204 would surface as a malformed
+      response.
+    """
+    asset = session.get(Asset, asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail=f"asset {asset_id} is not in the library")
+
+    try:
+        delete_asset(session, asset)
+    except AssetInUse as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return {"deleted": asset_id}
