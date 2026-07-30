@@ -215,6 +215,30 @@ describe("the health footer", () => {
     expect(screen.getByText("azure_openai")).toHaveTextContent("down");
   });
 
+  it("says the API is down when the backend answered and called itself unhealthy", async () => {
+    // The row that could only ever be green. `database` and every credential are true here on
+    // purpose: the only "down" the page may contain is the API row's own, so the assertion
+    // cannot pass by picking up somebody else's badge.
+    stubFetch({
+      inbox: jsonResponse(200, inbox()),
+      health: jsonResponse(200, {
+        status: "degraded",
+        database: true,
+        credentials: { zernio: true },
+      }),
+    });
+
+    render(await InboxPage());
+
+    expect(screen.getByText("API")).toHaveTextContent("down");
+    expect(screen.getByText("Database")).toHaveTextContent("ok");
+    // A backend that answered is not a backend that could not be reached. These two failures
+    // are different states and must read differently — the transport-failure sentences belong
+    // to the /health-never-arrived path, not to this one.
+    expect(screen.queryByText(/Status unavailable/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Backend unreachable/)).not.toBeInTheDocument();
+  });
+
   it("does not take the queues down with it when only /health fails", async () => {
     // The footer is a footer. A failed status read may not blank a page whose own request
     // succeeded — and it may not claim the backend is unreachable either, since it plainly

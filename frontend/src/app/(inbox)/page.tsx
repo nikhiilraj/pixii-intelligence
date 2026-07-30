@@ -193,7 +193,15 @@ export default async function InboxPage() {
         </h2>
         {health.ok ? (
           <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2">
-            <HealthRow label="API" ok={health.ok} />
+            {/* Not `health.ok` — inside this branch that is `true` by construction, so the row
+                could only ever say "ok". The backend's own verdict on itself is what the row is
+                for: it answered, and it may have answered that it is unhealthy.
+                ponytail: reused as the existing ok/down badge rather than given a vocabulary of
+                its own. "down" for a backend that plainly answered is blunt, but every other row
+                in this strip is a boolean and one word is what a footer has room for. Ceiling: a
+                real status vocabulary here once /health emits more than the literal "ok" it
+                hardcodes today (backend/app/main.py:82). */}
+            <HealthRow label="API" ok={health.data.status === "ok"} />
             <HealthRow label="Database" ok={health.data.database} />
             {Object.entries(health.data.credentials).map(([name, present]) => (
               <HealthRow key={name} label={name} ok={present} />

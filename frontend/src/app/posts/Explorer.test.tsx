@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Post } from "@/lib/api";
@@ -219,5 +219,41 @@ describe("a failed filter", () => {
       ).toBeInTheDocument(),
     );
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
+/* The corpus runs 2024-01-25 → 2026-07-17 and one formatter feeds both the chart axis and this
+ * column. Asserted through the table only: recharts measures itself, and `ResponsiveContainer`
+ * is 0×0 in jsdom, so the axis renders nothing to assert on. The axis is checked in a browser
+ * instead — same function, so the table is the honest place to pin it.
+ *
+ * Timestamps are midday UTC so a machine's local offset cannot roll either date across a year
+ * boundary and make the result depend on where the test runs. */
+describe("the Published column", () => {
+  it("tells apart two posts on the same day and month in different years", () => {
+    // No responses: any fetch is an unexpected call and fails the test rather than reaching
+    // the network. The first render does not fetch — only `apply` does.
+    stubFetchSequence();
+    render(
+      <Explorer
+        initial={[
+          post({ id: 1, published_at: "2024-06-15T12:00:00Z" }),
+          post({ id: 2, published_at: "2026-06-15T12:00:00Z" }),
+        ]}
+        templates={[]}
+      />,
+    );
+
+    const published = screen
+      .getAllByRole("row")
+      .slice(1)
+      .map((row) => within(row).getAllByRole("cell")[3].textContent);
+
+    expect(published).toHaveLength(2);
+    // Distinct is the whole requirement — the table sorts by engagement, so these two can sit
+    // adjacent, and identical text there is a wrong answer wearing the shape of a right one.
+    expect(new Set(published).size).toBe(2);
+    // Still a readable date and not, say, a raw ISO string that happens to be distinct.
+    expect(published.every((p) => p?.includes("Jun"))).toBe(true);
   });
 });
