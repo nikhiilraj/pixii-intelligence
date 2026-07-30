@@ -8,18 +8,21 @@ from sqlmodel import Session
 from app.api_drafts import _renderer
 from app.config import settings
 from app.db import get_session
+from app.deps import get_html_renderer, get_llm
 from app.generation import (
     LESSON_LIMIT,
     NoUsableTemplates,
     generate_draft,
+    generated_from,
     regenerate_text,
     regenerate_visual,
+    retopic,
     suggest_templates,
     writable_slots,
 )
 from app.main import app
 from app.models.post import Post, Verdict
-from app.models.template import TemplateKind
+from app.models.template import TemplateKind, TemplateStatus
 from app.templates import approve, create_template, edit_template, retire
 from tests.test_rendering import renderer_capturing
 
@@ -727,6 +730,278 @@ def test_the_redraw_endpoint_reports_a_vanished_version_as_a_conflict(client, se
     session.flush()
 
     response = client.post(f"/drafts/{draft.id}/regenerate-visual")
+
+    assert response.status_code == 409
+    assert visual.family_id in response.json()["detail"]
+
+
+# --- US-014: re-topic — same templates, new subject ------------------------------------
+
+NEW_IDEA = "a seller swapped their hero shot and lost 4% of their click-through"
+
+RETOPICKED = {
+    "hook": "One swapped hero shot cost 4% of the clicks.",
+    "body": "same listing. same price. a different picture.",
+    "visual_values": {"big_number": "-4%", "headline": "One image. Every month."},
+}
+
+
+def next_version_of_everything(session, hook, structure, visual):
+    """An approved v2 of all three families, each distinguishable in the prompt it builds.
+
+    A re-topic test proves nothing against a single-version family: "the version recorded"
+    and "the newest version" are then the same row, and the bug this slice exists to avoid
+    passes. All three, because `regenerate_text` had the defect on all three at once — a
+    re-topic resolving `structure` by latest while hook and visual were right would slip
+    through a two-family assertion.
+    """
+    hook_v2 = edit_template(
+        session,
+        hook,
+        body={"pattern": "{small} became {large}, eventually", "tone": "plain, lowercase"},
+    )
+    structure_v2 = edit_template(
+        session,
+        structure,
+        body={
+            "post_type": "deep-research",
+            "sections": [{"name": "result", "guidance": "Bury the lede."}],
+        },
+    )
+    visual_v2 = edited_visual(session, visual, "v2")
+    for template in (hook_v2, structure_v2, visual_v2):
+        approve(session, template)
+    return hook_v2, structure_v2, visual_v2
+
+
+def snapshot(draft) -> dict:
+    """The source's whole state as plain values, read before the call.
+
+    Values rather than the ORM instance on purpose: comparing attributes on the object
+    afterwards compares a row to itself once SQLAlchemy has refreshed it, and would pass
+    against a re-topic that overwrote the source in place.
+    """
+    return {
+        "idea": draft.idea,
+        "hook_family": draft.hook_family,
+        "hook_version": draft.hook_version,
+        "structure_family": draft.structure_family,
+        "structure_version": draft.structure_version,
+        "visual_family": draft.visual_family,
+        "visual_version": draft.visual_version,
+        "hook_text": draft.hook_text,
+        "body_text": draft.body_text,
+        "visual_values": dict(draft.visual_values),
+        "asset_values": dict(draft.asset_values),
+        "visual_image": draft.visual_image,
+        "zernio_post_id": draft.zernio_post_id,
+        "pushed_at": draft.pushed_at,
+        "went_live_at": draft.went_live_at,
+    }
+
+
+def test_a_retopic_inherits_the_sources_own_versions_not_the_newest(session):
+    """Nikhil's pillar, and the one way it can be silently wrong.
+
+    The templates are the point — a new subject written through the exact hook, structure
+    and visual a past draft used. Resolving any of the three by newest version is the G2
+    defect one door along: the new draft would be written by v2 while its lineage claimed
+    v1, so `lineage_metadata` would push v1 to Zernio and `template_performance` would
+    credit v1 with v2's work.
+
+    Asserted on what the model was actually sent, not only on the columns copied: v1's
+    pattern and guidance present, v2's absent, and the visual rendered without v2's marker.
+    """
+    hook, structure, visual = library(session)
+    source = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    recorded = (
+        (source.hook_family, source.hook_version),
+        (source.structure_family, source.structure_version),
+        (source.visual_family, source.visual_version),
+    )
+    hook_v2, structure_v2, visual_v2 = next_version_of_everything(
+        session, hook, structure, visual
+    )
+
+    llm = FakeLLM(RETOPICKED)
+    captured: dict = {}
+    fresh = retopic(
+        session, llm, renderer_capturing(captured, png=b"RETOPIC"), source, idea=NEW_IDEA
+    )
+
+    assert fresh.id != source.id
+    assert (
+        (fresh.hook_family, fresh.hook_version),
+        (fresh.structure_family, fresh.structure_version),
+        (fresh.visual_family, fresh.visual_version),
+    ) == recorded
+    # There really is a newer version of each family, so "recorded" and "latest" differ.
+    assert (hook_v2.version, structure_v2.version, visual_v2.version) == (2, 2, 2)
+    assert fresh.hook_version == 1
+    # The templates that actually built the draft, not merely the columns on it.
+    assert "{small} turned into {large}" in llm.last_user
+    assert "eventually" not in llm.last_user
+    assert "Lead with the dollar outcome." in llm.last_user
+    assert "Bury the lede." not in llm.last_user
+    assert "<i>v2</i>" not in captured["html"]
+    # And it is a new subject, written new.
+    assert fresh.idea == NEW_IDEA
+    assert NEW_IDEA in llm.last_user
+    assert fresh.hook_text.startswith("One swapped hero shot")
+
+
+def test_a_retopic_leaves_the_source_untouched(session):
+    """The source is read, never written. Its lineage, its words and its metrics hold.
+
+    A re-topic that moved the source would destroy the attribution record it was chosen
+    for — and `regenerate_text` already exists for the case where rewriting in place is
+    what was wanted.
+    """
+    library(session)
+    source = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    source.zernio_post_id = "late-abc"
+    source.pushed_at = datetime(2026, 7, 1, tzinfo=UTC).replace(tzinfo=None)
+    source.went_live_at = datetime(2026, 7, 2, tzinfo=UTC).replace(tzinfo=None)
+    session.add(source)
+    session.flush()
+    before = snapshot(source)
+
+    fresh = retopic(session, FakeLLM(RETOPICKED), FakeRenderer(b"NEW"), source, idea=NEW_IDEA)
+
+    assert fresh.id != source.id
+    assert snapshot(source) == before
+    # And the new row is genuinely a different draft, not a view of the old one.
+    assert fresh.idea != source.idea
+    assert fresh.hook_text != source.hook_text
+    assert fresh.zernio_post_id is None
+    assert fresh.went_live_at is None
+
+
+def test_a_retopic_from_a_retired_version_still_works(session):
+    """The version history is the attribution record — pruning it was refused in V2.
+
+    A source built on v1 must still be re-topickable once v1 is retired, exactly as a
+    retired version still redraws: `usable_templates` is what keeps a withdrawn template out
+    of everything that *chooses* one, and a re-topic chooses nothing. Ordering matters —
+    `edit_template` refuses a retired row, so v2 is authored before v1 is retired.
+    """
+    hook, structure, visual = library(session)
+    source = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    next_version_of_everything(session, hook, structure, visual)
+    for template in (hook, structure, visual):
+        retire(session, template)
+    # Stated rather than assumed: `edit_template` carries status forward, so without this the
+    # test would still pass if the versions the source records were merely superseded.
+    assert [
+        generated_from(session, family, 1).status
+        for family in (hook.family_id, structure.family_id, visual.family_id)
+    ] == [TemplateStatus.RETIRED] * 3
+
+    llm = FakeLLM(RETOPICKED)
+    captured: dict = {}
+    fresh = retopic(
+        session, llm, renderer_capturing(captured, png=b"RETIRED"), source, idea=NEW_IDEA
+    )
+
+    assert (fresh.hook_version, fresh.structure_version, fresh.visual_version) == (1, 1, 1)
+    assert "{small} turned into {large}" in llm.last_user
+    assert "<i>v2</i>" not in captured["html"]
+    assert fresh.visual_error is None
+    assert fresh.visual_image == b"RETIRED"
+
+
+def test_the_retopic_endpoint_creates_a_new_draft_and_says_what_it_spent(client, session):
+    hook, structure, visual = library(session)
+    source = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    next_version_of_everything(session, hook, structure, visual)
+    app.dependency_overrides[get_llm] = lambda: FakeLLM(RETOPICKED)
+    app.dependency_overrides[get_html_renderer] = FakeRenderer
+
+    response = client.post(
+        "/drafts/retopic", json={"idea": NEW_IDEA, "source_draft_id": source.id}
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["id"] != source.id
+    assert body["idea"] == NEW_IDEA
+    # The lineage the frontend reads, resolved through `generated_from`, not the newest row.
+    assert body["lineage"]["hook"]["version"] == 1
+    assert body["lineage"]["structure"]["version"] == 1
+    assert body["lineage"]["visual"]["version"] == 1
+    # The picture survives the commit/refresh/base64/`model_dump()` round-trip this route
+    # takes and `regenerate-visual` does not — the visual is what a re-topic is for.
+    assert body["visual_png"]
+    assert body["visual_error"] is None
+    # Observed spend, through the one meter — not predicted from the request.
+    assert (body["llm_calls"], body["image_calls"]) == (1, 1)
+
+
+def test_a_retopic_can_start_from_a_published_post(client, session):
+    """"Take any past post" — the post page's entry point, resolved through its draft.
+
+    The join is `Draft.zernio_post_id == Post.late_post_id` (`metrics.draft_for_post`), the
+    same one the Inbox and the scoreboard use.
+    """
+    library(session)
+    source = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    source.zernio_post_id = "late-xyz"
+    post = add_post(session, "z-retopic", 900, "what went out")
+    post.late_post_id = "late-xyz"
+    session.add_all([source, post])
+    session.flush()
+    app.dependency_overrides[get_llm] = lambda: FakeLLM(RETOPICKED)
+    app.dependency_overrides[get_html_renderer] = FakeRenderer
+
+    response = client.post("/drafts/retopic", json={"idea": NEW_IDEA, "source_post_id": post.id})
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["id"] != source.id
+    assert body["lineage"]["hook"]["family"] == source.hook_family
+    assert body["lineage"]["hook"]["version"] == source.hook_version
+
+
+def test_a_post_this_app_did_not_generate_has_no_templates_to_inherit(client, session):
+    """Most of the corpus was written outside this app and carries no lineage at all."""
+    library(session)
+    post = add_post(session, "z-ingested", 400, "ingested from the account's history")
+
+    response = client.post("/drafts/retopic", json={"idea": NEW_IDEA, "source_post_id": post.id})
+
+    assert response.status_code == 409
+    assert str(post.id) in response.json()["detail"]
+
+
+def test_the_retopic_endpoint_needs_exactly_one_source(client, session):
+    library(session)
+
+    assert client.post("/drafts/retopic", json={"idea": NEW_IDEA}).status_code == 422
+    assert client.post(
+        "/drafts/retopic",
+        json={"idea": NEW_IDEA, "source_draft_id": 1, "source_post_id": 1},
+    ).status_code == 422
+    assert client.post(
+        "/drafts/retopic", json={"idea": NEW_IDEA, "source_draft_id": 987654}
+    ).status_code == 404
+
+
+def test_a_retopic_from_a_vanished_version_is_a_conflict_not_a_redraw_of_another(
+    client, session
+):
+    """A 409 like the redraw's: the library cannot serve this draft's version, and falling
+    back to a sibling is the mis-attribution the whole slice is about."""
+    _, _, visual = library(session)
+    source = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    edited_visual(session, visual, "v2")
+    session.delete(visual)
+    session.flush()
+    app.dependency_overrides[get_llm] = lambda: FakeLLM(RETOPICKED)
+    app.dependency_overrides[get_html_renderer] = FakeRenderer
+
+    response = client.post(
+        "/drafts/retopic", json={"idea": NEW_IDEA, "source_draft_id": source.id}
+    )
 
     assert response.status_code == 409
     assert visual.family_id in response.json()["detail"]

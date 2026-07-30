@@ -465,3 +465,53 @@ def regenerate_visual(
     session.add(draft)
     session.flush()
     return draft
+
+
+def retopic(
+    session: Session,
+    llm: LLM,
+    renderer: HtmlRenderer | ImageRenderer,
+    source: Draft,
+    *,
+    idea: str,
+) -> Draft:
+    """A new draft on a new subject, written through the source's exact templates.
+
+    The pillar this app was asked for: "have the template and hooks and visuals as kind of
+    template so that we can easily recreate them using another topic." Not a rewrite —
+    `regenerate_text` is that, and it deliberately holds one draft's lineage still. This
+    writes a **new row** whose three `(family, version)` pairs are the source's own.
+
+    **Resolved through `generated_from`, never the newest version of the family**, and that
+    is the whole of the slice. Passing `family` alone — or reading `usable_templates` — would
+    write the new draft with v3 while stamping it v1, which is the G2 defect
+    (`regenerate_visual` storing a v3 picture under `visual_version: 2`) reproduced in a
+    route whose entire purpose is to carry a template forward faithfully. The version history
+    is the attribution record, so a retired or superseded version re-topics exactly like a
+    live one: nothing is being *chosen* here, it is being inherited.
+
+    `generate_draft` does the rest — it already takes the three templates as parameters, so
+    there is no second generation path to keep in step with this one. It is handed ids of the
+    resolved rows rather than families, so `_resolve` reads back the same versions.
+
+    ponytail: the source's `asset_values` carry over as the picks. The visual is the *same
+    template row*, so `chosen_assets`' image-slot filter is a no-op here rather than a silent
+    drop, and a re-topic that rendered a `MissingSlotValue` where its source rendered a
+    picture would be useless. Ceiling: choosing different assets for the new subject is the
+    picker's job (US-015), on the draft this returns.
+    """
+    hook = generated_from(session, source.hook_family, source.hook_version)
+    structure = generated_from(session, source.structure_family, source.structure_version)
+    visual = generated_from(session, source.visual_family, source.visual_version)
+    return generate_draft(
+        session,
+        llm,
+        renderer,
+        idea=idea,
+        hook_id=hook.id,
+        structure_id=structure.id,
+        visual_id=visual.id,
+        asset_values=source.asset_values,
+        # `mode` stays "directed": a human supplied this idea. A third value would be a new
+        # partition of every query that reads the column, for no reader.
+    )
