@@ -51,6 +51,10 @@ function post(overrides: Partial<Post> = {}): Post {
     saves: 0,
     engagement_rate: 1,
     engaged_actions: 1,
+    // Unjudged is the ordinary state of a corpus row, so that is what the fixture defaults to.
+    verdict: null,
+    verdict_note: "",
+    verdict_at: null,
     ...overrides,
   };
 }
