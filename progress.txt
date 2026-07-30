@@ -1243,3 +1243,29 @@ assert an embedded URI. Notable coverage: a slot with **no `type` key** is left 
 whose file vanished is rejected rather than crashing.
 
 Backend tests 275 -> **291**. ruff, mypy, eslint, tsc green.
+
+### US-007 — Cloudflare 429 backoff (done 2026-07-30)
+
+`CloudflareRenderer.screenshot` now retries 429 internally: 4 attempts, fixed 5s/10s/20s =
+**35s bounded sleep**. The limit is requests-per-*minute*, so sub-second retries cannot clear the
+window; tens of seconds can. No jitter and no `Retry-After` — one process renders one visual at a
+time so there is no herd to spread, and the live probe never returned that header. Both choices
+carry `ponytail:` comments.
+
+Shape worth keeping: the loop iterates `(*_RATE_LIMIT_DELAYS, None)` and breaks when
+`delay is None`, then falls through to the same `raise_for_status()` every other status takes —
+so **no new exception type** appears above `screenshot()`. A 500 or 403 raises on attempt one
+(`test_a_server_error_is_not_retried`, `test_a_client_error_is_not_retried` assert
+`len(attempts) == 1` and `sleeps == []`).
+
+`sleep` is injected as a kwarg beside `transport`; tests pass `sleep=sleeps.append` and assert
+the recorded delays as data. **The suite still runs in ~3s** despite a 35s policy.
+
+Backend tests 291 -> **295**.
+
+**Reported, deliberately NOT fixed — `AzureImageRenderer` has the same exposure.**
+`rendering.py:211` turns any status >= 400, 429 included, into `ImageGenerationError` with no
+retry. Left alone because it is out of US-007's scope and because Azure image calls are made
+manually, one at a time, so cadence limits are unlikely. **Trigger to fix: any batch or
+autonomous path that generates more than one AI visual per minute** — at which point a failed
+call also means a wasted paid request.
