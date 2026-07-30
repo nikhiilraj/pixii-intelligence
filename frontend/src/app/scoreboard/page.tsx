@@ -23,6 +23,30 @@ type Row = {
 
 const nf = new Intl.NumberFormat("en-US");
 
+/* One column grid for all three tables. Auto layout sized each table to its own longest
+   template name, so `Status` landed at x=645 under hook, x=666 under structure and x=505
+   under visual — three tables of identical shape reading as unrelated. `table-fixed` plus
+   these widths makes the grid a property of the page rather than of each group's content.
+
+   The widths sum to 752px, which is also what each table falls back to when the viewport
+   is narrower than that; the `overflow-x-auto` wrapper scrolls it. Above 752 the surplus
+   is distributed proportionally — identically for all three, so the edges stay aligned.
+
+   ponytail: retyped in loading.tsx rather than shared, same as KINDS is there. Ceiling: a
+   `<ScoreboardCols />` in a shared module if a third caller appears. */
+function ScoreboardCols() {
+  return (
+    <colgroup>
+      <col className="w-80" />
+      <col className="w-24" />
+      <col className="w-16" />
+      <col className="w-24" />
+      <col className="w-16" />
+      <col className="w-28" />
+    </colgroup>
+  );
+}
+
 export default async function ScoreboardPage() {
   const result = await getJson<Row[]>("/metrics/templates");
 
@@ -102,7 +126,8 @@ export default async function ScoreboardPage() {
           <section key={kind} className="mt-8">
             <h2 className="text-caption font-medium uppercase tracking-widest text-muted">{kind}</h2>
             <div className="mt-2 overflow-x-auto">
-              <table className="w-full min-w-2xl border-collapse text-meta">
+              <table className="w-full min-w-2xl table-fixed border-collapse text-meta">
+                <ScoreboardCols />
                 <thead>
                   <tr className="border-b border-border text-left">
                     <th className="py-2 pr-4 font-medium">Template</th>
