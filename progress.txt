@@ -1092,3 +1092,24 @@ explicit that the UI takes the brand's temperature "without cosplaying as a post
 
 Verified: ruff, mypy, eslint, tsc green; 258 tests pass; `pnpm build` clean (7 routes).
 Zero npm packages added — primitives are US-002's job.
+
+### US-002 — Presentational primitives and cn() (done 2026-07-30)
+
+Added `components/ui/{button,badge,card,skeleton}.tsx`, `components/backend-unreachable.tsx`
+and `lib/cn.ts`. Direct deps added: `clsx`, `tailwind-merge`, `class-variance-authority` —
+clsx was previously in the lockfile only transitively via recharts, so importing it was
+resolving by hoisting luck.
+
+Migrated: `page.tsx` (home), `scoreboard/page.tsx`, and the four thin server wrappers onto the
+shared backend-unreachable component. **Deliberately NOT migrated** — Studio, AddExternal,
+ExcludeToggle, TemplateManager, posts/[id]: they need US-003's mutation helper and US-004's
+Select, so touching them here would collide with those slices. Their `opacity-50` and pasted
+button strings are expected to remain until then.
+
+**The AA fix that came with the primitives.** Both duplicated button strings encoded disabled
+state as `disabled:opacity-50`, which the PRD names as an AA failure. Button now uses
+`disabled:border-border disabled:bg-surface-2 disabled:text-muted`. The agent measured a
+disabled-fill alternative first and rejected it at 4.26:1 — recorded in the component comment.
+
+Verified: ruff, mypy, eslint, tsc green; 258 tests; `pnpm build` compiled in 2.6s with no
+react-compiler warnings.
