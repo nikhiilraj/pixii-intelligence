@@ -1,4 +1,7 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+import { BackendUnreachable } from "@/components/backend-unreachable";
+import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import { API_BASE } from "@/lib/api";
 
 type Health = {
   status: string;
@@ -6,6 +9,10 @@ type Health = {
   credentials: Record<string, boolean>;
 };
 
+/* ponytail: still a local fetch rather than getJson, because getJson collapses every
+   failure to null and this page needs to distinguish "down" from "empty" — which is
+   exactly what US-003 rebuilds. Left for that slice to migrate; the duplicate local
+   API_BASE it also has to delete is already gone, since BackendUnreachable owns it now. */
 async function fetchHealth(): Promise<Health | null> {
   try {
     const res = await fetch(`${API_BASE}/health`, { cache: "no-store" });
@@ -16,23 +23,11 @@ async function fetchHealth(): Promise<Health | null> {
   }
 }
 
-function Dot({ ok }: { ok: boolean }) {
-  return (
-    <span
-      aria-label={ok ? "connected" : "unavailable"}
-      className={`inline-block h-2.5 w-2.5 rounded-full ${ok ? "bg-emerald-500" : "bg-red-500"}`}
-    />
-  );
-}
-
 function Row({ label, ok }: { label: string; ok: boolean }) {
   return (
-    <div className="flex items-center justify-between border-b border-black/10 py-3 last:border-0 dark:border-white/10">
-      <span className="text-sm">{label}</span>
-      <span className="flex items-center gap-2 text-sm opacity-70">
-        <Dot ok={ok} />
-        {ok ? "ok" : "down"}
-      </span>
+    <div className="flex items-center justify-between border-b border-border py-3 last:border-0">
+      <span className="text-body">{label}</span>
+      <Badge variant={ok ? "success" : "danger"}>{ok ? "ok" : "down"}</Badge>
     </div>
   );
 }
@@ -42,29 +37,24 @@ export default async function Home() {
 
   return (
     <main className="mx-auto flex min-h-screen max-w-xl flex-col justify-center px-6 py-16">
-      <h1 className="text-2xl font-semibold tracking-tight">Pixii Intelligence</h1>
-      <p className="mt-1 text-sm opacity-60">
+      <h1 className="text-title font-semibold tracking-tight">Pixii Intelligence</h1>
+      <p className="mt-1 text-body text-muted">
         Content generation, improvement and analysis.
       </p>
 
       <section className="mt-10">
-        <h2 className="text-xs font-medium uppercase tracking-widest opacity-50">
+        <h2 className="text-caption font-medium uppercase tracking-widest text-muted">
           System status
         </h2>
-        <div className="mt-3">
+        <Card className="mt-3 px-4 py-1">
           <Row label="Backend API" ok={health !== null} />
           <Row label="Database" ok={health?.database ?? false} />
           {health &&
             Object.entries(health.credentials).map(([name, present]) => (
               <Row key={name} label={`Credentials — ${name}`} ok={present} />
             ))}
-        </div>
-        {!health && (
-          <p className="mt-4 text-sm text-red-600 dark:text-red-400">
-            Backend unreachable at {API_BASE}. Start it with{" "}
-            <code className="rounded bg-black/5 px-1 dark:bg-white/10">make api</code>.
-          </p>
-        )}
+        </Card>
+        {!health && <BackendUnreachable className="mt-4" />}
       </section>
     </main>
   );

@@ -1,5 +1,8 @@
 import Link from "next/link";
 
+import { BackendUnreachable } from "@/components/backend-unreachable";
+import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
 import { getJson } from "@/lib/api";
 
 export const dynamic = "force-dynamic";
@@ -27,10 +30,7 @@ export default async function ScoreboardPage() {
     return (
       <main className="mx-auto max-w-5xl px-6 py-16">
         <h1 className="text-title font-semibold tracking-tight">Scoreboard</h1>
-        <p className="mt-8 text-body text-danger">
-          Backend unreachable. Start it with{" "}
-          <code className="rounded-input bg-surface-2 px-1 font-mono">make api</code>.
-        </p>
+        <BackendUnreachable className="mt-8" />
       </main>
     );
   }
@@ -51,10 +51,10 @@ export default async function ScoreboardPage() {
       </p>
 
       {withEvidence.length === 0 && (
-        <p className="mt-6 rounded-card border border-warning/30 bg-warning/10 p-3 text-body">
+        <Card className="mt-6 border-warning/40 bg-warning/15 text-body">
           No template has an attributed post yet. Analytics only covers published posts, so a
           draft pushed to Zernio contributes nothing until it is actually published.
-        </p>
+        </Card>
       )}
 
       {kinds.map((kind) => {
@@ -99,14 +99,15 @@ export default async function ScoreboardPage() {
                         {row.sample_count ? row.mean_engaged_actions.toFixed(1) : "—"}
                       </td>
                       <td className="py-3 text-caption">
+                        {/* Was `text-success` / `text-warning`. Both fail AA as text on
+                            light (3.29:1 and 2.06:1) — the status colour belongs on the
+                            fill, which is what Badge does. See badge.tsx. */}
                         {row.sufficient ? (
-                          <span className="text-success">
-                            enough to read
-                          </span>
+                          <Badge variant="success">enough to read</Badge>
                         ) : (
-                          <span className="text-warning">
+                          <Badge variant="warning">
                             too thin ({row.sample_count}/{threshold})
-                          </span>
+                          </Badge>
                         )}
                       </td>
                     </tr>

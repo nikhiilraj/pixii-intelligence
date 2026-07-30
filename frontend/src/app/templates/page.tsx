@@ -1,3 +1,4 @@
+import { BackendUnreachable } from "@/components/backend-unreachable";
 import { getJson, type Template } from "@/lib/api";
 
 import TemplateManager from "./TemplateManager";
@@ -16,10 +17,7 @@ export default async function TemplatesPage() {
       </p>
 
       {templates === null ? (
-        <p className="mt-8 text-sm text-red-600 dark:text-red-400">
-          Backend unreachable. Start it with{" "}
-          <code className="rounded bg-black/5 px-1 dark:bg-white/10">make api</code>.
-        </p>
+        <BackendUnreachable className="mt-8" />
       ) : (
         <TemplateManager initial={templates} />
       )}
