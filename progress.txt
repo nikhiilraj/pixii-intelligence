@@ -1213,3 +1213,33 @@ download may shrug.
 
 Backend tests 258 -> **275**. Verified: ruff, mypy, eslint, tsc green; alembic upgrade head
 clean; autogenerate emits nothing.
+
+### US-006 — Asset resolution into renders (done 2026-07-30)
+
+`resolve_asset_values(session, visual, values) -> dict` in `app/assets.py`. Turns an
+`image_url` slot holding an asset id into a **base64 data URI** embedded in the markup.
+
+**All three render paths go through it, via two call statements:**
+- `generation.py:197`, inside `_draw_visual` — which is the shared path for BOTH `generate_draft`
+  and `regenerate_visual`. Resolution reads `draft.visual_values`, which is how regenerate gets
+  values despite taking no `values` argument. Pinned by
+  `test_regenerating_a_visual_embeds_the_assets_every_time`.
+- `api_templates.py:165`, `preview_visual`. Without this the app would have shipped working
+  generation and a preview that 422s on every image template, since `TemplateManager.tsx:105`
+  already calls it.
+
+**Base64 is load-bearing** — `ponytail:` comment at `assets.py:168` says so explicitly.
+`rendering.fill` escapes slot values; base64's alphabet dodges all five escaped characters, but
+a raw `data:image/svg+xml,<svg…>` is mangled to `&lt;svg` and renders broken **with no
+exception**. So anything that is not base64 raises `UnresolvableAsset`. `fill(escape=False)` was
+NOT widened — that flag is the injection guard for model-written text.
+
+`WRITABLE_SLOT_TYPES` unchanged: the model still never writes an image slot.
+
+16 new tests, all on `renderer_capturing` (a real `CloudflareRenderer` over `MockTransport` that
+keeps the posted body) — never `FakeRenderer`, which discards the html argument and so cannot
+assert an embedded URI. Notable coverage: a slot with **no `type` key** is left alone (VISUAL row
+556 has none), a local `/media` path is rejected (the remote browser cannot fetch it), an asset
+whose file vanished is rejected rather than crashing.
+
+Backend tests 275 -> **291**. ruff, mypy, eslint, tsc green.
