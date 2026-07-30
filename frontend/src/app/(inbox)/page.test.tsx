@@ -48,6 +48,9 @@ function inbox(overrides: Partial<Inbox> = {}): Inbox {
     built_awaiting_push: empty,
     pushed_awaiting_monte: empty,
     published_awaiting_verdict: empty,
+    // The value today's database actually returns, so every test that does not care about the
+    // counter still renders the state that ships.
+    closed_circuits: 0,
     ...overrides,
   };
 }
@@ -151,6 +154,46 @@ describe("the four queues", () => {
   });
 });
 
+/* The one number on this page that is not a queue. It reads 0 against today's database and
+   showing that 0 is the entire feature: a counter that hid itself at zero, or that rendered a
+   dash, would leave "the loop has never run" and "we have no idea" looking identical — which is
+   the state this page already had. */
+describe("the circuit counter", () => {
+  it("reads 0 as never-yet, not as an error and not as nothing to show", async () => {
+    stubFetch({ inbox: jsonResponse(200, inbox()) });
+
+    render(await InboxPage());
+
+    expect(screen.getByRole("heading", { name: "Closed circuits: 0" })).toBeInTheDocument();
+    // 0 is a fact about the circuit, stated in words, plus what would make it 1.
+    expect(screen.getByText(/never been round/)).toBeInTheDocument();
+    expect(screen.getByText(/makes this 1/)).toBeInTheDocument();
+    // Not a failure and not a warning: nothing is broken, the lap simply has not happened.
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("states the real count once laps have closed, and drops the never-yet copy", async () => {
+    stubFetch({ inbox: jsonResponse(200, inbox({ closed_circuits: 3 })) });
+
+    render(await InboxPage());
+
+    expect(screen.getByRole("heading", { name: "Closed circuits: 3" })).toBeInTheDocument();
+    expect(screen.queryByText(/never been round/)).not.toBeInTheDocument();
+  });
+
+  it("says it is a lap count and not a score, at every value", async () => {
+    // The page's own constraint: these are queues, not scores. A bare number in the header is
+    // exactly what invites the comparison the rest of the page refuses, so the disclaimer is
+    // part of the counter rather than a thing the reader is trusted to remember.
+    for (const closed_circuits of [0, 3]) {
+      stubFetch({ inbox: jsonResponse(200, inbox({ closed_circuits })) });
+      render(await InboxPage());
+      expect(screen.getByText(/not a score/)).toBeInTheDocument();
+      cleanup();
+    }
+  });
+});
+
 /* The bug class this codebase keeps hitting, in both directions. One direction alone is not a
    test: "always render the error" passes the first assertion, "never render the error" passes
    the second. */
@@ -166,6 +209,10 @@ describe("a failed /inbox is not an empty inbox", () => {
     expect(screen.queryByText(/No draft is waiting to be pushed/)).not.toBeInTheDocument();
     expect(screen.queryByText(/No draft is waiting on a publish/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Nothing is waiting on a verdict/)).not.toBeInTheDocument();
+    // Same direction for the counter: a failed read has no lap count, and rendering "0" from
+    // a response that never arrived would be the page asserting the strongest claim it makes
+    // about the circuit on the strength of no data at all.
+    expect(screen.queryByText(/Closed circuits/)).not.toBeInTheDocument();
   });
 
   it("says the backend is unreachable when it is, rather than showing four empty queues", async () => {

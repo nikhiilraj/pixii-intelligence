@@ -369,6 +369,15 @@ class Inbox(BaseModel):
     pushed_awaiting_monte: InboxQueue
     published_awaiting_verdict: InboxQueue
 
+    # Laps already finished — not a fifth queue, because nothing is waiting behind it. It is
+    # the complement of queue 4 over the same join: a draft that went live whose post now
+    # carries a verdict has been all the way round, generate → push → publish → rule.
+    #
+    # **It is a count of laps, never a score.** Nothing about it ranks or rates a template,
+    # draft or post; it says only whether the machine has ever run end to end. Today it is 0,
+    # and that 0 is the point — see the route.
+    closed_circuits: int
+
 
 # An inbox label identifies a row; it is not a preview. LinkedIn posts in this corpus average
 # ~818 characters, and four queues of that would be prose with the queue buried in it.
@@ -434,6 +443,12 @@ def inbox(session: SessionDep) -> Inbox:
     Queues 2, 3 and 4 therefore partition the drafts by the two timestamps: not pushed, pushed
     but not live, live but not judged. No draft is ever in two of them, and there is no status
     column that could disagree.
+
+    `closed_circuits` is the fifth thing here and the only one that is not a queue: laps
+    already completed, which is queue 4's join with the verdict present instead of absent. It
+    is **0** against today's database, and reporting that 0 is the point — four empty queues
+    are equally consistent with a circuit that has never run and one that is fully cleared,
+    and until this number existed nothing on the page told them apart.
     """
     # `latest_versions` filtered to PROPOSED — the same definition `GET /templates?status=`
     # now serves, so the page and the list endpoint cannot disagree about what is awaiting
@@ -461,6 +476,21 @@ def inbox(session: SessionDep) -> Inbox:
         .where(col(Draft.went_live_at).is_not(None), col(Post.verdict).is_(None))
     ).all()
 
+    # The same join and the same lineage predicate as queue 4 with `verdict` flipped, so the
+    # two cannot disagree about what a lap is: a post is either still waiting on a ruling or
+    # its circuit is closed. Deliberately not folded into one partitioned read — that would
+    # rewrite a working query for no gain.
+    #
+    # ponytail: `len` over the join rows, not `count(distinct Draft.id)`. `zernio_post_id` and
+    # `late_post_id` are one-to-one in practice — `push_draft` writes one, `stamp_published`
+    # matches one — so a fan-out would be a data bug rather than a lap counted twice. Ceiling
+    # if that ever stops holding: count distinct drafts, since N is defined over drafts.
+    closed = session.exec(
+        select(Post, Draft)
+        .join(Draft, col(Draft.zernio_post_id) == col(Post.late_post_id))
+        .where(col(Draft.went_live_at).is_not(None), col(Post.verdict).is_not(None))
+    ).all()
+
     return Inbox(
         proposals_awaiting_review=_queue(proposals),
         built_awaiting_push=_queue(
@@ -486,6 +516,7 @@ def inbox(session: SessionDep) -> Inbox:
                 if d.went_live_at is not None
             ]
         ),
+        closed_circuits=len(closed),
     )
 
 
