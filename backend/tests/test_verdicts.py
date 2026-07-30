@@ -12,6 +12,7 @@ from app.db import get_session
 from app.main import VERDICT_NOTE_MAX, app
 from app.metrics import sync_metrics
 from app.models.post import Post, Verdict
+from tests.test_inbox import a_lap
 from tests.test_metrics import FakeZernio, analytics_post
 
 
@@ -70,6 +71,72 @@ def test_a_verdict_is_resettable(session):
     assert second["verdict"] == "mixed"
     assert second["verdict_note"] == "Reach only, no replies."
     assert second["verdict_at"] >= first["verdict_at"]
+    app.dependency_overrides.clear()
+
+
+def test_a_verdict_can_be_cleared(session):
+    """A ruling is retractable, not only changeable.
+
+    `{"verdict": null}` is the documented clear (PRD.md:178). The note goes with it: a note is
+    the *reason for a ruling*, so leaving one behind after the ruling is gone would orphan it —
+    and `generation.verdict_lessons` reads notes, not verdicts, so an orphan note would keep
+    teaching the generator from a judgement nobody holds any more.
+    """
+    post = saved(session)
+    client = client_with(session)
+
+    client.post(f"/posts/{post.id}/verdict", json={"verdict": "worked", "note": "Real comments."})
+    # A note sent alongside the clear is discarded too, not stored against no ruling.
+    body = client.post(
+        f"/posts/{post.id}/verdict", json={"verdict": None, "note": "changed my mind"}
+    ).json()
+
+    assert body["verdict"] is None
+    assert body["verdict_note"] == ""
+    assert body["verdict_at"] is None
+
+    session.refresh(post)
+    assert post.verdict is None
+    assert post.verdict_note == ""
+    assert post.verdict_at is None
+    app.dependency_overrides.clear()
+
+
+def test_an_empty_body_does_not_clear_a_ruling(session):
+    """The whole reason `verdict` stays required rather than becoming `Verdict | None = None`.
+
+    An optional-with-default field would turn `{}` — an empty body, or a request that misspelt
+    the key — into a silent wipe of a human's judgement. It is a 422 instead.
+    """
+    post = saved(session)
+    client = client_with(session)
+    client.post(f"/posts/{post.id}/verdict", json={"verdict": "worked", "note": "Real comments."})
+
+    empty = client.post(f"/posts/{post.id}/verdict", json={})
+    mistyped = client.post(f"/posts/{post.id}/verdict", json={"verdit": None, "note": ""})
+
+    assert empty.status_code == 422
+    assert mistyped.status_code == 422
+
+    session.refresh(post)
+    assert post.verdict is Verdict.WORKED
+    assert post.verdict_note == "Real comments."
+    app.dependency_overrides.clear()
+
+
+def test_clearing_a_verdict_returns_the_post_to_the_inbox(session):
+    """Queue 4 is `went_live_at is not null and verdict is null`, so a cleared post is waiting
+    on a human again — which is the observable point of being able to retract a ruling."""
+    _, post = a_lap(session, verdict=Verdict.WORKED)
+    client = client_with(session)
+
+    before = client.get("/inbox").json()["published_awaiting_verdict"]
+    cleared = client.post(f"/posts/{post.id}/verdict", json={"verdict": None, "note": ""})
+    after = client.get("/inbox").json()["published_awaiting_verdict"]
+
+    assert cleared.status_code == 200
+    assert [item["id"] for item in before["items"]] == []
+    assert [item["id"] for item in after["items"]] == [post.id]
     app.dependency_overrides.clear()
 
 
