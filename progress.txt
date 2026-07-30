@@ -1269,3 +1269,28 @@ retry. Left alone because it is out of US-007's scope and because Azure image ca
 manually, one at a time, so cadence limits are unlikely. **Trigger to fix: any batch or
 autonomous path that generates more than one AI visual per minute** — at which point a failed
 call also means a wasted paid request.
+
+### US-008 — Assets page with guarded delete (done 2026-07-30)
+
+`/assets` page (`app/assets/AssetLibrary.tsx` + `page.tsx`), nav entry added, plus
+`DELETE /assets/{id}` on the backend. Built entirely on the existing layer — US-002/004
+components, US-003's `ApiResult` helpers, no bare `fetch` reintroduced.
+
+**The 409-if-referenced guard is two-stage, and it has to be.** A naive
+`jsonb_each_text(draft.visual_values) WHERE value = '7'` matches *any* slot whose value is the
+string `"7"` — including a **text** slot where a human typed 7, which would falsely block a
+delete forever. So SQL is a broad pre-filter and Python then confirms the match is really an
+`image_url` slot (`assets.py:351`, `:365`). Both false-positive cases are pinned by test:
+`test_a_text_slot_that_happens_to_hold_the_id_is_not_a_reference` and
+`test_an_untyped_slot_holding_the_id_is_not_a_reference` (VISUAL row 556 has untyped slots).
+`test_a_draft_on_a_different_asset_does_not_block_the_delete` guards the other direction.
+
+Also handled: `visual_values` stores the id as the **string** `"7"` while a template slot's
+`default_asset_id` may be the JSON **number** `7`. `->> 'default_asset_id'` casts to text so one
+predicate covers both — commented at `assets.py:283-286`.
+
+Delete really removes the file from disk
+(`test_deleting_an_asset_removes_the_row_and_the_file_from_disk`), behind a focus-trapped
+confirm Dialog naming the consequence. Unknown id is a 404.
+
+Backend 295 -> **304**. Frontend 18 -> **32** across 4 files.
