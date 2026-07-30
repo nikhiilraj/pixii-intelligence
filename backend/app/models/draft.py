@@ -56,6 +56,17 @@ class Draft(SQLModel, table=True):
     # Set by the publishing slice. Absent means this draft never left the building.
     zernio_post_id: str | None = Field(default=None, index=True)
     pushed_at: datetime | None = None
+    # When the pushed draft was observed live on the platform. NULL is the meaningful state:
+    # pushed, but Monte has not published it yet.
+    #
+    # **Named `went_live_at`, not `published_at`.** `Post.published_at` already exists, and a
+    # `select(Draft, Post)` merge carrying two identically-named columns resolves to whichever
+    # one the query happens to pick — wrong silently, with no error anywhere. The different
+    # name makes that bug impossible to write.
+    #
+    # Together with `pushed_at` this derives every state a draft can be in, which is why there
+    # is no status column: a third source of truth could disagree with these two.
+    went_live_at: datetime | None = None
 
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
