@@ -5,11 +5,10 @@ import { cn } from "@/lib/cn";
    a loading.tsx here purely to give this a call site would be scope creep — the route
    shells belong to the slice that redesigns them.
 
-   ponytail: Tailwind's built-in `animate-pulse` (2s) rather than the PRD's 1.6s. Matching
-   1.6s means overriding `--animate-pulse` in globals.css, which is US-001's file, for
-   400ms nobody can see. Upgrade path: add `--animate-pulse: pulse 1.6s ...` to the @theme
-   block when globals.css is next touched. `prefers-reduced-motion` already zeroes this
-   globally, so there is nothing per-component to add for it. */
+   `animate-pulse` now runs at the PRD's 1.6s: US-017 took the upgrade path this comment
+   used to name and overrode `--animate-pulse` in globals.css's @theme block, so the utility
+   keeps Tailwind's `pulse` keyframe and only the timing moved. `prefers-reduced-motion` zeroes
+   it from that same file, so there is nothing per-component to add for it. */
 export function Skeleton({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div

@@ -15,6 +15,14 @@ import { cn } from "@/lib/cn";
  * The active tab is marked with an `--accent` bottom border. That is a fill-like use of the
  * brand orange and is correct; the label itself stays on `--text` (US-001: never `--accent`
  * on text). No per-component focus classes — globals.css draws the one ring.
+ *
+ * One measured constraint on where a TabsList may sit. `--accent` is 3.09:1 on `--bg` and
+ * 3.24:1 on `--surface`, but only 2.85:1 on `--surface-2` — under the 3:1 floor for a state
+ * indicator. The active-tab border is load-bearing, so a TabsList belongs on `--bg` or
+ * `--surface`, not inside a cream `--surface-2` card. If one ever has to, switch this border
+ * to `--accent-text` (4.52:1 on cream light, 4.87:1 dark), which is what the focus ring in
+ * globals.css already does for exactly this reason. Active state does not rest on the border
+ * alone in any case — the label goes `--text-muted` to `--text`, 5.20:1 to 15.52:1.
  */
 
 export const Tabs = TabsPrimitive.Root;

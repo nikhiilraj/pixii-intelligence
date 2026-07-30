@@ -116,10 +116,15 @@
   --shadow-overlay: 0 4px 16px rgb(0 0 0 / 0.08);
 
   /* 120ms micro is the default for a bare `transition`; 200ms structural is
-     `duration-200`. Both share the one easing curve. */
+     `duration-[var(--duration-structural)]`. Both share the one easing curve. */
   --default-transition-duration: 120ms;
   --default-transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  /* The PRD's 1.6s skeleton pulse, overriding Tailwind's 2s default. The upgrade path
+     skeleton.tsx named — "when globals.css is next touched" — which is now. Keyframe name
+     stays `pulse`; Tailwind already defines it, so only the timing changes. */
+  --animate-pulse: pulse 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
 body {
@@ -135,15 +140,36 @@ body {
   outline-offset: 2px;
 }
 
+/* recharts@3 renders axis tick labels as SVG <text> and takes their colour from the axis's
+   own `stroke` prop, so `<XAxis stroke="currentColor" opacity={0.5} />` puts --text at 50%
+   on them. Measured, that is 3.31:1 on light --bg — a real AA failure on real text, and the
+   one contrast failure this slice found in the running app.
+
+   Fixed here rather than in the chart, because `opacity` and `fill` arrive as SVG
+   *presentation attributes*, which any author rule outranks. Verified over CDP on /posts in
+   both themes: computed tick fill went #191917@50% -> #6b635a (5.64:1) light and
+   #edebe4@50% -> #98958a (6.25:1) dark, with the attribute still reading 0.5. So one rule in
+   the tokens file fixes every chart at once and cannot be forgotten by the next one added.
+
+   Scoped to the tick text alone. The grid line is decorative and currentColor@12% (1.28:1)
+   already matches --border (1.33:1), so restyling it would buy nothing. */
+.recharts-cartesian-axis-tick-value {
+  fill: var(--text-muted);
+  opacity: 1;
+}
+
 /* Zero every duration, in the tokens file rather than per-component.
-   0.01ms rather than 0 so transitionend still fires. */
+   0.01ms rather than 0 so transitionend still fires. Delays are zeroed too: a 0.01ms
+   transition behind a 200ms delay still reads as motion-with-a-wait. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
     scroll-behavior: auto !important;
   }
 }

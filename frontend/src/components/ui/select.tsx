@@ -22,13 +22,21 @@ import { cn } from "@/lib/cn";
  *    changes cannot shrink it silently.
  *
  * Motion is enter-only, via `@starting-style` (Tailwind v4's `starting:` variant) plus a
- * plain transition on the token duration and easing. It is therefore zeroed by the
- * `prefers-reduced-motion` block in globals.css, which overrides `transition-duration`
+ * plain transition on `--duration-structural` and `--ease-standard`. It is therefore zeroed by
+ * the `prefers-reduced-motion` block in globals.css, which overrides `transition-duration`
  * globally — a keyframe animation would need its own opt-out.
- * ponytail: no exit animation. Radix's Presence waits on `animationend`, not on a
- * transition, so an exit would mean hand-written keyframes and a parallel animation system
- * the brief rules out. Closing is instant. Ceiling: add `@keyframes` in globals.css keyed on
- * `data-[state=closed]` if the snap ever reads as a glitch.
+ *
+ * Why not drive this off Radix's own `data-state`, which is the general rule: `data-state` can
+ * animate neither end of this component's life. The content is portalled in *already carrying*
+ * `data-state="open"`, so there is no state change for an enter transition to interpolate from
+ * — that is exactly the gap `@starting-style` fills. And Radix's Presence gates unmount on
+ * `animationend`, not `transitionend`, so `data-state="closed"` cannot drive an exit
+ * transition either.
+ * ponytail: so no exit animation. An exit would mean hand-written keyframes and the parallel
+ * animation system the brief rules out. Closing is instant. Ceiling: add `@keyframes` in
+ * globals.css keyed on `data-[state=closed]` if the snap ever reads as a glitch.
+ * `data-state`/`data-side`/`data-highlighted` still drive every non-motion style here and in
+ * tabs.tsx — the rule holds for state, it is transitions specifically that need the fallback.
  */
 
 function ChevronDown() {
@@ -92,7 +100,7 @@ export function SelectContent({
           // ponytail: no ScrollUpButton/ScrollDownButton — the wheel and the arrow keys both
           // already work, and the buttons only add a mouse affordance.
           "max-h-[min(20rem,var(--radix-select-content-available-height))]",
-          "transition-[opacity,transform] duration-200 ease-standard starting:scale-95 starting:opacity-0",
+          "transition-[opacity,transform] duration-[var(--duration-structural)] ease-standard starting:scale-95 starting:opacity-0",
           className,
         )}
         {...props}
