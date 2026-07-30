@@ -942,10 +942,12 @@ Learned:
   the 14 creator posts are both `MANUAL`. The account is the only discriminator, which is
   why the filter had to be added rather than the existing one reused. The test asserts both
   halves: `account` separates them, `source=manual` returns both.
-- **The corpus holds six accounts, not two.** `Monte Desai` 69 (35 MANUAL + 34 ZERNIO),
-  `Creator inspiration` 14, `pixii.creates` 13, `Pixii_ai` 10, `External creator` 1.
-  **The 24 YouTube/X/legacy rows belong to neither cohort**, so a two-option toggle would
-  have made them unreachable from the browser — the same bug class as the unscoped ranking.
+- **The corpus holds more accounts than cohorts.** `Monte Desai` 69 (35 MANUAL + 34 ZERNIO),
+  `Creator inspiration` 15, `pixii.creates` 13, `Pixii_ai` 10 — six accounts mid-slice, four
+  by the end: the legacy `External creator` row folded into `Creator inspiration` (14 → 15)
+  while this was being built. **The 23 YouTube and X rows belong to neither cohort**, so a
+  two-option toggle would have made them unreachable from the browser — the same bug class
+  as the unscoped ranking it was sent to fix.
   The selector derives its options from the corpus itself and adds an "all accounts" entry;
   only the two cohort names are constants.
 - **The default view is scoped by filtering `initial`, not by refetching.** `page.tsx` still
@@ -1048,3 +1050,11 @@ and the breakdown is not. `upsert_linkedin_posts` matches **unscoped by source**
 content-matched this post would zero the one figure genuinely known. Matching another
 creator's post while scraping Monte's profile is unlikely, and fixing it is outside this task
 — but the whole point of the change was preserving that 1240, so the path is named here.
+
+Verified against the running app: `/posts?account=Monte+Desai` 69, `Creator+inspiration` 15
+(the legacy row folded in during the slice), `pixii.creates` 13, `Pixii_ai` 10, unfiltered
+107. The corpus page server-renders 69 rows — the creator top of 4331 is absent from the
+default view and Monte's 185 leads it — with five cohort options derived from the data. The
+templates page tags 10 proposals `borrowed from a creator`; the other 37 rows carry no
+`body.cohort` at all (extracted before the field existed, or hand-authored), so nothing is
+claimed for them. `make check` green at 258 tests.
