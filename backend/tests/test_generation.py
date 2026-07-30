@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
+from app.api_drafts import _renderer
 from app.config import settings
 from app.db import get_session
 from app.generation import (
@@ -628,17 +629,45 @@ def test_a_retired_recorded_version_still_redraws(session):
     withdrawn. `usable_templates` is what keeps a retired template out of everything that
     *chooses* one; refusing here would instead mean an operator retiring a template silently
     broke the redraw button on every draft already built from it.
+
+    A newer live version has to exist for this to prove anything — with one version in the
+    family, "recorded" and "latest" are the same row and the old behaviour would pass. So:
+    v2 makes the draft, v3 is authored, *then* v2 is retired. `edit_template` refuses a
+    retired row, which is why the retirement comes last.
     """
     _, _, visual = library(session)
+    v2 = edited_visual(session, visual, "v2")
+    approve(session, v2)
     draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
-    retire(session, visual)
+    edited_visual(session, v2, "v3")
+    retire(session, v2)
 
     captured: dict = {}
     regenerate_visual(session, draft, renderer_capturing(captured, png=b"STILLDRAWN"))
 
     assert draft.visual_error is None
     assert draft.visual_image == b"STILLDRAWN"
-    assert "$19k/mo" in captured["html"]
+    assert "<i>v2</i>" in captured["html"]
+    assert "<i>v3</i>" not in captured["html"]
+
+
+def test_the_renderer_is_chosen_from_the_recorded_version_too(session):
+    """Picking the renderer off the latest version is the same bug one column over.
+
+    A draft made from a v2 that declares `renderer: "html"` must redraw through the HTML
+    renderer even after v3 switches the family to `ai` — otherwise the redraw hands an HTML
+    template to the image model, or the reverse, on the strength of an edit the draft has no
+    part in.
+    """
+    _, _, visual = library(session)
+    v2 = edited_visual(session, visual, "v2")
+    approve(session, v2)
+    draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    edit_template(session, v2, body={"renderer": "ai", "prompt": "a picture of {big_number}"})
+
+    html_renderer, image_renderer = object(), object()
+
+    assert _renderer(session, draft, html_renderer, image_renderer) is html_renderer
 
 
 def test_a_recorded_version_that_is_gone_refuses_rather_than_redrawing_another(session):
