@@ -23,6 +23,7 @@ const NAV = [
   { href: "/", label: "Status" },
   { href: "/posts", label: "Corpus" },
   { href: "/templates", label: "Templates" },
+  { href: "/assets", label: "Assets" },
   { href: "/studio", label: "Studio" },
   { href: "/scoreboard", label: "Scoreboard" },
 ];

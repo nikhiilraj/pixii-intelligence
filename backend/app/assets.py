@@ -5,11 +5,13 @@ import mimetypes
 from pathlib import Path
 
 from PIL import Image
-from sqlmodel import Session
+from sqlalchemy import text
+from sqlmodel import Session, col, select
 
 from app.config import settings
 from app.media import _suffix
 from app.models.asset import Asset
+from app.models.draft import Draft
 from app.models.template import Template
 
 # Long-edge ceiling for a stored asset. Purely about disk and upload time: the composite
@@ -43,6 +45,23 @@ class UnresolvableAsset(RuntimeError):
     `<img src>` it cannot load, which renders an empty box and reports success — the
     failure that retired `stat-hero` v1.
     """
+
+
+class AssetInUse(RuntimeError):
+    """Something still points at this asset, so removing its file would break a render.
+
+    Carries the holders **by name**. "This asset is referenced" with nothing named is a dead
+    end for whoever has to decide what to do next; naming the draft or template is the
+    difference between a refusal and an instruction.
+    """
+
+    def __init__(self, asset_id: int, holders: list[str]) -> None:
+        self.holders = holders
+        super().__init__(
+            f"asset {asset_id} is still referenced by {', '.join(holders)}. "
+            "Deleting it removes the only copy of the file from disk, so that reference "
+            "would resolve to nothing and render as an empty box. Point it elsewhere first."
+        )
 
 
 class UnreadableUpload(ValueError):
@@ -255,3 +274,121 @@ def _embeddable(session: Session, slot: str, ref: str) -> str:
         "A non-base64 data: URI cannot be passed through either: slot values are escaped "
         "as markup, so it would reach the browser mangled and render as an empty box"
     )
+
+
+# The two places an asset id is stored, narrowed in Postgres so only candidate rows are read
+# back. A draft holds one as a *value* in `visual_values` (JSONB object, slot -> value); a
+# template holds one under a slot's optional `default_asset_id` (JSONB array of objects).
+#
+# `jsonb_each_text` / `jsonb_array_elements` compare as text on purpose: `visual_values`
+# arrives from `_embeddable`, which accepts an asset reference when `ref.isdigit()`, so the
+# id is stored as the string `"7"`. `->> 'default_asset_id'` casts a JSON number to text too,
+# so a slot written as `{"default_asset_id": 7}` matches the same predicate as `"7"`.
+_DRAFT_HOLDS_ASSET = text(
+    "EXISTS (SELECT 1 FROM jsonb_each_text(draft.visual_values) AS v WHERE v.value = :asset_ref)"
+)
+_TEMPLATE_HOLDS_ASSET = text(
+    "EXISTS (SELECT 1 FROM jsonb_array_elements(template.slots) AS s"
+    " WHERE s->>'default_asset_id' = :asset_ref)"
+)
+
+
+def _image_slot_names(session: Session, draft: Draft) -> list[str]:
+    """The `image_url` slots of the visual template a draft was generated from.
+
+    Read off the template rather than guessed from the slot's name. `left_image_url` reads as
+    an asset and `subject`, `logo` and `hero` do not, so a name heuristic here would
+    reintroduce the same class of silent wrongness `WRITABLE_SLOT_TYPES` exists to close.
+    Lineage keys on `(family, version)`, never a row id — editing the template writes a new
+    row, and looking it up by id would find the wrong version.
+    """
+    if draft.visual_family is None or draft.visual_version is None:
+        return []
+    visual = session.exec(
+        select(Template).where(
+            Template.family_id == draft.visual_family,
+            Template.version == draft.visual_version,
+        )
+    ).first()
+    if visual is None:
+        return []
+    # `.get`, never `slot["type"]`: VISUAL rows authored before `type` existed carry no key.
+    return [str(slot.get("name")) for slot in visual.slots if slot.get("type") == "image_url"]
+
+
+def holders_of(session: Session, asset_id: int) -> list[str]:
+    """Everything that still points at this asset, named so a refusal is actionable.
+
+    Two holders exist, and they are checked against the real shapes rather than assumed:
+
+    - **a draft**, whose `visual_values` holds the id in an `image_url` slot. The SQL finds
+      drafts holding the id as *any* value; the slot type is then confirmed against the
+      draft's own visual template, because a `big_number` slot reading `"7"` is a coincidence
+      and blaming it would name the wrong holder.
+    - **a template**, whose slot carries `default_asset_id`. That key is a 4th optional key in
+      the `slots` JSONB and nothing writes it yet — US-009 does. The guard is here now because
+      the *file* deletion is what is irreversible, and a guard added after the writer is a
+      guard that was missing for one slice.
+
+    Templates are not filtered by status. A RETIRED version is invisible to
+    `usable_templates`, but `generation._resolve` fetches a template by caller-supplied id and
+    checks `kind` only, so a retired row is still reachable today (recorded in progress.txt).
+    ponytail: no status filter, so nothing depends on that defect being fixed first. If it
+    ever makes a retired template hold an asset hostage, filter RETIRED out then.
+    """
+    ref = str(asset_id)
+    holders: list[str] = []
+
+    drafts = session.exec(
+        select(Draft)
+        .where(_DRAFT_HOLDS_ASSET.bindparams(asset_ref=ref))
+        .order_by(col(Draft.id))
+    ).all()
+    for draft in drafts:
+        held = [
+            name
+            for name in _image_slot_names(session, draft)
+            if str(draft.visual_values.get(name, "")).strip() == ref
+        ]
+        if held:
+            holders.append(f"draft {draft.id} (slot {held[0]!r})")
+
+    templates = session.exec(
+        select(Template)
+        .where(_TEMPLATE_HOLDS_ASSET.bindparams(asset_ref=ref))
+        .order_by(col(Template.id))
+    ).all()
+    for template in templates:
+        held = [
+            str(slot.get("name"))
+            for slot in template.slots
+            if str(slot.get("default_asset_id", "")) == ref
+        ]
+        holders.append(
+            f"template {template.name!r} v{template.version} "
+            f"({template.status}, default for slot {held[0]!r})"
+        )
+
+    return holders
+
+
+def delete_asset(session: Session, asset: Asset) -> None:
+    """Remove an asset from the library and its file from disk.
+
+    Raises `AssetInUse` when a draft or template still points at it. The stored file is the
+    only copy — nothing else in this application holds the bytes — so this is the one
+    irreversible operation the asset library has.
+
+    **The row goes first and the file second, deliberately.** If the unlink fails after the
+    commit, what is left is a file with no row: an orphan nobody looks at, which a re-upload
+    of the same bytes simply overwrites. The other order risks a row with no file, which is
+    the empty-box failure this codebase keeps closing.
+    """
+    holders = holders_of(session, asset.id or 0)
+    if holders:
+        raise AssetInUse(asset.id or 0, holders)
+
+    path = asset_path(asset)
+    session.delete(asset)
+    session.commit()
+    path.unlink(missing_ok=True)
