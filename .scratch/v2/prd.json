@@ -34,11 +34,12 @@
     "description": "getJson (lib/api.ts:61-69) discards status and message and returns null on every failure, so no truthful error state can be built on it. Return a discriminated result instead, add postJson, and migrate the 5 hand-rolled mutation bodies (Studio.tsx:44, AddExternal.tsx:25, TemplateManager.tsx:105 and :126, ExcludeToggle.tsx:23) plus page.tsx:11 onto the helpers \u2014 each is ~15 lines of setBusy/fetch/res.ok/detail/catch/setError repeated. Also delete the duplicate API_BASE re-declared in page.tsx. Prerequisite for US-016, not polish.",
     "acceptanceCriteria": [
       "the helper distinguishes ok / http-error / network-error, carrying status and the API's detail message",
+      "FastAPI's list-shaped validation detail renders as words, never [object Object]",
       "postJson exists and all 6 call sites use the helpers; no inline fetch remains in components",
       "API_BASE is declared once",
-      "a forced 500 renders an error state, NOT an empty state \u2014 asserted",
-      "pnpm tsc && pnpm lint && pnpm build green",
-      "slice tests green"
+      "Vitest + @testing-library/react + jsdom added as DEV deps with a `test` script, and `pnpm test` appended to the frontend CI job",
+      "a forced 500 renders an error state, NOT an empty state \u2014 asserted in a real test",
+      "pnpm tsc && pnpm lint && pnpm build && pnpm test green"
     ],
     "priority": 3,
     "passes": false
@@ -50,10 +51,9 @@
     "acceptanceCriteria": [
       "components/ui/{select,dialog,tabs,tooltip}.tsx and a toast mount exist and are react-compiler clean",
       "Explorer's platform / family / since / sort controls use Select and still filter correctly",
-      "keyboard operation asserted: open, arrow, type-ahead, escape, and focus returns to the trigger",
       "a failed mutation raises a toast",
-      "pnpm tsc && pnpm lint && pnpm build green",
-      "slice tests green"
+      "keyboard behaviour (open, arrow, type-ahead, escape, focus return) is inherited from Radix and NOT re-asserted here \u2014 it is upstream-tested and jsdom only approximates focus. Verify it by hand and state in the report exactly what was exercised.",
+      "pnpm tsc && pnpm lint && pnpm build && pnpm test green"
     ],
     "priority": 4,
     "passes": false
@@ -236,10 +236,10 @@
     "description": "There is no loading.tsx or error.tsx anywhere and no Suspense; loading is an ad-hoc busy useState and errors are four copies of a local red <p>. Now that US-003 makes failure distinguishable from emptiness, give every page real states: Skeleton while loading, a purposeful empty state saying what to do next, and an error state with a retry reporting the actual failure. An empty state shown for a failed request is the specific bug this slice exists to prevent.",
     "acceptanceCriteria": [
       "every route has loading and error boundaries plus a purposeful empty state",
-      "a failed request never renders as an empty state \u2014 asserted",
-      "retry actually re-requests",
+      "a failed request never renders as an empty state \u2014 asserted in Vitest, extending the US-003 test",
+      "retry actually re-requests \u2014 asserted",
       "make check green",
-      "slice tests green"
+      "pnpm test green"
     ],
     "priority": 16,
     "passes": false
@@ -249,11 +249,12 @@
     "title": "Motion and accessibility sweep",
     "description": "Apply token motion durations and easing to state transitions, and sweep accessibility: visible focus rings, full keyboard reachability, correct ARIA on custom controls, AA contrast on the cream palette in both themes, prefers-reduced-motion honoured. Include the recharts surfaces, which ship their own defaults.",
     "acceptanceCriteria": [
-      "every interactive element is keyboard reachable with a visible focus ring",
+      "every interactive element is keyboard reachable with a visible focus ring \u2014 verified by hand, with the report naming what was exercised",
       "prefers-reduced-motion disables transitions",
-      "text and interactive contrast meet AA on both themes, measured not assumed",
+      "text and interactive contrast meet AA on both themes \u2014 computed ratios reported, not asserted in a test (no browser in CI)",
+      "no contrast regression against the US-001 token ratios (accent 3.09:1 fill-only, accent-text 5.80:1)",
       "make check green",
-      "slice tests green"
+      "pnpm test green"
     ],
     "priority": 17,
     "passes": false
