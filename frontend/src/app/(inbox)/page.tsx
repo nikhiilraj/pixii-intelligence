@@ -195,24 +195,25 @@ export default async function InboxPage() {
               title="Built, awaiting push"
               gate="Drafts written in Studio that have never reached Zernio."
               queue={inbox.data.built_awaiting_push}
-              /* ponytail: `/studio`, not `/studio?draft=1`. Studio holds one in-session draft in
-                 local state and has no way to load an existing one, and teaching it to would be a
-                 second page's worth of work in a slice that owns this one. `GET /drafts/{id}`
-                 already exists, so the ceiling is a `?draft=` param read in studio/page.tsx. */
-              href={() => "/studio"}
+              /* The item id IS the draft id — `InboxItem` carries the id of whatever the gate
+                 acts on, which for this queue is the row `/drafts/{id}/push` takes. So the link
+                 opens that draft in Studio, where the push button is. It pointed at a bare
+                 `/studio` until US-012, which was a link to a page that was empty on every
+                 visit: Studio had no way to load an existing draft. */
+              href={(item) => `/studio?draft=${item.id}`}
               empty="No draft is waiting to be pushed. A draft written in Studio waits here until it is pushed to Zernio — nothing in this app ever publishes on its own."
             />
             <Queue
               title="Pushed, awaiting Monte"
               gate="In Zernio as a draft, not yet live. Publishing is a human act performed there, not here — this app can only notice that it happened."
               queue={inbox.data.pushed_awaiting_monte}
-              /* ponytail: this is the one gate with no in-app destination — the clearing action
-                 happens in Zernio's own dashboard. `InboxItem` carries no `zernio_post_id` and the
-                 only Zernio URL in this repo is the API root (`config.py:71`), so there is no
-                 honest external link to build; a synthesized dashboard URL would be a guess that
-                 looks like a fact. Studio is where the draft came from, so it is where the trail
-                 resumes. Ceiling: carry `zernio_post_id` on the item and link the real draft. */
-              href={() => "/studio"}
+              /* Still the one gate with no in-app destination — the clearing act happens in
+                 Zernio's own dashboard, the only Zernio URL in this repo is the API root
+                 (`config.py:71`), and a synthesized dashboard URL would be a guess that looks
+                 like a fact. What US-012 could fix is the near end: the item id is this draft's
+                 id, so the trail now resumes at the exact draft rather than at an empty Studio,
+                 and that page states the `zernio_post_id` it is waiting on. */
+              href={(item) => `/studio?draft=${item.id}`}
               empty="No draft is waiting on a publish. A draft pushed to Zernio waits here until it goes live."
             />
             <Queue
