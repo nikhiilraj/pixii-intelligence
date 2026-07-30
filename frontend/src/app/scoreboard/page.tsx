@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { BackendUnreachable } from "@/components/backend-unreachable";
+import { ApiFailureNotice } from "@/components/api-failure";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { getJson } from "@/lib/api";
@@ -24,17 +24,18 @@ type Row = {
 const nf = new Intl.NumberFormat("en-US");
 
 export default async function ScoreboardPage() {
-  const rows = await getJson<Row[]>("/metrics/templates");
+  const result = await getJson<Row[]>("/metrics/templates");
 
-  if (rows === null) {
+  if (!result.ok) {
     return (
       <main className="mx-auto max-w-5xl px-6 py-16">
         <h1 className="text-title font-semibold tracking-tight">Scoreboard</h1>
-        <BackendUnreachable className="mt-8" />
+        <ApiFailureNotice failure={result} className="mt-8" />
       </main>
     );
   }
 
+  const rows = result.data;
   const threshold = rows[0]?.min_sample_size ?? 5;
   const withEvidence = rows.filter((r) => r.sample_count > 0);
   // Grouped by kind, ordered by name — deliberately NOT by performance. Ranking these

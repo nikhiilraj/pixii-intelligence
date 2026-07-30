@@ -1,4 +1,4 @@
-import { BackendUnreachable } from "@/components/backend-unreachable";
+import { ApiFailureNotice } from "@/components/api-failure";
 import { getJson, type Post, type Template } from "@/lib/api";
 
 import AddExternal from "./AddExternal";
@@ -20,13 +20,18 @@ export default async function PostsPage() {
         engagement rate sit alongside as secondary measures.
       </p>
 
-      {posts === null ? (
-        <BackendUnreachable className="mt-8" />
-      ) : (
+      {posts.ok ? (
         <>
           <AddExternal />
-          <Explorer initial={posts} templates={templates ?? []} />
+          {/* The template list only populates the family filter, so a failure there does not
+              cost the page its corpus — but it is reported rather than passed off as an empty
+              list. `templates ?? []` used to make a failed read indistinguishable from an
+              account with no templates, which is the bug this slice exists to remove. */}
+          {!templates.ok && <ApiFailureNotice failure={templates} className="mt-4" />}
+          <Explorer initial={posts.data} templates={templates.ok ? templates.data : []} />
         </>
+      ) : (
+        <ApiFailureNotice failure={posts} className="mt-8" />
       )}
     </main>
   );

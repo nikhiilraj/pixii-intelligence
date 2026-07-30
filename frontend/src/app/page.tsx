@@ -1,27 +1,13 @@
-import { BackendUnreachable } from "@/components/backend-unreachable";
+import { ApiFailureNotice } from "@/components/api-failure";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { API_BASE } from "@/lib/api";
+import { getJson } from "@/lib/api";
 
 type Health = {
   status: string;
   database: boolean;
   credentials: Record<string, boolean>;
 };
-
-/* ponytail: still a local fetch rather than getJson, because getJson collapses every
-   failure to null and this page needs to distinguish "down" from "empty" — which is
-   exactly what US-003 rebuilds. Left for that slice to migrate; the duplicate local
-   API_BASE it also has to delete is already gone, since BackendUnreachable owns it now. */
-async function fetchHealth(): Promise<Health | null> {
-  try {
-    const res = await fetch(`${API_BASE}/health`, { cache: "no-store" });
-    if (!res.ok) return null;
-    return (await res.json()) as Health;
-  } catch {
-    return null;
-  }
-}
 
 function Row({ label, ok }: { label: string; ok: boolean }) {
   return (
@@ -33,7 +19,7 @@ function Row({ label, ok }: { label: string; ok: boolean }) {
 }
 
 export default async function Home() {
-  const health = await fetchHealth();
+  const health = await getJson<Health>("/health");
 
   return (
     <main className="mx-auto flex min-h-screen max-w-xl flex-col justify-center px-6 py-16">
@@ -47,14 +33,17 @@ export default async function Home() {
           System status
         </h2>
         <Card className="mt-3 px-4 py-1">
-          <Row label="Backend API" ok={health !== null} />
-          <Row label="Database" ok={health?.database ?? false} />
-          {health &&
-            Object.entries(health.credentials).map(([name, present]) => (
+          {/* "Backend API: ok" now means the API answered, not merely that something was
+              listening — a 500 from /health leaves this row red and names the status below,
+              where the old local fetch and the old getJson both reported it as unreachable. */}
+          <Row label="Backend API" ok={health.ok} />
+          <Row label="Database" ok={health.ok && health.data.database} />
+          {health.ok &&
+            Object.entries(health.data.credentials).map(([name, present]) => (
               <Row key={name} label={`Credentials — ${name}`} ok={present} />
             ))}
         </Card>
-        {!health && <BackendUnreachable className="mt-4" />}
+        {!health.ok && <ApiFailureNotice failure={health} className="mt-4" />}
       </section>
     </main>
   );

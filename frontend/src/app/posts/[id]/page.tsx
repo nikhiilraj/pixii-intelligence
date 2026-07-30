@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { ApiFailureNotice } from "@/components/api-failure";
 import { API_BASE, getJson, type Post } from "@/lib/api";
 
 import ExcludeToggle from "./ExcludeToggle";
@@ -24,10 +25,24 @@ function isVideo(path: string): boolean {
 
 export default async function PostDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const post = await getJson<Post & { local_media_path: string | null }>(`/posts/${id}`);
+  const result = await getJson<Post & { local_media_path: string | null }>(`/posts/${id}`);
 
-  if (!post) notFound();
+  // Only an actual 404 is a missing post. Every other failure used to arrive here as `null`
+  // too, so a 500 or a dead backend rendered "this page could not be found" — a wrong answer
+  // that looks like a right one, and the reason a page needs the status rather than a null.
+  if (!result.ok) {
+    if (result.kind === "http" && result.status === 404) notFound();
+    return (
+      <main className="mx-auto max-w-3xl px-6 py-16">
+        <Link href="/posts" className="text-sm opacity-60 hover:underline">
+          ← Corpus
+        </Link>
+        <ApiFailureNotice failure={result} className="mt-6" />
+      </main>
+    );
+  }
 
+  const post = result.data;
   const mediaUrl = post.local_media_path ? `${API_BASE}/media/${post.local_media_path}` : null;
 
   return (

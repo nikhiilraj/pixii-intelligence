@@ -12,7 +12,7 @@ import {
   YAxis,
 } from "recharts";
 
-import { API_BASE, type Post, type Template } from "@/lib/api";
+import { getJson, type Post, type Template } from "@/lib/api";
 
 const SORTS = [
   "engaged_actions",
@@ -84,6 +84,7 @@ export default function Explorer({
     order: "desc",
   });
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const platforms = useMemo(
     () => Array.from(new Set(initial.map((p) => p.platform))).sort(),
@@ -110,13 +111,19 @@ export default function Explorer({
     if (next.account) params.set("account", next.account);
     if (next.family) params.set("template_family", next.family);
     if (next.since) params.set("since", next.since);
-    try {
-      const res = await fetch(`${API_BASE}/posts?${params}`, { cache: "no-store" });
-      setPosts(res.ok ? ((await res.json()) as Post[]) : []);
-    } catch {
-      setPosts([]);
-    } finally {
-      setLoading(false);
+    // Not one of the six call sites this slice was scoped to, but the same bug in its
+    // purest form: `setPosts(res.ok ? json : [])` turned a rejected filter — a 422 naming
+    // the sort column it would not accept — into "no posts match", which is a wrong answer
+    // wearing the shape of a right one. It is now reported and the previous rows are kept,
+    // since throwing them away tells the user even less.
+    const result = await getJson<Post[]>(`/posts?${params}`);
+    setLoading(false);
+
+    if (result.ok) {
+      setPosts(result.data);
+      setError(null);
+    } else {
+      setError(result.message);
     }
   }
 
@@ -213,6 +220,13 @@ export default function Explorer({
         </span>
       </div>
 
+      {/* The fifth copy of this red paragraph. US-004 replaces all five with a toast. */}
+      {error && (
+        <p className="mt-2 text-sm text-red-600 dark:text-red-400">
+          Filter failed: {error} — the rows below are the previous result.
+        </p>
+      )}
+
       {series.length > 1 && (
         <div className="mt-6 h-56 w-full">
           <ResponsiveContainer width="100%" height="100%">
@@ -278,7 +292,9 @@ export default function Explorer({
             ))}
           </tbody>
         </table>
-        {posts.length === 0 && !loading && (
+        {/* Suppressed while `error` is set: "nothing matches" is a claim about the data,
+            and after a failed request there is no data to make it about. */}
+        {posts.length === 0 && !loading && !error && (
           <p className="py-6 text-sm opacity-60">Nothing matches those filters.</p>
         )}
       </div>
