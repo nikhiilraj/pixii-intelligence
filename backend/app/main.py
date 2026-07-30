@@ -26,8 +26,10 @@ from app.metrics import sync_metrics, template_performance
 from app.models.draft import Draft
 from app.models.metric import MetricSnapshot
 from app.models.post import Post, PostSource, Verdict
+from app.models.template import TemplateStatus
 from app.scheduler import shutdown as stop_scheduler
 from app.scheduler import start as start_scheduler
+from app.templates import latest_versions
 from app.zernio import ZernioClient, ZernioResponseError
 
 
@@ -302,6 +304,168 @@ def set_verdict(post_id: int, payload: VerdictIn, session: SessionDep) -> Post:
     session.commit()
     session.refresh(post)
     return post
+
+
+class InboxItem(BaseModel):
+    """One thing waiting at a gate.
+
+    `id` is the id of whatever that gate acts on — a template to review, a draft to push, a
+    post to rule on — so the queue an item came from is also what says which route acts on it:
+    `/templates/{id}/approve`, `/drafts/{id}/push`, `/posts/{id}/verdict`.
+    """
+
+    id: int
+    # A handle for recognising the thing, not the thing itself. See `INBOX_LABEL_MAX`.
+    label: str
+    # When this item entered this gate, and how long it has sat there. **The age is the
+    # point.** A count says a queue is non-empty; "waiting 6 days" says the circuit stalled,
+    # which is the only thing that distinguishes work in progress from work forgotten.
+    waiting_since: datetime
+    age_days: int
+
+
+class InboxQueue(BaseModel):
+    """A gate, what is behind it, and nothing that could be mistaken for a score.
+
+    Deliberately carries no rate, no mean and no ranking, and the queues are not comparable
+    with each other: these are things waiting for a human, not a measure of how anything
+    performed. Nothing in this response may be rendered as performance.
+    """
+
+    count: int
+    items: list[InboxItem]
+
+
+class Inbox(BaseModel):
+    """The four human gates of the lineage circuit, in the order a post passes through them.
+
+    The circuit has completed **zero** laps, and every one of its gates is invisible until
+    somebody remembers to go looking for it. That is the whole reason this route exists.
+    """
+
+    proposals_awaiting_review: InboxQueue
+    built_awaiting_push: InboxQueue
+    pushed_awaiting_monte: InboxQueue
+    published_awaiting_verdict: InboxQueue
+
+
+# An inbox label identifies a row; it is not a preview. LinkedIn posts in this corpus average
+# ~818 characters, and four queues of that would be prose with the queue buried in it.
+INBOX_LABEL_MAX = 80
+
+
+def _label(text: str) -> str:
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= INBOX_LABEL_MAX:
+        return collapsed
+    return collapsed[: INBOX_LABEL_MAX - 1] + "…"
+
+
+def _utc(value: datetime) -> datetime:
+    """The same instant, always aware.
+
+    Every datetime column in this schema is `timestamp without time zone`, so a value the app
+    wrote as `datetime.now(UTC)` reads back naive once the row has round-tripped — and whether
+    that has happened yet depends on when the ORM expired the object. One query can therefore
+    yield both kinds, and comparing them raises. Normalised once, here, rather than at each
+    use. Same hazard `test_publish_detection.utc_naive` documents, resolved the other way.
+    """
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
+
+
+def _queue(rows: list[tuple[int, str, datetime]]) -> InboxQueue:
+    """Oldest first — the item that has waited longest is the one worth seeing.
+
+    ponytail: no pagination and no limit. The largest queue today is 37 proposals, and these
+    are gates a human is meant to empty, so a queue long enough to need paging is itself the
+    finding. Add a `limit` kwarg like `/posts` has if one ever gets there.
+    """
+    now = datetime.now(UTC)
+    items = [
+        InboxItem(
+            id=row_id,
+            label=_label(label),
+            waiting_since=since,
+            # Whole days, floored, and never negative: a clock skew that put an item slightly
+            # in the future would otherwise render as "waiting -1 days".
+            age_days=max((now - _utc(since)).days, 0),
+        )
+        for row_id, label, since in sorted(rows, key=lambda row: _utc(row[2]))
+    ]
+    return InboxQueue(count=len(items), items=items)
+
+
+@app.get("/inbox")
+def inbox(session: SessionDep) -> Inbox:
+    """Everything waiting on a human, and for how long.
+
+    Four queues, one per gate in the lineage circuit. They are queues, not scores: no ordering
+    between them means anything and nothing here implies that a template, draft or post
+    performed well or badly.
+
+    **Queue 4 is lineage-only** — posts this app produced, joined through `Draft`. Postgres
+    says the alternative is untenable: 57 posts are published and 57 carry no verdict, while
+    zero drafts have ever gone live, so "all published posts" would open with a 57-row backlog
+    of Monte's own historical writing — none of it a gate anyone intends to clear — burying the
+    circuit this page exists to make visible. `POST /posts/{id}/verdict` still accepts any
+    post, so an operator who wants to rule on one of those can; it just is not a queue.
+
+    Queues 2, 3 and 4 therefore partition the drafts by the two timestamps: not pushed, pushed
+    but not live, live but not judged. No draft is ever in two of them, and there is no status
+    column that could disagree.
+    """
+    # `latest_versions` filtered to PROPOSED — the same definition `GET /templates?status=`
+    # now serves, so the page and the list endpoint cannot disagree about what is awaiting
+    # review. Newest-version-only on purpose: a superseded proposal is not reviewable.
+    proposals = [
+        (template.id or 0, template.name, template.created_at)
+        for template in latest_versions(session)
+        if template.status is TemplateStatus.PROPOSED
+    ]
+
+    unpushed = session.exec(select(Draft).where(col(Draft.zernio_post_id).is_(None))).all()
+
+    awaiting_monte = session.exec(
+        select(Draft).where(
+            col(Draft.zernio_post_id).is_not(None), col(Draft.went_live_at).is_(None)
+        )
+    ).all()
+
+    # The join is `Draft.zernio_post_id == Post.late_post_id`. Not `Post.zernio_id` — the
+    # create response's `_id` surfaces in analytics as `latePostId`, and matching on
+    # `analytics._id` finds nothing. See `metrics.draft_for_post`.
+    awaiting_verdict = session.exec(
+        select(Post, Draft)
+        .join(Draft, col(Draft.zernio_post_id) == col(Post.late_post_id))
+        .where(col(Draft.went_live_at).is_not(None), col(Post.verdict).is_(None))
+    ).all()
+
+    return Inbox(
+        proposals_awaiting_review=_queue(proposals),
+        built_awaiting_push=_queue(
+            [(d.id or 0, d.idea or d.hook_text, d.created_at) for d in unpushed]
+        ),
+        pushed_awaiting_monte=_queue(
+            # `pushed_at or created_at`: `push_draft` writes both together, but the column is
+            # nullable and rows predating it exist, and an age of "unknown" would render as a
+            # blank where the number is the whole signal. Falling back to when the draft was
+            # built overstates nothing — it can only be older.
+            [
+                (d.id or 0, d.idea or d.hook_text, d.pushed_at or d.created_at)
+                for d in awaiting_monte
+            ]
+        ),
+        published_awaiting_verdict=_queue(
+            # `went_live_at`, not `Post.published_at`: the predicate guarantees the former is
+            # set, while a post found live carrying no timestamp has the latter null. The
+            # `is not None` is what narrows the type — the WHERE above already guarantees it.
+            [
+                (p.id or 0, p.content, d.went_live_at)
+                for p, d in awaiting_verdict
+                if d.went_live_at is not None
+            ]
+        ),
+    )
 
 
 @app.post("/corpus/ingest")
