@@ -1,5 +1,6 @@
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Protocol
 
 from sqlmodel import Session, col, select
@@ -77,6 +78,70 @@ def record_snapshots(session: Session, posts: list[Post]) -> int:
     return len(posts)
 
 
+def stamp_published(session: Session) -> int:
+    """Stamp `went_live_at` on every pushed draft whose post is live. Returns how many.
+
+    **Scans the whole `post` table, not the ids the sync just touched.** `sync_metrics` sees
+    only `fetch_posts()` — Zernio's 50-row analytics window — and 11 published posts in the
+    live account have no analytics row at all (`.scratch/v1/seams.md`). Keying detection to
+    the window would leave a post that published outside it unstamped forever: the Inbox
+    would show it "pushed, awaiting Monte" indefinitely and nothing anywhere would report an
+    error. A false negative with no error attached is the failure this pass exists to close.
+
+    Note the re-key. The sync selects posts on `Post.zernio_id`; the draft join is
+    `Draft.zernio_post_id == Post.late_post_id` (`draft_for_post`) — a different namespace,
+    so the touched-id list is not reusable here even if it were complete.
+
+    The predicate is `status == "published"`, **not the existence of a post row**: the
+    analytics payload also carries `partial` and `failed`, and `corpus.py` writes `external`
+    for manually added reference rows. Any of those would be a publication that never
+    happened.
+
+    ponytail: a re-scan of the unstamped drafts on every sync, not a webhook or an event log.
+    The ceiling is latency — up to one sync interval (6h) between a post going live and the
+    Inbox knowing — and a scan proportional to unstamped drafts, which is bounded because each
+    one leaves the set permanently once stamped. If either ever bites, the upgrade is Zernio's
+    own publish callback, not a bigger scan.
+    """
+    pending = list(
+        session.exec(
+            select(Draft).where(
+                col(Draft.zernio_post_id).is_not(None),
+                # Idempotency, and the only thing providing it: an already-stamped draft is
+                # never reconsidered, so a re-run cannot move a timestamp that was right.
+                col(Draft.went_live_at).is_(None),
+            )
+        ).all()
+    )
+    if not pending:
+        return 0
+
+    live = {
+        post.late_post_id: post
+        for post in session.exec(
+            select(Post).where(
+                col(Post.late_post_id).in_([d.zernio_post_id for d in pending]),
+                Post.status == "published",
+            )
+        ).all()
+        if post.late_post_id
+    }
+
+    stamped = 0
+    for draft in pending:
+        post = live.get(draft.zernio_post_id or "")
+        if post is None:
+            continue
+        # The platform's own publication time when Zernio reported one, otherwise the moment
+        # of observation — the most that can honestly be claimed about a post found live with
+        # no timestamp on it.
+        draft.went_live_at = post.published_at or datetime.now(UTC)
+        session.add(draft)
+        stamped += 1
+    session.flush()
+    return stamped
+
+
 def sync_metrics(session: Session, source: AnalyticsSource) -> dict:
     """Refresh every post's metrics and append a snapshot for each.
 
@@ -93,9 +158,21 @@ def sync_metrics(session: Session, source: AnalyticsSource) -> dict:
         else []
     )
     snapshots = record_snapshots(session, posts)
+    # Deliberately not limited to `posts` above. See `stamp_published`.
+    went_live = stamp_published(session)
 
-    log.info("metrics sync: %d fetched, %d snapshots", len(payloads), snapshots)
-    return {"fetched": len(payloads), "snapshots": snapshots, **result.__dict__}
+    log.info(
+        "metrics sync: %d fetched, %d snapshots, %d newly live",
+        len(payloads),
+        snapshots,
+        went_live,
+    )
+    return {
+        "fetched": len(payloads),
+        "snapshots": snapshots,
+        "went_live": went_live,
+        **result.__dict__,
+    }
 
 
 def draft_for_post(session: Session, post: Post) -> Draft | None:

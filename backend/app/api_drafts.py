@@ -1,4 +1,5 @@
 import base64
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -55,6 +56,9 @@ class DraftOut(BaseModel):
     visual_error: str | None
     visual_png: str | None
     zernio_post_id: str | None
+    # Null means pushed but not yet live. With `zernio_post_id` this is what lets the Inbox
+    # tell "awaiting Monte" from "published" without a status column.
+    went_live_at: datetime | None
     lineage: dict
 
 
@@ -96,6 +100,7 @@ def _out(session: SessionDep, draft: Draft) -> DraftOut:
             base64.b64encode(draft.visual_image).decode() if draft.visual_image else None
         ),
         zernio_post_id=draft.zernio_post_id,
+        went_live_at=draft.went_live_at,
         lineage=_lineage(session, draft),
     )
 
