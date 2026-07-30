@@ -955,10 +955,14 @@ Learned:
   its state with `initial.filter(...)`. Scoping the server fetch instead would collapse the
   platform list to `["linkedin"]` and leave the account list underivable — and refetching
   on mount is what React 19's `set-state-in-effect` rule forbids.
-- **`body.cohort` is absent on hand-authored templates.** Only `_to_template` and
-  `_to_structure` write it, so anything created through the form has no key and
-  `String(t.body.cohort)` would render the literal `"undefined"`. `cohortOf` returns null
-  and the tag renders nothing.
+- **`body.cohort` is absent on most of the queue, and blank is not a safe rendering.** Only
+  `_to_template` and `_to_structure` write it, so anything authored through the form — or
+  extracted before the field existed — has no key, and `String(t.body.cohort)` would render
+  the literal `"undefined"`. But rendering *nothing* is also wrong: on the live page 10 rows
+  are tagged `borrowed from a creator` and 38 are not, so a blank beside them reads as
+  "not borrowed" — i.e. proven in our own posts, which those rows do not claim. **Three
+  states, three renderings**; the absent one says `cohort unrecorded`. Gap 4 exists so a
+  reviewer can tell borrowed from proven, and a blank leaves them guessing on the majority.
 - **Both extract query strings are built with `URLSearchParams`.** Hooks carries no param
   and structures already carries `sample_size`, so `?` vs `&` differs between the two —
   concatenating by hand ships one working button and one 422.
