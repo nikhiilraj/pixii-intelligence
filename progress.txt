@@ -1351,3 +1351,31 @@ Backend 331 -> **344**.
 
 **Phase state: Track A (US-005..010) COMPLETE.** An `image_url` slot now has a real source, and a
 visual template containing an image can complete — proven live in US-009 against real Cloudflare.
+
+### US-011 — Publish detection stamps went_live_at (done 2026-07-30)
+
+`Draft.went_live_at` (migration `b7c31d90e4a2`, pre-made by the master so two parallel slices
+could share one linear chain). **Named `went_live_at`, not `published_at`** — `Post.published_at`
+already exists and a `select(Draft, Post)` merge with duplicate names resolves to whichever the
+query picks, wrong silently.
+
+**The window trap is handled, and this is the load-bearing part.** New `stamp_published(session)`
+is a *separate pass*, deliberately NOT limited to the ids `sync_metrics` happened to touch
+(comment at `metrics.py:161`). It selects pending drafts (`went_live_at IS NULL` and
+`zernio_post_id` set), then looks up `Post` by `late_post_id` across the whole table. Without
+that, a post publishing outside Zernio's 50-row analytics window — and 11 published posts already
+have no analytics row at all — would sit in the Inbox's "awaiting Monte" queue forever with no
+error anywhere.
+
+Note the namespace switch: `sync_metrics` keys on `Post.zernio_id`, the join needs
+`Post.late_post_id`. Different namespaces; the detection pass re-keys.
+
+Predicate is `Post.status == "published"`, **not row existence** — analytics also carries
+`partial`/`failed`, and manual rows are written `status="external"`.
+
+Idempotent by construction (`went_live_at IS NULL` in the query). Timestamp is
+`post.published_at or now(UTC)`. No commit added — callers still own that. **No `DraftStatus`
+enum**: `pushed_at` and `went_live_at` derive every state and cannot disagree with each other.
+`went_live_at` exposed in `DraftOut` at `api_drafts.py:61` and `:103`.
+
+15 new tests.
