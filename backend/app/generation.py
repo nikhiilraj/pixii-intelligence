@@ -237,8 +237,30 @@ def verdict_lessons(session: Session) -> list[str]:
     return lessons
 
 
-# `lessons` takes no default on purpose. Two functions build this prompt, and a default
-# would let either of them quietly stop passing them with nothing failing.
+# `lessons` takes no default on purpose, here and below. Three prompts now carry them, and a
+# default would let any of them quietly stop passing them with nothing failing.
+def lesson_lines(lessons: list[str]) -> list[str]:
+    """The verdict lessons as prompt lines — and nothing at all when there are none.
+
+    Shared with `autonomous.propose_topics` rather than restated there, so the two prompts
+    frame a ruling identically: one person's judgement about one post, never a measurement.
+    Restating it would let the framing drift on one side, and the framing is the whole
+    guard against a verdict being read as a statistic.
+
+    Returning `[]` for an empty list is the byte-identity guarantee both callers rely on:
+    a prompt built before any verdict existed is unchanged by this code path.
+    """
+    if not lessons:
+        return []
+    return [
+        "\nHuman review notes on individual published posts. Each line is one person's"
+        " judgement about one post, written after it went out — not a measurement, not a"
+        " count, and not evidence about the pattern in general. Weigh each as advice;"
+        " they say nothing about how one template compares to another:",
+        *(f"- {lesson}" for lesson in lessons),
+    ]
+
+
 def _write_prompt(
     idea: str,
     hook: Template,
@@ -264,14 +286,7 @@ def _write_prompt(
     # `---` rule, so anything appended below it reads as commentary on the last post shown.
     # Nothing is appended at all when there are no lessons, which keeps a prompt written
     # before any verdict existed byte-identical to one written after.
-    if lessons:
-        parts.append(
-            "\nHuman review notes on individual published posts. Each line is one person's"
-            " judgement about one post, written after it went out — not a measurement, not a"
-            " count, and not evidence about the pattern in general. Weigh each as advice;"
-            " they say nothing about how one template compares to another:"
-        )
-        parts.extend(f"- {lesson}" for lesson in lessons)
+    parts.extend(lesson_lines(lessons))
     if exemplars:
         parts.append("\nExemplar posts — match this voice, not this content:")
         for post in exemplars:

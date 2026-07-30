@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from sqlmodel import Session, col, select
 
-from app.generation import NoUsableTemplates, generate_draft
+from app.generation import NoUsableTemplates, generate_draft, lesson_lines, verdict_lessons
 from app.llm import LLM
 from app.models.post import Post
 from app.rendering import HtmlRenderer, ImageRenderer
@@ -70,7 +70,10 @@ def propose_topics(session: Session, llm: LLM, count: int) -> list[dict]:
     """Ask for angles the corpus has not already covered.
 
     Grounded in what has actually been posted, so unattended output follows from the real
-    account rather than from nothing.
+    account rather than from nothing — and in what a human ruled about what went out. The
+    verdict lessons reached only `generate_draft` and `regenerate_text` before, which are
+    the steps deciding *how* to write; the choice of subject, which a ruling speaks to most
+    directly, saw nothing.
     """
     recent = session.exec(
         select(Post)
@@ -80,10 +83,14 @@ def propose_topics(session: Session, llm: LLM, count: int) -> list[dict]:
     ).all()
 
     shown = "\n---\n".join(post.content.strip()[:600] for post in recent)
-    result = llm.complete_json(
-        _TOPIC_SYSTEM,
-        f"Propose {count} topics.\n\nRecent posts:\n{shown}",
-    )
+    # Lessons above the posts, not below, for the reason `_write_prompt` gives: `shown` ends
+    # in a raw post body, so anything appended after it reads as commentary on that post.
+    # `lesson_lines` contributes nothing when there are no verdicts, which keeps this prompt
+    # byte-identical to the one sent before any ruling existed.
+    parts = [f"Propose {count} topics."]
+    parts.extend(lesson_lines(verdict_lessons(session)))
+    parts.append(f"\nRecent posts:\n{shown}")
+    result = llm.complete_json(_TOPIC_SYSTEM, "\n".join(parts))
     topics = result.get("topics")
     return [t for t in topics if t.get("idea")] if isinstance(topics, list) else []
 
