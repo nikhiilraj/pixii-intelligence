@@ -1453,3 +1453,31 @@ Lessons are judgement at **n=1**, never statistics: no averages, no win rates, n
 ⚠ Verdict notes are sent to Azure in prompts — anything typed there leaves the machine.
 
 Backend **399** tests. US-013 and US-015 ran concurrently on disjoint files; both landed clean.
+
+### US-014 — The Inbox replaces the home page (done 2026-07-30) — TRACK B COMPLETE
+
+`page.tsx` was a Status readout; it is now the Inbox. Four queues from `GET /inbox`, each item
+linking to the page that clears it. `age_days` is presented as the signal it is — a count says a
+queue is non-empty, "waiting 6 days" says the circuit stalled. Empty states say what *would* fill
+them ("A draft pushed to Zernio waits here until it goes live") rather than apologising.
+
+`layout.tsx` NAV: `/` is now **"Inbox"**, not "Status". The health rows moved into the Inbox
+footer, so the information stays reachable while nothing advertises Status as a destination —
+comment at `layout.tsx:23` records why.
+
+**Verified live against the real database before the page was built** (the route had never run
+outside tests):
+
+    proposals_awaiting_review    37
+    built_awaiting_push           4
+    pushed_awaiting_monte         2
+    published_awaiting_verdict    0
+
+That is the stalled circuit stated honestly. Queue 4 reading zero is not a bug — no generated
+draft has ever been published, so there is nothing to rule on. It becomes non-zero the moment
+Monte publishes, which is V2's operational exit criterion.
+
+Frontend 45 -> **53**. Backend 399. Build clean.
+
+**Phase state: Track B (US-011..015) COMPLETE.** Publish detection, verdicts, the four queues, the
+Inbox, and verdict lessons feeding generation. What remains is C-polish (US-016..018).
