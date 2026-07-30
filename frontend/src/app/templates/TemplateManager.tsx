@@ -2,8 +2,11 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { toast } from "sonner";
 
-import { API_BASE, type Cohort, type Template, type TemplateKind } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { postBlob, postJson, type Cohort, type Template, type TemplateKind } from "@/lib/api";
 
 const KINDS: TemplateKind[] = ["hook", "structure", "visual"];
 
@@ -86,66 +89,51 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
   const [name, setName] = useState("");
   const [body, setBody] = useState(BLANK_BODY.hook);
   const [editing, setEditing] = useState<Template | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<{ id: number; url: string } | null>(null);
 
   async function renderPreview(template: Template) {
     setBusy(true);
-    setError(null);
-    try {
-      // Slot examples are what the template author wrote down as representative, so
-      // they are the honest default for a preview.
-      const values = Object.fromEntries(
-        template.slots.map((slot) => [
-          String(slot.name),
-          String(slot.example ?? slot.name ?? ""),
-        ]),
-      );
-      const res = await fetch(`${API_BASE}/templates/${template.id}/preview`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(values),
-      });
-      if (!res.ok) {
-        const detail = await res.json().catch(() => ({}));
-        throw new Error(detail.detail ?? `preview failed (${res.status})`);
-      }
-      setPreview({ id: template.id, url: URL.createObjectURL(await res.blob()) });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "preview failed");
-    } finally {
-      setBusy(false);
-    }
+
+    // Slot examples are what the template author wrote down as representative, so
+    // they are the honest default for a preview.
+    const values = Object.fromEntries(
+      template.slots.map((slot) => [String(slot.name), String(slot.example ?? slot.name ?? "")]),
+    );
+    // The only endpoint that answers with bytes — hence postBlob. Its 502-on-Cloudflare-429
+    // detail (see US-007) is worth reading verbatim, since "rate limited, retry" and "broken"
+    // are the same red line otherwise.
+    const result = await postBlob(`/templates/${template.id}/preview`, values);
+    setBusy(false);
+
+    if (result.ok) setPreview({ id: template.id, url: URL.createObjectURL(result.data) });
+    else toast.error("Preview failed", { description: result.message });
   }
 
-  async function send(path: string, init: RequestInit) {
+  async function send(path: string, body?: unknown, method: "POST" | "PUT" = "POST") {
     setBusy(true);
-    setError(null);
-    try {
-      const res = await fetch(`${API_BASE}${path}`, {
-        headers: { "Content-Type": "application/json" },
-        ...init,
-      });
-      if (!res.ok) {
-        const detail = await res.json().catch(() => ({}));
-        throw new Error(detail.detail ?? `request failed (${res.status})`);
-      }
-      router.refresh();
-      return true;
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "request failed");
+
+    const result = await postJson(path, body, method);
+    setBusy(false);
+
+    if (!result.ok) {
+      // Message only, no title — `send` covers seven mutations and a URL path is not a title
+      // to show a reader. Same reasoning as Studio's `call`.
+      toast.error(result.message);
       return false;
-    } finally {
-      setBusy(false);
     }
+    router.refresh();
+    return true;
   }
 
   function parseBody(): unknown | null {
     try {
       return JSON.parse(body);
     } catch {
-      setError("Body is not valid JSON.");
+      // The only client-side failure here, and it reported into the same shared paragraph as
+      // the API failures rather than beside the textarea — so a toast loses no locality it
+      // had. It is not an API detail and is deliberately outside the toast test.
+      toast.error("Body is not valid JSON.");
       return null;
     }
   }
@@ -156,14 +144,8 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
     if (parsed === null) return;
 
     const ok = editing
-      ? await send(`/templates/${editing.id}`, {
-          method: "PUT",
-          body: JSON.stringify({ name, body: parsed }),
-        })
-      : await send("/templates", {
-          method: "POST",
-          body: JSON.stringify({ kind, name, body: parsed }),
-        });
+      ? await send(`/templates/${editing.id}`, { name, body: parsed }, "PUT")
+      : await send("/templates", { kind, name, body: parsed });
 
     if (ok) reset();
   }
@@ -201,18 +183,15 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
               </option>
             ))}
           </select>
-          <button
-            onClick={() =>
-              send(`/templates/extract/hooks?${new URLSearchParams({ cohort })}`, {
-                method: "POST",
-              })
-            }
+          <Button
+            variant="outline"
+            onClick={() => send(`/templates/extract/hooks?${new URLSearchParams({ cohort })}`)}
             disabled={busy}
-            className="rounded-md border border-black/20 px-3 py-1.5 text-sm disabled:opacity-50 dark:border-white/25"
           >
             {busy ? "Working…" : "Extract hooks from top posts"}
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="outline"
             onClick={() =>
               // Query string built rather than concatenated: this endpoint already carries
               // a param and the other does not, so `?` vs `&` is not the same by hand.
@@ -221,14 +200,12 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
                   sample_size: "27",
                   cohort,
                 })}`,
-                { method: "POST" },
               )
             }
             disabled={busy}
-            className="rounded-md border border-black/20 px-3 py-1.5 text-sm disabled:opacity-50 dark:border-white/25"
           >
             Extract structures
-          </button>
+          </Button>
           <span className="text-xs opacity-50">
             Proposes patterns from the strongest posts in the chosen cohort. Nothing becomes
             usable until you approve it.
@@ -236,9 +213,18 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
         </div>
 
         {initial.length === 0 ? (
-          <p className="text-sm opacity-60">
-            No templates yet. Author one, or run hook extraction once it exists.
-          </p>
+          /* Designed rather than apologetic: it states what this list holds and the two ways
+             something gets into it. This is a genuinely empty library and never a failed read —
+             `page.tsx` renders ApiFailureNotice in place of this whole component when the read
+             fails, so nothing can reach here as `[]` because of an error. */
+          <Card className="bg-surface-2 text-body">
+            <p className="font-medium">No template exists yet.</p>
+            <p className="mt-1 text-muted">
+              Extraction reads the corpus and proposes hooks, structures and visuals — the two
+              buttons above — and nothing it proposes becomes usable until you approve it. A
+              template can also be written by hand in the form beside this list.
+            </p>
+          </Card>
         ) : (
           <ul className="space-y-2">
             {initial.map((t) => (
@@ -265,7 +251,7 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
                     )}
                     {t.status === "proposed" && (
                       <button
-                        onClick={() => send(`/templates/${t.id}/approve`, { method: "POST" })}
+                        onClick={() => send(`/templates/${t.id}/approve`)}
                         disabled={busy}
                         className="underline opacity-70 hover:opacity-100"
                       >
@@ -283,7 +269,7 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
                     )}
                     {t.status !== "retired" && (
                       <button
-                        onClick={() => send(`/templates/${t.id}/retire`, { method: "POST" })}
+                        onClick={() => send(`/templates/${t.id}/retire`)}
                         disabled={busy}
                         className="underline opacity-70 hover:opacity-100"
                       >
@@ -353,16 +339,10 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
           className={`${field} font-mono text-xs`}
         />
 
-        {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
-
         <div className="flex gap-3">
-          <button
-            type="submit"
-            disabled={busy}
-            className="rounded-md bg-black px-3 py-2 text-sm text-white disabled:opacity-50 dark:bg-white dark:text-black"
-          >
+          <Button type="submit" disabled={busy}>
             {editing ? "Save as new version" : "Create"}
-          </button>
+          </Button>
           {editing && (
             <button type="button" onClick={reset} className="text-sm underline opacity-70">
               cancel

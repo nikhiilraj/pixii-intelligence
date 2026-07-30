@@ -36,8 +36,26 @@ class AutonomousRunFailed(RuntimeError):
 
 @dataclass
 class RunResult:
+    """What a run actually did — including the part that used to be invisible.
+
+    `visuals_failed` counts drafts that were created and have no picture.
+    `generate_draft` swallows a render failure into `draft.visual_error` on purpose (the
+    words survive an image that did not come out, and they are worth keeping), but
+    `result.created += 1` fires either way, so before this field a run that produced three
+    drafts with no images reported "3 draft(s) created" and nothing else. Every entry point
+    reads the summary and not the drafts: the notifier, the scheduler's log line and the
+    `POST /drafts/autonomous-run` response. Tolerating the failure was right; not saying so
+    made "it works" and "it silently didn't" the same output.
+
+    Counted separately from `failed` rather than folded into it. They are different events —
+    `failed` is a topic that produced no draft at all, `visuals_failed` is a draft in the
+    queue awaiting a redraw — and `created + failed == topics` is an invariant a reader can
+    check.
+    """
+
     created: int = 0
     failed: int = 0
+    visuals_failed: int = 0
     topics: int = 0
 
 
@@ -86,7 +104,10 @@ def run_autonomous(
       stays a human act, even though a Zernio draft would not itself publish. An unattended
       loop that writes to the live account is a different risk from one that does not.
     - **`cap` is hard.** A scheduling fault, a retry storm or a runaway loop cannot produce
-      more than this many drafts in one run.
+      more than this many drafts in one run. Both callers bound it by
+      `settings.autonomous_max_drafts` — the scheduler passes that setting and
+      `POST /drafts/autonomous-run` clamps its query parameter to it — so no caller can ask
+      for more than is configured either.
 
     A failure that prevents the run raises; a failure on one topic costs only that topic.
     Either way the notifier is told — a scheduled job that fails in silence is the exact
@@ -109,8 +130,18 @@ def run_autonomous(
     for topic in topics[:cap]:
         idea = str(topic.get("idea", "")).strip()
         try:
-            generate_draft(session, llm, renderer, idea=idea, mode="autonomous")
+            draft = generate_draft(session, llm, renderer, idea=idea, mode="autonomous")
             result.created += 1
+            if draft.visual_error:
+                # Named per draft rather than only counted, because the count says a redraw
+                # is needed and the message says whether a redraw could possibly help. An
+                # `UnresolvableAsset` naming a missing default is a template to fix; a
+                # `MissingSlotValue` is an image slot nobody has chosen an asset for.
+                result.visuals_failed += 1
+                notify(
+                    f"autonomous draft {draft.id} has no visual "
+                    f"({idea[:60]}): {draft.visual_error}"
+                )
         except NoUsableTemplates as exc:
             # Nothing approved means no topic can succeed — stop rather than fail n times.
             notify(f"autonomous run cannot generate: {exc}")
@@ -121,8 +152,14 @@ def run_autonomous(
             notify(f"autonomous topic failed ({idea[:60]}): {exc}")
 
     session.flush()
-    notify(
+    # The visual count is in the summary line and not only in the per-draft messages: a
+    # notifier that keeps the last message, or a reader who skims to the end, must not come
+    # away with "3 drafts created" when none of the three has a picture.
+    summary = (
         f"autonomous run complete: {result.created} draft(s) created, "
         f"{result.failed} failed, from {result.topics} topic(s)"
     )
+    if result.visuals_failed:
+        summary += f" — {result.visuals_failed} of the drafts created has no visual"
+    notify(summary)
     return result

@@ -1,7 +1,16 @@
 from datetime import datetime
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Every credential below carries `Field(repr=False)`. `repr(settings)` printed live keys in full,
+# and pytest dumps the repr of both operands on any failed assertion touching `settings.*` — so one
+# unrelated test failure in CI would write real Cloudflare and Zernio keys into the run log.
+# `configured()` was already careful never to reveal a value; the default repr went around it.
+# `repr=False` rather than `SecretStr`: it redacts without changing the field type, so no call site
+# has to learn `.get_secret_value()`. ponytail: if a value ever needs redacting in a log *message*
+# as well as a repr, that is when SecretStr earns its migration.
 
 # .env lives at the repo root, one level above backend/. It is a symlink to the
 # vault's .env so credentials have a single source of truth.
@@ -65,24 +74,25 @@ class Settings(BaseSettings):
     enable_autonomous: bool = False
     autonomous_max_drafts: int = 2
     autonomous_interval_hours: int = 24
-    teams_webhook_url: str = ""
+    # A webhook URL is a bearer credential in URL clothing — anyone holding it can post.
+    teams_webhook_url: str = Field(default="", repr=False)
 
-    zernio_api_key: str = ""
+    zernio_api_key: str = Field(default="", repr=False)
     zernio_base_url: str = "https://getlate.dev/api/v1"
     getlate_linkedin_id: str = ""
 
     azure_openai_chat_endpoint: str = ""
-    azure_openai_chat_api_key: str = ""
+    azure_openai_chat_api_key: str = Field(default="", repr=False)
     azure_openai_chat_deployment: str = ""
     azure_openai_chat_api_version: str = ""
 
     azure_openai_image_endpoint: str = ""
-    azure_openai_image_api_key: str = ""
+    azure_openai_image_api_key: str = Field(default="", repr=False)
     azure_openai_image_deployment: str = ""
     azure_openai_image_api_version: str = ""
 
     cloudflare_account_id: str = ""
-    cloudflare_browser_rendering_token: str = ""
+    cloudflare_browser_rendering_token: str = Field(default="", repr=False)
 
     def configured(self) -> dict[str, bool]:
         """Which credentials are present, without revealing any value."""

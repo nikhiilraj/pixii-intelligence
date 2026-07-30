@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 from sqlmodel import Session, col, select
 
+from app.assets import resolve_asset_values
 from app.config import settings
 from app.llm import LLM
 from app.models.draft import Draft
@@ -13,6 +14,12 @@ from app.templates import usable_templates
 # How many of the hook's own source posts are shown as exemplars. Enough to hear the
 # voice, few enough that the model imitates rather than collages.
 EXEMPLAR_LIMIT = 3
+
+# How many human rulings are carried into a prompt, most recently judged first.
+# ponytail: a cap, not a summarisation pass. Ten notes is a paragraph the model can hold;
+# beyond that the honest upgrade is a human editing a standing "what we learned" note, not
+# this app compressing rulings it cannot weigh.
+LESSON_LIMIT = 10
 
 # Slots the model may write prose into. Anything else — an image URL, say — must come from
 # a real asset: a sentence in an <img src> renders as an empty box and reports success,
@@ -33,6 +40,61 @@ def writable_slots(visual: Template) -> list[str]:
         for slot in visual.slots
         if str(slot.get("type") or "") in WRITABLE_SLOT_TYPES
     ]
+
+
+def asset_slots(visual: Template) -> list[str]:
+    """The slots an asset is picked for — `image_url`, the ones the model may never write.
+
+    The mirror image of `writable_slots`, read off the template's declared `type` for the
+    same reason: `left_image_url` reads as an asset and `subject`, `logo` and `hero` do not,
+    so guessing from the name reintroduces exactly the silent wrongness the type check
+    closes. `.get`, never `slot["type"]` — VISUAL rows authored before `type` existed carry
+    no key at all.
+    """
+    return [str(slot.get("name")) for slot in visual.slots if slot.get("type") == "image_url"]
+
+
+def chosen_assets(visual: Template, picked: dict[str, str]) -> dict[str, str]:
+    """The asset id for each of this visual's image slots: what was picked, else the default.
+
+    Two things happen here, and both are load-bearing.
+
+    **`picked` is filtered to image slots.** It arrives from a request body, so accepting it
+    wholesale would hand a caller a second, unguarded way to write `big_number` — the exact
+    hole `WRITABLE_SLOT_TYPES` exists to close, reopened one column over. A key naming
+    anything but an `image_url` slot is dropped.
+
+    **A slot may carry `default_asset_id`**, a 4th optional key in the `slots` JSONB. That is
+    what lets a template complete with nobody picking: an unattended run supplies no assets at
+    all, and a visual whose image slots all have defaults still renders. Stored as text
+    because that is what `visual_values` already holds and what the delete guard compares —
+    a slot written `{"default_asset_id": 7}` and a picker sending `"7"` must be one reference,
+    not two.
+
+    An image slot with neither a pick nor a default is left absent, so `fill()` names it in a
+    `MissingSlotValue` an operator can act on rather than rendering an empty box.
+    """
+    values: dict[str, str] = {}
+    for slot in visual.slots:
+        if slot.get("type") != "image_url":
+            continue
+        name = str(slot.get("name"))
+        default = slot.get("default_asset_id")
+        ref = str(picked.get(name) or "").strip() or str(default if default is not None else "")
+        if ref.strip():
+            values[name] = ref.strip()
+    return values
+
+
+def render_values(draft: Draft) -> dict[str, str]:
+    """Everything a draft's visual is filled from: the words, plus the assets over the top.
+
+    Two columns, one dict, and only at the moment of rendering. `asset_values` wins on a
+    collision because a draft generated against `stat-hero` v1 — four untyped slots, two of
+    them an `<img src>` — has model prose sitting in what v2 declares an image slot, and that
+    prose is the empty-box failure this slice closes.
+    """
+    return {**draft.visual_values, **draft.asset_values}
 
 _WRITE_SYSTEM = """\
 You write LinkedIn posts in an established voice, following a given hook pattern and post
@@ -137,8 +199,53 @@ def _exemplars(session: Session, hook: Template) -> list[Post]:
     return list(session.exec(statement).all())
 
 
+def verdict_lessons(session: Session) -> list[str]:
+    """What a human ruled about individual published posts, as lines for the prompt.
+
+    This is the whole of V2's learning, and its shape is set by what the data can carry.
+    Engagement spans 12.7x across this corpus at ~3 samples per template and no post here
+    records lineage attribution, so no aggregate over verdicts could rank anything. Hence:
+    no averages, no counts, no win rates — each line is one ruling on one post, and the
+    prompt says so.
+
+    **A verdict with no note is skipped**, and that is load-bearing rather than tidy. The
+    lesson deliberately carries only the human's own words, never the post's text, so a
+    note-less ruling would reduce to the bare word `worked` attached to nothing the model
+    can see — which is not advice, it is one tick in a tally, and a tally is precisely the
+    statistics framing this must not introduce. The only way to make a note-less verdict
+    mean anything would be to send the post's content, which is the voice-leak path
+    `_exemplars` exists to keep closed. So the note is the lesson.
+
+    Any post with a note qualifies, Monte's or a creator's, and that does not leak voice:
+    a note is a human writing about a post, not a post handed over as a voice to imitate.
+    `_exemplars` remains the only path where post content reaches the model.
+    """
+    statement = (
+        select(Post)
+        .where(col(Post.verdict).is_not(None))
+        .where(col(Post.verdict_note) != "")
+        # Most recently judged first, so the cap drops the oldest thinking rather than an
+        # arbitrary row. `id` only breaks ties deterministically.
+        .order_by(col(Post.verdict_at).desc(), col(Post.id).desc())
+        .limit(LESSON_LIMIT)
+    )
+    lessons = []
+    for post in session.exec(statement).all():
+        note = post.verdict_note.strip()
+        if note and post.verdict is not None:
+            lessons.append(f'{post.verdict.value} — "{note}"')
+    return lessons
+
+
+# `lessons` takes no default on purpose. Two functions build this prompt, and a default
+# would let either of them quietly stop passing them with nothing failing.
 def _write_prompt(
-    idea: str, hook: Template, structure: Template, visual: Template, exemplars: list[Post]
+    idea: str,
+    hook: Template,
+    structure: Template,
+    visual: Template,
+    exemplars: list[Post],
+    lessons: list[str],
 ) -> str:
     sections = "\n".join(
         f"{index}. {section.get('name', '')}: {section.get('guidance', '')}"
@@ -153,6 +260,18 @@ def _write_prompt(
         f"\nStructure ({structure.body.get('post_type', '')}):\n{sections}",
         f"\nVisual slots to fill: {slots}",
     ]
+    # Before the exemplars, not after: the exemplar block ends with raw post bodies under a
+    # `---` rule, so anything appended below it reads as commentary on the last post shown.
+    # Nothing is appended at all when there are no lessons, which keeps a prompt written
+    # before any verdict existed byte-identical to one written after.
+    if lessons:
+        parts.append(
+            "\nHuman review notes on individual published posts. Each line is one person's"
+            " judgement about one post, written after it went out — not a measurement, not a"
+            " count, and not evidence about the pattern in general. Weigh each as advice;"
+            " they say nothing about how one template compares to another:"
+        )
+        parts.extend(f"- {lesson}" for lesson in lessons)
     if exemplars:
         parts.append("\nExemplar posts — match this voice, not this content:")
         for post in exemplars:
@@ -182,11 +301,19 @@ def _resolve(session: Session, kind: TemplateKind, template_id: int | None) -> T
 
 
 def _draw_visual(
-    draft: Draft, visual: Template, renderer: HtmlRenderer | ImageRenderer
+    session: Session, draft: Draft, visual: Template, renderer: HtmlRenderer | ImageRenderer
 ) -> None:
-    """Render the visual onto the draft. A failure records why and keeps the words."""
+    """Render the visual onto the draft. A failure records why and keeps the words.
+
+    Asset resolution happens here rather than in either caller, and deliberately so:
+    `regenerate_visual` is handed no values at all — it redraws from what the draft
+    already holds — so resolving at the call sites would leave every re-render embedding
+    nothing. The resolved values stay local; `draft.asset_values` keeps the asset id,
+    which is what makes the next re-render resolvable too.
+    """
     try:
-        draft.visual_image = render_visual(visual, draft.visual_values, renderer)
+        values = resolve_asset_values(session, visual, render_values(draft))
+        draft.visual_image = render_visual(visual, values, renderer)
         draft.visual_error = None
     except Exception as exc:  # noqa: BLE001 — any failure here must not cost the words
         draft.visual_image = None
@@ -202,12 +329,17 @@ def generate_draft(
     hook_id: int | None = None,
     structure_id: int | None = None,
     visual_id: int | None = None,
+    asset_values: dict[str, str] | None = None,
     mode: str = "directed",
 ) -> Draft:
     """Turn an idea into a reviewable draft, stamped with what produced it.
 
     Any template not named explicitly is suggested. Nothing here publishes; the draft is
     reviewed and only then pushed.
+
+    `asset_values` is slot name -> asset id, for the visual's `image_url` slots. Absent keys
+    fall back to the slot's `default_asset_id`, which is what lets an unattended run — which
+    passes none — still render a visual carrying images.
     """
     hook = _resolve(session, TemplateKind.HOOK, hook_id)
     structure = _resolve(session, TemplateKind.STRUCTURE, structure_id)
@@ -221,7 +353,9 @@ def generate_draft(
 
     written = llm.complete_json(
         _WRITE_SYSTEM,
-        _write_prompt(idea, hook, structure, visual, _exemplars(session, hook)),
+        _write_prompt(
+            idea, hook, structure, visual, _exemplars(session, hook), verdict_lessons(session)
+        ),
     )
 
     draft = Draft(
@@ -236,50 +370,83 @@ def generate_draft(
         hook_text=str(written.get("hook") or "").strip(),
         body_text=str(written.get("body") or "").strip(),
         visual_values=_written_values(written, visual),
+        asset_values=chosen_assets(visual, asset_values or {}),
     )
-    _draw_visual(draft, visual, renderer)
+    _draw_visual(session, draft, visual, renderer)
 
     session.add(draft)
     session.flush()
     return draft
 
 
-def _current(session: Session, family: str | None) -> Template:
-    """The version of a family this draft was generated from."""
-    statement = (
-        select(Template)
-        .where(Template.family_id == family)
-        .order_by(col(Template.version).desc())
-    )
-    template = session.exec(statement).first()
-    if template is None:
-        raise NoUsableTemplates(f"template family {family} no longer exists")
-    return template
-
-
 def regenerate_text(session: Session, llm: LLM, draft: Draft) -> Draft:
-    """Rewrite the words against the same templates. Lineage does not move."""
-    hook = _current(session, draft.hook_family)
-    structure = _current(session, draft.structure_family)
-    visual = _current(session, draft.visual_family)
+    """Rewrite the words against the same templates. Lineage does not move.
+
+    `generated_from`, not the newest row in each family: that sentence has to be true of the
+    templates actually used, not merely of the columns left unchanged. Resolving by family
+    alone rewrote the words against an edited hook while `hook_version` still named the old
+    one, so `lineage_metadata` pushed the old version to Zernio and `template_performance`
+    credited it with text a different template wrote. The same defect `regenerate_visual` had,
+    on three families instead of one — and it reached `_written_values` below too, since the
+    newest visual's slots are not necessarily this draft's.
+    """
+    hook = generated_from(session, draft.hook_family, draft.hook_version)
+    structure = generated_from(session, draft.structure_family, draft.structure_version)
+    visual = generated_from(session, draft.visual_family, draft.visual_version)
 
     written = llm.complete_json(
         _WRITE_SYSTEM,
-        _write_prompt(draft.idea, hook, structure, visual, _exemplars(session, hook)),
+        # Lessons are fetched here too, not only in `generate_draft`. Passing them at one
+        # call site would make every rewrite silently drop them — the draft would improve
+        # once and un-improve the moment anyone pressed regenerate.
+        _write_prompt(
+            draft.idea, hook, structure, visual, _exemplars(session, hook), verdict_lessons(session)
+        ),
     )
     draft.hook_text = str(written.get("hook") or "").strip()
     draft.body_text = str(written.get("body") or "").strip()
     draft.visual_values = _written_values(written, visual)
+    # `asset_values` is untouched. Rewriting the words is not a reason to discard the assets
+    # someone picked for the picture, and the model has no say in them either way.
     session.add(draft)
     session.flush()
     return draft
+
+
+def generated_from(session: Session, family: str | None, version: int | None) -> Template:
+    """The exact version a draft was generated from — never whatever is newest now.
+
+    Keyed on `(family_id, version)`, like `assets._image_slot_names`, and for its reason:
+    editing a template writes a new row, so the latest version of the family is a different
+    template than the one the draft's lineage names. Redrawing from the latest stored a
+    picture v3 produced while `visual_version` still said 2 — `publishing.lineage_metadata`
+    then pushed `visual_version: 2` to Zernio and `metrics.template_performance` credited v2
+    with v3's work. Nothing raised; the draft looked fine.
+
+    A RETIRED recorded version still redraws. A redraw is a re-render of what this draft
+    already is, not a new generation, so the honest picture is the one its lineage claims;
+    `usable_templates` is what keeps retired versions out of everything that *chooses* a
+    template. A version that is not there at all, or a draft that records none, cannot be
+    redrawn faithfully and says so.
+    """
+    if version is None:
+        raise NoUsableTemplates(
+            f"draft records no version for template family {family} — cannot redraw"
+        )
+    template = session.exec(
+        select(Template).where(Template.family_id == family, Template.version == version)
+    ).first()
+    if template is None:
+        raise NoUsableTemplates(f"template family {family} v{version} no longer exists")
+    return template
 
 
 def regenerate_visual(
     session: Session, draft: Draft, renderer: HtmlRenderer | ImageRenderer
 ) -> Draft:
     """Redraw the image from the values already written. The words are untouched."""
-    _draw_visual(draft, _current(session, draft.visual_family), renderer)
+    visual = generated_from(session, draft.visual_family, draft.visual_version)
+    _draw_visual(session, draft, visual, renderer)
     session.add(draft)
     session.flush()
     return draft

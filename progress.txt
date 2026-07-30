@@ -1062,3 +1062,517 @@ default view and Monte's 185 leads it — with five cohort options derived from 
 templates page tags 10 proposals `borrowed from a creator`; the other 37 rows carry no
 `body.cohort` at all (extracted before the field existed, or hand-authored), so nothing is
 claimed for them. `make check` green at 258 tests.
+
+### US-001 — Design tokens and typography foundation (done 2026-07-30)
+
+globals.css: 26 lines of create-next-app boilerplate -> a real token layer in Tailwind v4
+`@theme`. Colour/space/radius/shadow/motion/type tokens, light + dark. Deleted the
+`font-family: Arial` body override, so the Geist that layout.tsx has been loading all along
+finally applies. scoreboard/page.tsx reskinned onto the tokens as the proof (read-only server
+component, so nothing could regress functionally), recharts colours included.
+
+**The accent was wrong in the PRD and is now resolved.** The spec carried `#E8590C` as an
+explicit placeholder. The real brand palette lives in the `body->>'html'` of the APPROVED
+VISUAL templates — the markup that actually renders Pixii's post visuals — and says:
+
+    #F2610C accent (5 uses)   #111 display black (4)   #F5F0E8 cream (3)
+    #E4DAC6 deeper tan (2)    #6B635A muted ink (1)
+
+Prefer those over the spec's guesses for border (`#E4E1D8`) and muted (`#6F6C64`).
+
+**Contrast was measured, not assumed, and it mattered.** `#F2610C` is 3.09:1 on `--bg` and
+3.24:1 on `--surface` — it FAILS AA as text. So the brand orange stays a fill and a derived
+`--accent-text: #ba4b09` (5.80 / 5.34 / 4.87) carries text on light. In dark, `--accent-text`
+flips back to `#f2610c`, which clears AA there. `--chart-1` follows `--accent-text` so charts
+stay legible in both themes. **Rule for later slices: never put `--accent` on text, never put
+`--accent-text` on a fill.**
+
+Cream stays a raised-surface token (`--surface-2`), never the page background — the PRD is
+explicit that the UI takes the brand's temperature "without cosplaying as a post".
+
+Verified: ruff, mypy, eslint, tsc green; 258 tests pass; `pnpm build` clean (7 routes).
+Zero npm packages added — primitives are US-002's job.
+
+### US-002 — Presentational primitives and cn() (done 2026-07-30)
+
+Added `components/ui/{button,badge,card,skeleton}.tsx`, `components/backend-unreachable.tsx`
+and `lib/cn.ts`. Direct deps added: `clsx`, `tailwind-merge`, `class-variance-authority` —
+clsx was previously in the lockfile only transitively via recharts, so importing it was
+resolving by hoisting luck.
+
+Migrated: `page.tsx` (home), `scoreboard/page.tsx`, and the four thin server wrappers onto the
+shared backend-unreachable component. **Deliberately NOT migrated** — Studio, AddExternal,
+ExcludeToggle, TemplateManager, posts/[id]: they need US-003's mutation helper and US-004's
+Select, so touching them here would collide with those slices. Their `opacity-50` and pasted
+button strings are expected to remain until then.
+
+**The AA fix that came with the primitives.** Both duplicated button strings encoded disabled
+state as `disabled:opacity-50`, which the PRD names as an AA failure. Button now uses
+`disabled:border-border disabled:bg-surface-2 disabled:text-muted`. The agent measured a
+disabled-fill alternative first and rejected it at 4.26:1 — recorded in the component comment.
+
+Verified: ruff, mypy, eslint, tsc green; 258 tests; `pnpm build` compiled in 2.6s with no
+react-compiler warnings.
+
+### Frontend testing policy (decided 2026-07-30, Nikhil) — binding on every frontend slice
+
+There was no frontend test infrastructure at all: no vitest/jest/playwright, no test files, and
+CI ran only `tsc --noEmit`, `lint`, `build` for the frontend while the backend got full pytest.
+Six V2 slices carried "asserted" criteria that were therefore vacuous.
+
+**Decision: Vitest + @testing-library/react + jsdom (dev deps), added in US-003, with
+`pnpm test` appended to the frontend CI job.** Scoped deliberately:
+
+- **DO assert our own logic** — failure-vs-empty rendering, inbox queue membership, form
+  validation and caps, asset-picker behaviour. The error-vs-empty bug class is the reason the
+  harness exists; it is a logic bug that regresses silently.
+- **DO NOT assert Radix's behaviour** — focus trap, typeahead, escape, focus return. We vendor
+  those components precisely because they are tested upstream; re-asserting them tests someone
+  else's library, and jsdom only approximates focus. Verify by hand and say what was exercised.
+- **DO NOT claim contrast or visual layout in a test** — there is no browser in CI. Report
+  computed ratios instead. `--accent` #F2610C is 3.09:1 (fill only); `--accent-text` #ba4b09 is
+  5.80:1. Do not regress these.
+
+Rule that follows: a slice reports what it actually verified. "Verified by hand, here is what I
+exercised" is acceptable; claiming an assertion that does not exist is not.
+
+### US-003 — Honest API layer + the Vitest harness (done 2026-07-30)
+
+`getJson` used to collapse network errors, 500s, 404s and legitimately-empty results all into
+`null`. Now:
+
+    export type ApiResult<T> = { ok: true; data: T } | ApiFailure
+    getJson<T>(path): Promise<ApiResult<T>>
+    postJson<T>(path, ...): Promise<ApiResult<T>>
+    postBlob(path, body?): Promise<ApiResult<Blob>>
+
+Migrated all six call sites (Studio, AddExternal, TemplateManager x2, ExcludeToggle, home) and
+deleted the duplicate `API_BASE` that page.tsx re-declared. Where the mutation code was already
+being edited, those buttons moved onto the US-002 `Button` primitive too — that removes the
+pasted class strings US-002 was scoped out of reaching.
+
+FastAPI's `detail` is a **string on HTTPException but a list of objects on validation errors**.
+Both shapes are handled; the list form is flattened to words, so `/posts`' 422 (which carries
+the allowed sort values) reads as a sentence instead of `[object Object]`.
+
+**Harness landed here** (approved mid-slice): `vitest`, `@testing-library/react`,
+`@testing-library/jest-dom`, `jsdom` as dev deps, `"test": "vitest run"`, and `pnpm test`
+appended to the frontend CI job (`ci.yml:53`). 9 tests.
+
+The assertion that matters tests **both directions**: a forced 500 reports the failure and
+withholds the empty-state copy, AND a genuine empty success still shows the empty state.
+One direction alone would let "always render an error" pass.
+
+Verified: ruff, mypy, eslint, tsc green; 258 backend tests; 9 frontend tests; build clean.
+
+### US-004 — Behavioural primitives via Radix, and toasts (done 2026-07-30) — C-thin phase complete
+
+Vendored `components/ui/{select,dialog,tabs,tooltip}.tsx` over `@radix-ui/react-{select,dialog,
+tabs,tooltip}`, plus `sonner` for toasts. Explorer's four filter controls (platform, family,
+since, sort) moved onto Select; the four copies of the local red-`<p>` error string are replaced
+by toasts carrying the API's `detail` from US-003.
+
+**The Radix Select sentinel trap — pinned by test.** Radix Select cannot hold an empty-string
+value, so "all" options need a sentinel. If that sentinel leaks into the query string, filtering
+breaks **silently while everything still renders**. `Explorer.test.tsx` asserts the sentinel
+never reaches the query, that each filter uses the param name the API expects, and that unset
+filters are omitted rather than sent empty. Any later slice adding a Select needs the same care.
+
+Frontend tests 9 -> 18 across 3 files. Per the testing policy, none of them assert Radix's
+keyboard behaviour — that is upstream-tested and jsdom only approximates focus. Keyboard was
+exercised by hand in a real browser instead.
+
+Verified: ruff, mypy, eslint, tsc green; 258 backend tests; 18 frontend tests; build clean with
+no react-compiler warnings.
+
+**Phase state: C-thin (US-001..004) done — tokens, primitives, honest API layer, Radix.**
+Tracks A and B now build on a real component layer rather than reskinning later.
+
+### US-005 — Asset table, upload, and listing (done 2026-07-30) — Track A begins
+
+New `Asset` model (`app/models/asset.py`) + `AssetKind` StrEnum, service layer `app/assets.py`,
+router `app/api_assets.py`, migration **443990bee2a6** (additive, one new table, real downgrade).
+Files land under `media/assets/`, served by the existing `/media` mount — no new static plumbing.
+
+**The DROP trap was real and is handled.** `app/models/__init__.py` imports
+`Asset, AssetKind`; without that, autogenerate emits a DROP for the new table. Verified
+empirically, not assumed: ran `alembic revision --autogenerate` and the generated migration
+contained **zero operations** — no `op.drop`, no ops at all. (The probe revision was discarded.)
+
+New dependency: `python-multipart>=0.0.20`. Not optional — FastAPI parses multipart form data
+only when it is installed, so without it `POST /assets` fails at *request* time rather than at
+import, which is the worst failure shape.
+
+Downscale (>1600px long edge) is justified by **disk and upload time only**. The Cloudflare
+render payload ceiling does not exist — 13.17MB body with a 9.88MB embedded PNG was accepted
+live. No code may cite a payload limit as the reason.
+
+Reused `media.py`'s `_KNOWN_SUFFIXES`/`_suffix()` for the licdn no-extension case, but NOT its
+swallow-all-return-None error handling: an upload must 4xx where opportunistic post-media
+download may shrug.
+
+Backend tests 258 -> **275**. Verified: ruff, mypy, eslint, tsc green; alembic upgrade head
+clean; autogenerate emits nothing.
+
+### US-006 — Asset resolution into renders (done 2026-07-30)
+
+`resolve_asset_values(session, visual, values) -> dict` in `app/assets.py`. Turns an
+`image_url` slot holding an asset id into a **base64 data URI** embedded in the markup.
+
+**All three render paths go through it, via two call statements:**
+- `generation.py:197`, inside `_draw_visual` — which is the shared path for BOTH `generate_draft`
+  and `regenerate_visual`. Resolution reads `draft.visual_values`, which is how regenerate gets
+  values despite taking no `values` argument. Pinned by
+  `test_regenerating_a_visual_embeds_the_assets_every_time`.
+- `api_templates.py:165`, `preview_visual`. Without this the app would have shipped working
+  generation and a preview that 422s on every image template, since `TemplateManager.tsx:105`
+  already calls it.
+
+**Base64 is load-bearing** — `ponytail:` comment at `assets.py:168` says so explicitly.
+`rendering.fill` escapes slot values; base64's alphabet dodges all five escaped characters, but
+a raw `data:image/svg+xml,<svg…>` is mangled to `&lt;svg` and renders broken **with no
+exception**. So anything that is not base64 raises `UnresolvableAsset`. `fill(escape=False)` was
+NOT widened — that flag is the injection guard for model-written text.
+
+`WRITABLE_SLOT_TYPES` unchanged: the model still never writes an image slot.
+
+16 new tests, all on `renderer_capturing` (a real `CloudflareRenderer` over `MockTransport` that
+keeps the posted body) — never `FakeRenderer`, which discards the html argument and so cannot
+assert an embedded URI. Notable coverage: a slot with **no `type` key** is left alone (VISUAL row
+556 has none), a local `/media` path is rejected (the remote browser cannot fetch it), an asset
+whose file vanished is rejected rather than crashing.
+
+Backend tests 275 -> **291**. ruff, mypy, eslint, tsc green.
+
+### US-007 — Cloudflare 429 backoff (done 2026-07-30)
+
+`CloudflareRenderer.screenshot` now retries 429 internally: 4 attempts, fixed 5s/10s/20s =
+**35s bounded sleep**. The limit is requests-per-*minute*, so sub-second retries cannot clear the
+window; tens of seconds can. No jitter and no `Retry-After` — one process renders one visual at a
+time so there is no herd to spread, and the live probe never returned that header. Both choices
+carry `ponytail:` comments.
+
+Shape worth keeping: the loop iterates `(*_RATE_LIMIT_DELAYS, None)` and breaks when
+`delay is None`, then falls through to the same `raise_for_status()` every other status takes —
+so **no new exception type** appears above `screenshot()`. A 500 or 403 raises on attempt one
+(`test_a_server_error_is_not_retried`, `test_a_client_error_is_not_retried` assert
+`len(attempts) == 1` and `sleeps == []`).
+
+`sleep` is injected as a kwarg beside `transport`; tests pass `sleep=sleeps.append` and assert
+the recorded delays as data. **The suite still runs in ~3s** despite a 35s policy.
+
+Backend tests 291 -> **295**.
+
+**Reported, deliberately NOT fixed — `AzureImageRenderer` has the same exposure.**
+`rendering.py:211` turns any status >= 400, 429 included, into `ImageGenerationError` with no
+retry. Left alone because it is out of US-007's scope and because Azure image calls are made
+manually, one at a time, so cadence limits are unlikely. **Trigger to fix: any batch or
+autonomous path that generates more than one AI visual per minute** — at which point a failed
+call also means a wasted paid request.
+
+### US-008 — Assets page with guarded delete (done 2026-07-30)
+
+`/assets` page (`app/assets/AssetLibrary.tsx` + `page.tsx`), nav entry added, plus
+`DELETE /assets/{id}` on the backend. Built entirely on the existing layer — US-002/004
+components, US-003's `ApiResult` helpers, no bare `fetch` reintroduced.
+
+**The 409-if-referenced guard is two-stage, and it has to be.** A naive
+`jsonb_each_text(draft.visual_values) WHERE value = '7'` matches *any* slot whose value is the
+string `"7"` — including a **text** slot where a human typed 7, which would falsely block a
+delete forever. So SQL is a broad pre-filter and Python then confirms the match is really an
+`image_url` slot (`assets.py:351`, `:365`). Both false-positive cases are pinned by test:
+`test_a_text_slot_that_happens_to_hold_the_id_is_not_a_reference` and
+`test_an_untyped_slot_holding_the_id_is_not_a_reference` (VISUAL row 556 has untyped slots).
+`test_a_draft_on_a_different_asset_does_not_block_the_delete` guards the other direction.
+
+Also handled: `visual_values` stores the id as the **string** `"7"` while a template slot's
+`default_asset_id` may be the JSON **number** `7`. `->> 'default_asset_id'` casts to text so one
+predicate covers both — commented at `assets.py:283-286`.
+
+Delete really removes the file from disk
+(`test_deleting_an_asset_removes_the_row_and_the_file_from_disk`), behind a focus-trapped
+confirm Dialog naming the consequence. Unknown id is a 404.
+
+Backend 295 -> **304**. Frontend 18 -> **32** across 4 files.
+
+### US-009 — Asset picker in Studio + visible unattended failure (done 2026-07-30) — TRACK A PAYOFF
+
+`Draft.asset_values` JSONB (migration `f41b8a1ac8ca`), picker in Studio for `image_url` slots,
+`default_asset_id` honoured so a template can complete unattended, and `asset_values` threaded
+into `publishing.lineage_metadata` so asset lineage survives outside our database.
+
+`WRITABLE_SLOT_TYPES` is **unchanged** — the model still never writes an image slot.
+`DraftOut` exposes `asset_values` at both the model (`api_drafts.py:34`) and the builder (`:93`);
+without the second, the column would have been invisible to the UI with everything green.
+`pushed_at`/`created_at` are still absent there — noted in a comment, and US-013 needs them.
+
+**Unattended failure is no longer silent.** `RunResult.visuals_failed` counts drafts created
+without a picture, kept **separate** from `failed` (a topic that produced no draft at all) so
+`created + failed == topics` stays an invariant a reader can trust. The swallow itself is
+unchanged on purpose: a draft with good words and a failed image is still worth keeping — the
+bug was the silence, not the tolerance.
+
+**PROVEN LIVE, not just unit-tested.** `stat-hero` v2 (id 1101) is the only template with
+`image_url` slots and had **zero** drafts ever. Probed against real Cloudflare: two asset rows
+created, resolved to base64 data URIs (5134 and 4670 chars), rendered to a **31KB 1080x1350 PNG
+containing both real images** — not empty boxes. Probe rows and files cleaned up, 0 left behind.
+
+**Template-design note for Nikhil (pre-existing, not V2's doing):** stat-hero v2 renders
+`big_number` in a near-background cream tone, so the hero stat reads as almost invisible. Now
+that this template can actually complete, that is worth a look.
+
+Backend 304 -> **331**. Frontend 32 -> **45**.
+
+### US-010 — Promote corpus media into the asset library (done 2026-07-30) — TRACK A COMPLETE
+
+`POST /assets/promote`, JSON `{post_ids: [int], kind, tags}` -> `list[Asset]`, order preserved.
+Reuses `sha256_of` + `store_image` unchanged, so promotion and upload dedupe and downscale
+identically. No sweep, no UI, no ingest hook — the operator picks.
+
+**All-or-nothing batch:** everything is read and checked before anything is written, so one bad
+post promotes none. A post with no media, a recorded-but-missing file, or a non-image is a 422
+naming the post.
+
+Dedupe: two posts with byte-identical media collapse to one row, keeping the **first** post's
+`source_post_id`.
+
+**Real corpus survey (read-only) — facts worth keeping:**
+- 107 posts: **62 carry `local_media_path`, 45 have none.** Media download was opportunistic.
+- Suffixes: 29 `.jpg`, 27 `.png`, 3 `.mp4`, 2 `.gif`, 1 `.jpeg`. Zero recorded-but-missing files.
+- **Zero byte-identical duplicates today**, so dedupe is load-bearing only for repeat promotion.
+- ⚠ **Both `.gif` files are animated** (6.6MB and 7.2MB). They pass through unchanged because
+  they sit under the 1600px ceiling — but if one ever exceeded it, Pillow's resize-and-save
+  would **silently flatten it to a single frame**. Not hit today; a real trap for anyone raising
+  the ceiling or uploading a large animation. No animated-image handling exists.
+- The smallest `.jpg` is a **120x90 4KB thumbnail** — some "media" is not usable brand material.
+  Promotion is deliberately operator-driven for exactly this reason.
+
+Backend 331 -> **344**.
+
+**Phase state: Track A (US-005..010) COMPLETE.** An `image_url` slot now has a real source, and a
+visual template containing an image can complete — proven live in US-009 against real Cloudflare.
+
+### US-011 — Publish detection stamps went_live_at (done 2026-07-30)
+
+`Draft.went_live_at` (migration `b7c31d90e4a2`, pre-made by the master so two parallel slices
+could share one linear chain). **Named `went_live_at`, not `published_at`** — `Post.published_at`
+already exists and a `select(Draft, Post)` merge with duplicate names resolves to whichever the
+query picks, wrong silently.
+
+**The window trap is handled, and this is the load-bearing part.** New `stamp_published(session)`
+is a *separate pass*, deliberately NOT limited to the ids `sync_metrics` happened to touch
+(comment at `metrics.py:161`). It selects pending drafts (`went_live_at IS NULL` and
+`zernio_post_id` set), then looks up `Post` by `late_post_id` across the whole table. Without
+that, a post publishing outside Zernio's 50-row analytics window — and 11 published posts already
+have no analytics row at all — would sit in the Inbox's "awaiting Monte" queue forever with no
+error anywhere.
+
+Note the namespace switch: `sync_metrics` keys on `Post.zernio_id`, the join needs
+`Post.late_post_id`. Different namespaces; the detection pass re-keys.
+
+Predicate is `Post.status == "published"`, **not row existence** — analytics also carries
+`partial`/`failed`, and manual rows are written `status="external"`.
+
+Idempotent by construction (`went_live_at IS NULL` in the query). Timestamp is
+`post.published_at or now(UTC)`. No commit added — callers still own that. **No `DraftStatus`
+enum**: `pushed_at` and `went_live_at` derive every state and cannot disagree with each other.
+`went_live_at` exposed in `DraftOut` at `api_drafts.py:61` and `:103`.
+
+15 new tests.
+
+### US-012 — Verdicts on published posts (done 2026-07-30)
+
+`Post.verdict` / `verdict_note` / `verdict_at` (migration `c8d42ea1f5b3`, pre-made by the master),
+`Verdict` StrEnum (worked/didnt/mixed), `POST /posts/{post_id}/verdict` with
+`VERDICT_NOTE_MAX = 500` enforced at the route (`main.py:263`). Re-settable — a human changes
+their mind. `GET /posts` returns raw `list[Post]`, so the columns reach the frontend with no
+hand-mapping (unlike `DraftOut`).
+
+**The property that lets verdicts live on `Post` at all is now pinned by test.** `corpus._apply`
+writes an explicit field list and its only dynamic write is `setattr` over `_METRICS`, so a
+metrics sync cannot clobber a verdict — `test_a_metrics_sync_does_not_clear_a_verdict` asserts it,
+so whoever next edits `_apply` finds out immediately rather than silently erasing human judgement
+on the next 6-hour sync.
+
+The cap is tested on **both** sides of the boundary
+(`test_a_note_at_the_cap_is_accepted_and_one_over_is_rejected`), and an unknown verdict value is
+rejected rather than coerced. No CHECK constraint and no verdict-history table: real cardinality
+is one ruling per post, and a database constraint would make a fourth verdict a migration instead
+of an edit.
+
+Framing that must survive into UI copy: a verdict is **judgement at n=1, never statistics**.
+Engagement spans 12.7x at ~3 samples per template, so nothing here may imply ranking.
+
+Backend **365** tests. Slices US-011 and US-012 ran concurrently on disjoint files and both
+landed clean — the shared resource was the Alembic head, which the master serialised by writing
+both migrations up front.
+
+### US-013 — GET /inbox, four human-gate queues (done 2026-07-30)
+
+`Inbox` -> `proposals_awaiting_review`, `built_awaiting_push`, `pushed_awaiting_monte`,
+`published_awaiting_verdict`; each an `InboxQueue{count, items[InboxItem{id,label,waiting_since,
+age_days}]}`, oldest first. `InboxQueue` deliberately carries **no rate, no mean, no ranking**,
+and the queues are not comparable with each other. `GET /templates` gained a `status` filter (none
+existed — `latest_versions` is status-blind, `usable_templates` is APPROVED-only). `DraftOut` now
+also exposes `pushed_at` and `created_at`, without which ages were unrenderable.
+
+**Queue 4 is lineage-only, decided from Postgres rather than taste.** 57 posts are published and
+57 carry no verdict, while zero drafts have ever gone live — so "all published posts" would open
+the Inbox with a 57-row backlog of Monte's historical writing, none of it a gate anyone intends to
+clear, burying the circuit the page exists to reveal. `POST /posts/{id}/verdict` still accepts any
+post, so an operator can rule on one; it just is not a queue.
+
+Queues 2/3/4 **partition** the drafts by the two timestamps — not pushed, pushed but not live,
+live but not judged. No draft is in two, and no status column exists that could disagree.
+
+⚠ **New cross-cutting hazard found and handled: every datetime column is `timestamp without time
+zone`.** A value written as `datetime.now(UTC)` reads back **naive** once the row round-trips, and
+whether that has happened depends on when the ORM expired the object — so one query can yield both
+aware and naive datetimes, and comparing them **raises**. Normalised once in `main._utc`;
+`test_publish_detection.utc_naive` documents the same hazard resolved the other way. Any later
+slice comparing datetimes must expect both kinds.
+
+### US-015 — Verdicts feed generation as lessons (done 2026-07-30)
+
+`verdict_lessons(session) -> list[str]` and a `lessons: list[str]` parameter on `_write_prompt`.
+
+**The two-call-sites trap is solved structurally, not by memory:** `lessons` takes **no default on
+purpose** (comment at `generation.py:240`), so the type checker forces both `generate_draft`
+(`:357`) and `regenerate_text` (`:407`) to pass it. Lessons wired into one alone would have worked
+until the first regenerate, then vanished silently.
+
+`if lessons:` means nothing is appended when none are recorded, so a prompt written before this
+slice is **byte-identical** — proved with a golden dump, not asserted.
+
+**The voice line did not move.** `_exemplars` remains `.where(Post.account_username ==
+settings.voice_account)` (`:195`) regardless of verdict or cohort, and the existing adversarial
+test — a creator post at 5000 engaged actions against Monte's 185, *named in the hook's
+provenance* — passes untouched.
+
+Lessons are judgement at **n=1**, never statistics: no averages, no win rates, no ranking language.
+⚠ Verdict notes are sent to Azure in prompts — anything typed there leaves the machine.
+
+Backend **399** tests. US-013 and US-015 ran concurrently on disjoint files; both landed clean.
+
+### US-014 — The Inbox replaces the home page (done 2026-07-30) — TRACK B COMPLETE
+
+`page.tsx` was a Status readout; it is now the Inbox. Four queues from `GET /inbox`, each item
+linking to the page that clears it. `age_days` is presented as the signal it is — a count says a
+queue is non-empty, "waiting 6 days" says the circuit stalled. Empty states say what *would* fill
+them ("A draft pushed to Zernio waits here until it goes live") rather than apologising.
+
+`layout.tsx` NAV: `/` is now **"Inbox"**, not "Status". The health rows moved into the Inbox
+footer, so the information stays reachable while nothing advertises Status as a destination —
+comment at `layout.tsx:23` records why.
+
+**Verified live against the real database before the page was built** (the route had never run
+outside tests):
+
+    proposals_awaiting_review    37
+    built_awaiting_push           4
+    pushed_awaiting_monte         2
+    published_awaiting_verdict    0
+
+That is the stalled circuit stated honestly. Queue 4 reading zero is not a bug — no generated
+draft has ever been published, so there is nothing to rule on. It becomes non-zero the moment
+Monte publishes, which is V2's operational exit criterion.
+
+Frontend 45 -> **53**. Backend 399. Build clean.
+
+**Phase state: Track B (US-011..015) COMPLETE.** Publish detection, verdicts, the four queues, the
+Inbox, and verdict lessons feeding generation. What remains is C-polish (US-016..018).
+
+### US-016 — Loading, empty and error states across every route (done 2026-07-30)
+
+`loading.tsx` + `error.tsx` for **all 7 routes** — skeletons mirroring the real layout, not
+spinners; errors in plain words surfacing the API's own `detail` strings, with a retry that
+actually re-requests. Empty states say what would fill them.
+
+**A real bug was found and fixed inside the slice** (`c2faa1a`): a root-level `loading.tsx`
+applies to *every* route, so the Inbox skeleton was flashing on `/posts`, `/studio` and the rest.
+Fixed by moving the Inbox into an **`(inbox)` route group**, which scopes its boundaries without
+changing the URL. This is invisible in any single-page test — the page under test looks perfect.
+
+The load-bearing assertion, only possible because US-003 replaced `getJson`'s swallow-into-`null`:
+**a failed request renders the error state and NOT the empty state.** Before US-003 a page could
+only ever say "nothing here yet", including when the backend was down.
+
+### US-017 — Motion tokens and accessibility sweep (done 2026-07-30)
+
+`globals.css` motion tokens applied to state transitions (120ms micro / 200ms structural,
+`cubic-bezier(0.2, 0, 0, 1)`), plus fixes in `ui/{dialog,select,skeleton,tabs}`.
+
+**`prefers-reduced-motion: reduce` is one global media query** over `*`, `*::before`, `*::after` in
+the tokens file (`globals.css:164`) — zeroes every duration app-wide, not per component.
+
+**The focus ring is one global `:focus-visible` rule** (`globals.css:138`) and the primitives
+deliberately add **no** focus-visible classes. Reason, recorded at `select.tsx:123`: the unlayered
+`:focus-visible` rule beats `@layer utilities`, so a per-component class would silently lose to it.
+One rule therefore covers every element, including pages added later.
+
+Contrast baselines from US-001 held: `--accent` #F2610C is **3.09:1 — fill only, never text**;
+`--accent-text` #ba4b09 is **5.80:1** and carries text on light, flipping to #f2610c in dark.
+Keyboard/focus exercised by hand via CDP scripts rather than asserted in jsdom, per the testing
+policy.
+
+**Ownership split held perfectly** — US-016 touched only route files and page bodies, US-017 only
+`globals.css` and `components/ui/`. Zero collisions across two concurrent frontend slices.
+
+Backend **399**. Frontend 53 -> **62** across 7 files. Build clean.
+
+### US-018 — IA collapse and the V2 run record (done 2026-07-30) — V2 COMPLETE
+
+Nav collapsed from six entries to **five destinations**, in the order a post moves through them:
+`Inbox` (`/`) · `Studio` · `Corpus` (`/posts`) · `Templates` · `Assets`. Scoreboard was demoted out
+of the nav and now hangs off the Templates page lede — it reads `/metrics/templates`, so it is that
+library's evidence rather than a sixth area, and `scoreboard/page.tsx` already linked back, so the
+pair is bidirectional. **PRD.md:381's IA line is a route inventory, not a nav spec** (it includes
+`/posts/[id]`); seven routes exist, five are destinations, and the comment at `layout.tsx:22` says so
+to stop a future slice "restoring" Scoreboard. Nothing is orphaned — every route has a named inbound
+link, listed in HANDOFF.md.
+
+**Shell width → `max-w-6xl`, all eight containers.** The nav sat at 5xl while `posts/`, `studio/` and
+`assets/` rendered at 6xl, so on exactly the table pages the width exists for, the nav's first link
+began 4rem inboard of the content under it. Widening only the nav relocates that 64px seam onto the
+other three pages instead of closing it, and "the shell at max-w-6xl" cannot mean chrome-only — so
+`layout.tsx` plus the `(inbox)`/`templates`/`scoreboard` pages **and their `loading.tsx` twins** all
+moved. A skeleton at a different width than its page is a visible layout jump, which is the defect
+class US-016 existed to remove. `/posts/[id]` and `route-error.tsx` stay at 3xl deliberately: a
+single post is a reading measure, and each agrees with its own skeleton.
+
+⚠ **No test asserts nav contents** — `pnpm test` reports 62 whether the nav is right or wrong. This
+slice's nav claim was verified by grep **plus a live render** (`curl` against `next dev`: exactly the
+five destinations on `/`, the Scoreboard link on `/templates`), not by an assertion.
+
+**`.scratch/v2/HANDOFF.md` written** — the durable record, on the assumption the conversation that
+produced V2 is gone. What V2 is, the three tracks, how to run it, the authoritative files, and every
+deferred item with the trigger that reopens it: impressions CSV (Monte's export), the ~25 missing
+posts 2025-08→2026-01, the optimizer (~300 lineage-tagged posts, a threshold not a backlog item),
+the channel cut-list triggers, `AzureImageRenderer`'s unfixed 429 at `rendering.py:211`, animated-GIF
+flattening above the 1600px ceiling, and the two human gates (37 proposals, draft 48).
+
+**The exit criterion is recorded as NOT MET, because it is not.** V2's exit is operational, not
+technical: one closed circuit — a generated draft published, metrics joined, a verdict recorded, the
+scoreboard's first non-zero row. Re-verified live against the real database at close of slice:
+
+    proposals_awaiting_review    37
+    built_awaiting_push           4
+    pushed_awaiting_monte         2
+    published_awaiting_verdict    0
+
+Identical to US-014's reading. Queue 4 is zero because `went_live_at IS NULL` for all 6 drafts — no
+generated draft has ever been published. `/scoreboard` renders "No generated post has been published
+yet" against the real 50-row library. Noted in the handoff and worth repeating: **both rows in queue
+3 are probes** — draft 48 is the Zernio id PRD.md:411 flags as a test draft awaiting deletion, and
+draft 555's idea is "about cat on moon hypothesis". So the first real lap has not been attempted, let
+alone completed. Software made the lap cheap; Monte publishing is the throughput limit.
+
+One cosmetic change came with the link: `templates/page.tsx` was still on raw `text-2xl` /
+`text-sm opacity-60`, and putting a link inside a 60%-opacity paragraph is an a11y problem, so that
+lede moved onto the US-001 tokens. Other holdouts (e.g. `TemplateManager.tsx:291`'s hardcoded border)
+were left alone and recorded as follow-ups instead.
+
+Backend **399**. Frontend **62**. `pnpm build` clean, 7 routes. Vault note
+`~/Nikhil-workshop/03-tools/Pixii-Intelligence.md` rewritten to describe V2 as built.
+
+**V2 COMPLETE — 18 of 18 slices.** Tracks A, B and C all landed. What remains is not a slice.

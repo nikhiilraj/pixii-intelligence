@@ -11,8 +11,18 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { toast } from "sonner";
 
-import { API_BASE, type Post, type Template } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { getJson, type Post, type Template } from "@/lib/api";
 
 const SORTS = [
   "engaged_actions",
@@ -32,6 +42,23 @@ const SORTS = [
 const VOICE_ACCOUNT = "Monte Desai";
 const INSPIRATION_ACCOUNT = "Creator inspiration";
 
+/* Radix rejects `Select.Item value=""` — it reserves the empty string for "nothing is
+ * selected", which is what a placeholder means. The three optional filters use "" for "no
+ * filter", so they need a stand-in item value.
+ *
+ * The sentinel is translated at the Select's own props and nowhere else: `Filters` still
+ * holds "", so `filterQuery` below is byte-identical to the query construction that was
+ * inline here before this migration. That matters more than it looks — letting the sentinel
+ * reach the query builder would send `platform=__all__` to the API, and `/posts` answers an
+ * unknown platform with an empty list, so the filter would silently return nothing instead
+ * of everything. The `noFilter`/`filterQuery` pair below is tested as the
+ * composition the component actually calls, so the sentinel is pinned where it lives.
+ */
+export const ALL = "__all__";
+
+/** The sentinel on the way back out — the only place `ALL` is understood. */
+export const noFilter = (value: string) => (value === ALL ? "" : value);
+
 const nf = new Intl.NumberFormat("en-US");
 
 function accountLabel(account: string): string {
@@ -50,7 +77,7 @@ function shortDate(value: string | null): string {
   return new Date(value).toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
 }
 
-type Filters = {
+export type Filters = {
   platform: string;
   account: string;
   family: string;
@@ -58,6 +85,46 @@ type Filters = {
   sort: (typeof SORTS)[number];
   order: "desc" | "asc";
 };
+
+/** The `/posts` query string for a set of filters. Lifted out of `apply` unchanged when the
+ *  four controls moved onto Radix Select, so that "filtering still works" is a property of a
+ *  function a test can call rather than a claim about a component tree. An empty value means
+ *  "no filter" and the param is omitted entirely — sending it empty would filter on "". */
+export function filterQuery(f: Filters): string {
+  const params = new URLSearchParams({ sort: f.sort, order: f.order });
+  if (f.platform) params.set("platform", f.platform);
+  if (f.account) params.set("account", f.account);
+  if (f.family) params.set("template_family", f.family);
+  if (f.since) params.set("since", f.since);
+  return params.toString();
+}
+
+/** One filter dropdown. Local to this file rather than in `components/ui/` — it is four
+ *  repetitions of the same trigger/value/content shape with nothing behavioural of its own,
+ *  and the Select parts stay usable in their Radix compound form everywhere else. */
+function FilterSelect({
+  label,
+  value,
+  onValueChange,
+  children,
+}: {
+  label: string;
+  value: string;
+  onValueChange: (value: string) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Select value={value} onValueChange={onValueChange}>
+      {/* Every trigger is labelled. The native selects carried the filter's name only in
+          their first option ("all channels", "any template"), which a Radix trigger does not
+          announce — the PRD requires all controls labelled and three of these four were bare. */}
+      <SelectTrigger aria-label={label}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>{children}</SelectContent>
+    </Select>
+  );
+}
 
 export default function Explorer({
   initial,
@@ -84,6 +151,7 @@ export default function Explorer({
     order: "desc",
   });
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const platforms = useMemo(
     () => Array.from(new Set(initial.map((p) => p.platform))).sort(),
@@ -105,18 +173,26 @@ export default function Explorer({
     const next = { ...filters, ...change };
     setFilters(next);
     setLoading(true);
-    const params = new URLSearchParams({ sort: next.sort, order: next.order });
-    if (next.platform) params.set("platform", next.platform);
-    if (next.account) params.set("account", next.account);
-    if (next.family) params.set("template_family", next.family);
-    if (next.since) params.set("since", next.since);
-    try {
-      const res = await fetch(`${API_BASE}/posts?${params}`, { cache: "no-store" });
-      setPosts(res.ok ? ((await res.json()) as Post[]) : []);
-    } catch {
-      setPosts([]);
-    } finally {
-      setLoading(false);
+    // Not one of the six call sites US-003 was scoped to, but the same bug in its
+    // purest form: `setPosts(res.ok ? json : [])` turned a rejected filter — a 422 naming
+    // the sort column it would not accept — into "no posts match", which is a wrong answer
+    // wearing the shape of a right one. It is now reported and the previous rows are kept,
+    // since throwing them away tells the user even less.
+    const result = await getJson<Post[]>(`/posts?${filterQuery(next)}`);
+    setLoading(false);
+
+    if (result.ok) {
+      setPosts(result.data);
+      setError(null);
+    } else {
+      // The message moved to a toast; the `error` state did not. It still gates the
+      // "Nothing matches those filters." line below, and that suppression is the whole point
+      // of US-003 — after a failed request there is no data to make an emptiness claim about.
+      // Deleting the state along with the paragraph would put the bug straight back.
+      setError(result.message);
+      toast.error("Filter failed", {
+        description: `${result.message} — the rows below are the previous result.`,
+      });
     }
   }
 
@@ -134,84 +210,114 @@ export default function Explorer({
     [posts],
   );
 
-  const field =
-    "rounded-md border border-black/15 bg-transparent px-2 py-1.5 text-sm dark:border-white/20";
-
   return (
     <>
       <div className="mt-6 flex flex-wrap items-center gap-2">
-        <select
-          value={filters.account}
-          onChange={(e) => apply({ account: e.target.value })}
-          className={field}
-          aria-label="cohort"
+        <FilterSelect
+          label="cohort"
+          value={filters.account || ALL}
+          onValueChange={(v) => apply({ account: noFilter(v) })}
         >
-          <option value="">all accounts</option>
+          <SelectItem value={ALL}>all accounts</SelectItem>
           {accounts.map((a) => (
-            <option key={a} value={a}>
+            <SelectItem key={a} value={a}>
               {accountLabel(a)}
-            </option>
+            </SelectItem>
           ))}
-        </select>
+        </FilterSelect>
 
-        <select
-          value={filters.platform}
-          onChange={(e) => apply({ platform: e.target.value })}
-          className={field}
+        <FilterSelect
+          label="channel"
+          value={filters.platform || ALL}
+          onValueChange={(v) => apply({ platform: noFilter(v) })}
         >
-          <option value="">all channels</option>
+          <SelectItem value={ALL}>all channels</SelectItem>
           {platforms.map((p) => (
-            <option key={p} value={p}>
+            <SelectItem key={p} value={p}>
               {p}
-            </option>
+            </SelectItem>
           ))}
-        </select>
+        </FilterSelect>
 
-        <select
-          value={filters.family}
-          onChange={(e) => apply({ family: e.target.value })}
-          className={field}
+        <FilterSelect
+          label="template family"
+          value={filters.family || ALL}
+          onValueChange={(v) => apply({ family: noFilter(v) })}
         >
-          <option value="">any template</option>
+          <SelectItem value={ALL}>any template</SelectItem>
           {templates.map((t) => (
-            <option key={t.id} value={t.family_id}>
+            <SelectItem key={t.id} value={t.family_id}>
               {t.kind}: {t.name}
-            </option>
+            </SelectItem>
           ))}
-        </select>
+        </FilterSelect>
 
+        {/* Stays a native date input. A listbox cannot express an arbitrary date, and none of
+            what Radix Select is here for — typeahead, ARIA listbox roles, scroll lock —
+            applies to a date field. It is retokenized because it shared the `field` class
+            string with the four selects that just left, and `min-h-8` pins the 32px target
+            the class string did not. */}
         <input
           type="date"
           value={filters.since}
           onChange={(e) => apply({ since: e.target.value })}
-          className={field}
+          className="min-h-8 rounded-input border border-border bg-transparent px-2 py-1.5 text-meta"
           aria-label="published since"
         />
 
-        <select
+        <FilterSelect
+          label="sort by"
           value={filters.sort}
-          onChange={(e) => apply({ sort: e.target.value as (typeof SORTS)[number] })}
-          className={field}
+          onValueChange={(v) => apply({ sort: v as (typeof SORTS)[number] })}
         >
           {SORTS.map((s) => (
-            <option key={s} value={s}>
+            <SelectItem key={s} value={s}>
               sort: {s.replace(/_/g, " ")}
-            </option>
+            </SelectItem>
           ))}
-        </select>
+        </FilterSelect>
 
-        <button
+        {/* Two values, not a list — a toggle, so it is US-002's Button rather than a Select. */}
+        <Button
+          variant="outline"
           onClick={() => apply({ order: filters.order === "desc" ? "asc" : "desc" })}
-          className={field}
           aria-label="toggle sort direction"
         >
           {filters.order === "desc" ? "↓" : "↑"}
-        </button>
+        </Button>
 
-        <span className="text-sm opacity-60">
+        {/* aria-live because the row count is the only confirmation that a filter took
+            effect, and the change happens away from the control that caused it. */}
+        <span className="text-meta text-muted" aria-live="polite">
           {loading ? "…" : `${posts.length} post${posts.length === 1 ? "" : "s"}`}
         </span>
       </div>
+
+      {/* The failure, persistently, with the retry that re-requests it.
+
+          Before this it was a toast and nothing else, so four seconds after a rejected filter
+          the page showed the previous rows with no sign that the filter had not taken — the
+          quietest version of the bug this slice is about. The toast stays as well: it fires
+          next to the control that was just used, and the table it describes is a screen
+          further down.
+
+          `apply({})` is the retry — no change to the filters, so it rebuilds the same query
+          and issues the same request. The rows below are still the previous result until it
+          succeeds, which is what the copy says. */}
+      {error && (
+        <Card role="alert" className="mt-4 border-danger/40 bg-danger/10 text-body">
+          <p className="font-medium">Filter failed — the rows below are the previous result.</p>
+          <p className="mt-1 text-muted">{error}</p>
+          <Button
+            variant="outline"
+            className="mt-3"
+            disabled={loading}
+            onClick={() => apply({})}
+          >
+            {loading ? "Trying…" : "Try again"}
+          </Button>
+        </Card>
+      )}
 
       {series.length > 1 && (
         <div className="mt-6 h-56 w-full">
@@ -278,8 +384,37 @@ export default function Explorer({
             ))}
           </tbody>
         </table>
-        {posts.length === 0 && !loading && (
-          <p className="py-6 text-sm opacity-60">Nothing matches those filters.</p>
+        {/* Suppressed while `error` is set: "nothing matches" is a claim about the data,
+            and after a failed request there is no data to make it about. That one boolean is
+            the whole bug class this slice exists to prevent, so it is pinned by test.
+
+            Two empties, told apart by `initial` — the unfiltered server read this component
+            arrived with. Empty there means the corpus itself is empty; non-empty there means
+            the filters excluded everything, and the count is worth naming because "no post
+            matches" beside a corpus of 107 is a filter problem, not a data problem. */}
+        {posts.length === 0 && !loading && !error && (
+          <Card className="mt-6 bg-surface-2 text-body">
+            {initial.length === 0 ? (
+              <>
+                <p className="font-medium">The corpus is empty.</p>
+                <p className="mt-1 text-muted">
+                  Posts arrive from Zernio analytics — every published post on a connected
+                  account lands here on the next sync, and extraction reads its templates out of
+                  them. Nothing is written by hand except an external post added above.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="font-medium">No post matches those filters.</p>
+                <p className="mt-1 text-muted">
+                  The corpus holds {nf.format(initial.length)} post
+                  {initial.length === 1 ? "" : "s"}. Widen the cohort, the channel, the template
+                  family or the date to see more — the view opens on our own account only, so
+                  creator reference posts are one filter away.
+                </p>
+              </>
+            )}
+          </Card>
         )}
       </div>
     </>

@@ -1,26 +1,175 @@
 @import "tailwindcss";
 
+/* Design tokens. Values from `.scratch/v2/PRD.md` → "Design System Spec".
+   Hex literals live in :root so the prefers-color-scheme block below can flip them;
+   the @theme blocks only alias those variables. Putting a literal straight into
+   @theme would bake the light value into every generated utility and dark mode
+   would stop resolving. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+  /* colour — light */
+  --bg: #fafaf7;
+  --surface: #ffffff;
+  --surface-2: #f5f0e8; /* brand cream, raised cards */
+  --border: #e4dac6; /* real brand tan, extracted from the APPROVED visual templates */
+  --text: #191917;
+  --text-muted: #6b635a; /* real brand muted ink (5.6:1 on --bg; the PRD's guess was 5.0:1) */
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  /* The real Pixii orange, extracted from the `html` of the APPROVED visual
+     templates in Postgres — this resolves PRD Open Question 2 and supersedes the
+     #E8590C placeholder. It is a FILL colour: 3.09:1 on --bg, 3.24:1 on --surface,
+     2.85:1 on --surface-2, so it passes the 3:1 bar for graphics but fails AA as
+     text. --accent-text is the same hue darkened until it clears 4.5:1 on all
+     three light surfaces (4.90 / 5.12 / 4.52); in dark the brand hex already
+     clears AA (5.80 / 5.34 / 4.87), so it is used directly. Never put --accent on
+     text; never put --accent-text on a fill. */
+  --accent: #f2610c;
+  --accent-text: #ba4b09;
+  --accent-fg: #ffffff;
+
+  --success: #2f9e44;
+  --warning: #e8a33d;
+  --danger: #d6455d;
+
+  /* 5-step categorical chart palette: accent anchor + desaturated ink steps.
+     Hexes derived here — the PRD names the shape of this ramp, not its values.
+     Every step clears 3:1 on both --bg and --surface-2 in both themes; the two
+     warm steps and three ink steps are separated by lightness, not hue alone.
+     ponytail: :root only, no Tailwind alias. Recharts reads `stroke="var(--chart-1)"`
+     directly in SVG props, so no JS chart-config module is needed. Currently
+     declared-but-unconsumed: the only chart in the app is posts/Explorer.tsx,
+     which a later slice migrates onto these. */
+  --chart-1: var(--accent-text); /* the AA-safe accent, so it flips with the theme */
+  --chart-2: #4a4740;
+  --chart-3: #8a8578;
+  --chart-4: #a85c1f;
+  --chart-5: #6b635a;
+
+  /* motion — Tailwind's `transition`/`duration-200` utilities cover the two
+     durations; these exist for plain CSS (keyframes, Recharts) that cannot. */
+  --duration-micro: 120ms;
+  --duration-structural: 200ms;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --bg: #121210;
+    --surface: #1b1b18;
+    --surface-2: #232320;
+    --border: #34342e;
+    --text: #edebe4;
+    --text-muted: #98958a;
+
+    /* The brand orange clears AA on dark, so text uses it unmodified. --border and
+       --text-muted keep the PRD's dark values: the extracted brand palette is
+       post-visual, and posts only ever render on cream. */
+    --accent-text: #f2610c;
+
+    /* ink steps invert; --chart-1 follows --accent-text automatically */
+    --chart-2: #d6d2c6; /* not --text's #EDEBE4 — a series stroke must not read as body copy */
+    --chart-3: #b8b3a4;
+    --chart-4: #f09a5b;
+    --chart-5: #98958a;
   }
 }
 
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--text-muted);
+  --color-accent: var(--accent);
+  --color-accent-text: var(--accent-text);
+  --color-accent-fg: var(--accent-fg);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@theme {
+  /* type scale, px/line-height per the PRD. Weights 400/500/600 only. */
+  --text-caption: 0.75rem; /* 12/16 */
+  --text-caption--line-height: 1rem;
+  --text-meta: 0.84375rem; /* 13.5/20 — tables + meta */
+  --text-meta--line-height: 1.25rem;
+  --text-body: 0.9375rem; /* 15/24 */
+  --text-body--line-height: 1.5rem;
+  --text-head: 1.125rem; /* 18/26 — section head */
+  --text-head--line-height: 1.625rem;
+  --text-title: 1.375rem; /* 22/30 — page title */
+  --text-title--line-height: 1.875rem;
+  --text-display: 2.125rem; /* 34/40 */
+  --text-display--line-height: 2.5rem;
+
+  /* 4px base grid (Tailwind's default, declared so it is not accidental) */
+  --spacing: 0.25rem;
+
+  --radius-input: 6px;
+  --radius-card: 10px;
+  --radius-dialog: 14px;
+
+  /* Depth is border-first. One shadow, reserved for overlays. */
+  --shadow-overlay: 0 4px 16px rgb(0 0 0 / 0.08);
+
+  /* 120ms micro is the default for a bare `transition`; 200ms structural is
+     `duration-[var(--duration-structural)]`. Both share the one easing curve. */
+  --default-transition-duration: 120ms;
+  --default-transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  /* The PRD's 1.6s skeleton pulse, overriding Tailwind's 2s default. The upgrade path
+     skeleton.tsx named — "when globals.css is next touched" — which is now. Keyframe name
+     stays `pulse`; Tailwind already defines it, so only the timing changes. */
+  --animate-pulse: pulse 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* Global, not per-component: one accent focus ring everywhere. Uses --accent-text,
+   not --accent: the raw brand orange is 2.85:1 on a cream surface, under the 3:1
+   floor for a non-text indicator. Same hue, AA-safe on every surface. */
+:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+
+/* recharts@3 renders axis tick labels as SVG <text> and takes their colour from the axis's
+   own `stroke` prop, so `<XAxis stroke="currentColor" opacity={0.5} />` puts --text at 50%
+   on them. Measured, that is 3.31:1 on light --bg — a real AA failure on real text, and the
+   one contrast failure this slice found in the running app.
+
+   Fixed here rather than in the chart, because `opacity` and `fill` arrive as SVG
+   *presentation attributes*, which any author rule outranks. Verified over CDP on /posts in
+   both themes: computed tick fill went #191917@50% -> #6b635a (5.64:1) light and
+   #edebe4@50% -> #98958a (6.25:1) dark, with the attribute still reading 0.5. So one rule in
+   the tokens file fixes every chart at once and cannot be forgotten by the next one added.
+
+   Scoped to the tick text alone. The grid line is decorative and currentColor@12% (1.28:1)
+   already matches --border (1.33:1), so restyling it would buy nothing. */
+.recharts-cartesian-axis-tick-value {
+  fill: var(--text-muted);
+  opacity: 1;
+}
+
+/* Zero every duration, in the tokens file rather than per-component.
+   0.01ms rather than 0 so transitionend still fires. Delays are zeroed too: a 0.01ms
+   transition behind a 200ms delay still reads as motion-with-a-wait. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
 }
