@@ -184,7 +184,8 @@
       "The new draft's hook/structure/visual family+version equal the source's, resolved via generated_from and not by latest version",
       "The source draft or post is unmodified \u2014 its lineage, text and metrics do not move",
       "Re-topicking from a retired template version still works: the version history is the attribution record",
-      "slice tests green"
+      "slice tests green",
+      "UI: a re-topic can be started from a draft or a post (backend landed 33f8102)"
     ],
     "priority": 14,
     "passes": false
