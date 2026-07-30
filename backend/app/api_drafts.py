@@ -13,10 +13,13 @@ from app.generation import (
     generate_draft,
     regenerate_text,
     regenerate_visual,
+    retopic,
     suggest_templates,
 )
 from app.llm import LLMResponseError
+from app.metrics import draft_for_post
 from app.models.draft import Draft
+from app.models.post import Post
 from app.models.template import Template
 from app.notify import notify
 from app.publishing import PushFailed, push_draft
@@ -198,6 +201,102 @@ def create_draft(
     session.commit()
     session.refresh(draft)
     return _out(session, draft)
+
+
+class RetopicIn(BaseModel):
+    """A new subject, plus exactly one source to inherit the templates from.
+
+    Two optional ids rather than one required `source_id` with a `kind`: a caller holding a
+    post and a caller holding a draft both have an integer, and a mistyped `kind` would send
+    one of them looking up the wrong table and 404 for a row that exists.
+    """
+
+    idea: str
+    source_draft_id: int | None = None
+    source_post_id: int | None = None
+
+
+class RetopicOut(DraftOut):
+    """The new draft, plus what producing it cost. Subclassed, so `_out` stays the one
+    mapping — the hand-mapping trap in `DraftOut` gets no second place to be missed."""
+
+    llm_calls: int
+    image_calls: int
+
+
+def _source_draft(session: SessionDep, payload: RetopicIn) -> Draft:
+    """The draft whose templates are being inherited, from either kind of id.
+
+    A post resolves through `metrics.draft_for_post` — the join is
+    `Draft.zernio_post_id == Post.late_post_id`, not `Post.zernio_id`, which is a different
+    namespace and matches nothing. Most of the corpus was ingested rather than generated
+    here, so "this post has no draft behind it" is the common case and gets its own answer.
+    """
+    if (payload.source_draft_id is None) == (payload.source_post_id is None):
+        raise HTTPException(
+            status_code=422,
+            detail="give exactly one of source_draft_id or source_post_id",
+        )
+    if payload.source_draft_id is not None:
+        return _load(session, payload.source_draft_id)
+
+    post = session.get(Post, payload.source_post_id)
+    if post is None:
+        raise HTTPException(status_code=404, detail=f"no post {payload.source_post_id}")
+    draft = draft_for_post(session, post)
+    if draft is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"post {post.id} was not generated here, so it records no templates to"
+                " re-topic from"
+            ),
+        )
+    return draft
+
+
+@router.post("/retopic", status_code=201)
+def create_retopic(
+    session: SessionDep,
+    llm: LLMDep,
+    html_renderer: HtmlRendererDep,
+    image_renderer: ImageRendererDep,
+    payload: RetopicIn,
+) -> RetopicOut:
+    """A new draft on a new subject, through a past draft's exact templates.
+
+    The source is read and never written: this is a new row, not `regenerate-text`, which
+    rewrites one draft in place and holds its lineage still. Both the templates and the
+    renderer come from the source's own `(family, version)` — see `generation.retopic` and
+    `_renderer` — so a re-topic of a v1 draft is written by v1 even once v4 exists, and a
+    version that has since been retired still works, because the version history is the
+    attribution record.
+
+    409 for a recorded version that is no longer in the table, exactly as the redraw does:
+    the library cannot serve this draft's version, and silently substituting a sibling is
+    the mis-attribution this route exists to avoid.
+    """
+    source = _source_draft(session, payload)
+    meter = SpendMeter()
+    try:
+        draft = retopic(
+            session,
+            meter.watch(llm),
+            meter.watch(_renderer(session, source, html_renderer, image_renderer)),
+            source,
+            idea=payload.idea,
+        )
+    except NoUsableTemplates as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LLMResponseError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    session.commit()
+    session.refresh(draft)
+    # Observed through the same meter the autonomous run uses, never predicted: a re-topic
+    # buys one completion and one render, and a render that failed into `visual_error`
+    # bought its call all the same.
+    return RetopicOut(**_out(session, draft).model_dump(), **meter.spend())
 
 
 @router.post("/{draft_id}/regenerate-text")
