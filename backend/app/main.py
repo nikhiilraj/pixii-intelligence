@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlmodel import col, select
 
+from app.api_assets import router as assets_router
 from app.api_drafts import router as drafts_router
 from app.api_templates import router as templates_router
 from app.config import settings
@@ -47,6 +48,7 @@ app.mount("/media", StaticFiles(directory=settings.media_dir), name="media")
 
 app.include_router(templates_router)
 app.include_router(drafts_router)
+app.include_router(assets_router)
 
 app.add_middleware(
     CORSMiddleware,
