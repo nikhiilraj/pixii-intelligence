@@ -1,7 +1,16 @@
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
-/* Mirrors page.tsx: title, the lede, then four queue sections — heading, count, gate sentence,
+/* **Why the Inbox lives in an `(inbox)` route group.** This was `app/loading.tsx` first, and
+   that was wrong in a way only a browser shows: a segment's `loading.tsx` is the Suspense
+   fallback for that segment *and every route beneath it*, so the root one made a hard load of
+   /posts, /studio, /assets and the rest render this four-gate Inbox skeleton first and then
+   swap it for the route's own. Confirmed in the streamed HTML — on `GET /posts` the visible
+   shell was "Loading the Inbox…" with the corpus skeleton sitting in a `<div hidden>` waiting
+   to replace it. A route group is a segment that adds nothing to the URL, so `/` still serves
+   this page and this fallback now belongs to it alone. Do not move it back up.
+
+   Mirrors page.tsx: title, the lede, then four queue sections — heading, count, gate sentence,
    card of rows — and the status footer. A spinner would say "wait"; this says "four gates are
    coming", which is the only thing about this page worth knowing before it arrives.
 
