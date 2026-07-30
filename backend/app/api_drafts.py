@@ -41,8 +41,9 @@ class DraftOut(BaseModel):
     **Hand-mapped, and every field has to be added in two places** — here and in `_out`.
     Nothing derives this from the model, so a new `Draft` column arrives with a green
     migration, a green query and a green test while the frontend sees nothing at all.
-    `pushed_at` and `created_at` are on the model and still missing here; `asset_values` is
-    not, and `test_a_new_draft_column_reaches_the_api` is what keeps it that way.
+    `asset_values` (US-009), `went_live_at` (US-011) and now `pushed_at`/`created_at`
+    (US-013) each had to be added by hand for that reason;
+    `test_a_new_draft_column_reaches_the_api` is what keeps the next one from being missed.
     """
 
     id: int
@@ -56,9 +57,14 @@ class DraftOut(BaseModel):
     visual_error: str | None
     visual_png: str | None
     zernio_post_id: str | None
+    # When Zernio accepted the push. Together with `created_at` this is what gives the Inbox
+    # an age per queue: "built 6 days ago and never pushed" is the thing a count cannot say,
+    # and an age is the only signal that distinguishes a queue from a stalled one.
+    pushed_at: datetime | None
     # Null means pushed but not yet live. With `zernio_post_id` this is what lets the Inbox
     # tell "awaiting Monte" from "published" without a status column.
     went_live_at: datetime | None
+    created_at: datetime
     lineage: dict
 
 
@@ -100,7 +106,9 @@ def _out(session: SessionDep, draft: Draft) -> DraftOut:
             base64.b64encode(draft.visual_image).decode() if draft.visual_image else None
         ),
         zernio_post_id=draft.zernio_post_id,
+        pushed_at=draft.pushed_at,
         went_live_at=draft.went_live_at,
+        created_at=draft.created_at,
         lineage=_lineage(session, draft),
     )
 
