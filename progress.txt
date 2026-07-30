@@ -1322,3 +1322,32 @@ containing both real images** — not empty boxes. Probe rows and files cleaned 
 that this template can actually complete, that is worth a look.
 
 Backend 304 -> **331**. Frontend 32 -> **45**.
+
+### US-010 — Promote corpus media into the asset library (done 2026-07-30) — TRACK A COMPLETE
+
+`POST /assets/promote`, JSON `{post_ids: [int], kind, tags}` -> `list[Asset]`, order preserved.
+Reuses `sha256_of` + `store_image` unchanged, so promotion and upload dedupe and downscale
+identically. No sweep, no UI, no ingest hook — the operator picks.
+
+**All-or-nothing batch:** everything is read and checked before anything is written, so one bad
+post promotes none. A post with no media, a recorded-but-missing file, or a non-image is a 422
+naming the post.
+
+Dedupe: two posts with byte-identical media collapse to one row, keeping the **first** post's
+`source_post_id`.
+
+**Real corpus survey (read-only) — facts worth keeping:**
+- 107 posts: **62 carry `local_media_path`, 45 have none.** Media download was opportunistic.
+- Suffixes: 29 `.jpg`, 27 `.png`, 3 `.mp4`, 2 `.gif`, 1 `.jpeg`. Zero recorded-but-missing files.
+- **Zero byte-identical duplicates today**, so dedupe is load-bearing only for repeat promotion.
+- ⚠ **Both `.gif` files are animated** (6.6MB and 7.2MB). They pass through unchanged because
+  they sit under the 1600px ceiling — but if one ever exceeded it, Pillow's resize-and-save
+  would **silently flatten it to a single frame**. Not hit today; a real trap for anyone raising
+  the ceiling or uploading a large animation. No animated-image handling exists.
+- The smallest `.jpg` is a **120x90 4KB thumbnail** — some "media" is not usable brand material.
+  Promotion is deliberately operator-driven for exactly this reason.
+
+Backend 331 -> **344**.
+
+**Phase state: Track A (US-005..010) COMPLETE.** An `image_url` slot now has a real source, and a
+visual template containing an image can complete — proven live in US-009 against real Cloudflare.
