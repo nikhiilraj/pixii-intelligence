@@ -20,7 +20,9 @@ export const metadata: Metadata = {
 };
 
 const NAV = [
-  { href: "/", label: "Status" },
+  // "Status" was a destination; the Inbox is. The health rows it named now live in that page's
+  // footer (page.tsx), so nothing advertises Status as somewhere to go.
+  { href: "/", label: "Inbox" },
   { href: "/posts", label: "Corpus" },
   { href: "/templates", label: "Templates" },
   { href: "/assets", label: "Assets" },

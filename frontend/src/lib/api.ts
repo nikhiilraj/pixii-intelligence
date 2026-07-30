@@ -89,6 +89,42 @@ export type Draft = {
   lineage: { hook: LineageEntry; structure: LineageEntry; visual: LineageEntry };
 };
 
+/* `InboxItem` / `InboxQueue` / `Inbox` in backend/app/main.py:309-349.
+ *
+ * `id` is the id of whatever the gate acts on — a template, a draft, a post — so the queue an
+ * item came from is also what says which page clears it.
+ *
+ * `age_days` is whole days, floored, never negative, measured from `waiting_since`. It is
+ * computed server-side and rendered as given: a count says a queue is non-empty, an age says
+ * the circuit stalled, and that is the only thing on this page that distinguishes work in
+ * progress from work forgotten.
+ *
+ * A queue carries no rate, no mean and no ranking, and the queues are not comparable with each
+ * other. Nothing off this route may be rendered as performance. */
+export type InboxItem = {
+  id: number;
+  // A handle for recognising the thing, not the thing itself — the backend caps it at 80 chars.
+  label: string;
+  waiting_since: string;
+  age_days: number;
+};
+
+export type InboxQueue = { count: number; items: InboxItem[] };
+
+export type Inbox = {
+  proposals_awaiting_review: InboxQueue;
+  built_awaiting_push: InboxQueue;
+  pushed_awaiting_monte: InboxQueue;
+  published_awaiting_verdict: InboxQueue;
+};
+
+/** `GET /health`. Read by the Inbox footer — the only place it is consumed. */
+export type Health = {
+  status: string;
+  database: boolean;
+  credentials: Record<string, boolean>;
+};
+
 /* The result of a request, where failing is not the same as having nothing.
  *
  * The previous helper returned `T | null`, so a network error, a 500, a 404 and a
