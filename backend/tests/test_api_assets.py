@@ -1,4 +1,6 @@
 import io
+import struct
+import zlib
 from collections.abc import Iterator
 
 import pytest
@@ -121,6 +123,44 @@ def test_a_truncated_image_is_refused_rather_than_half_stored(client, session):
 
     assert upload(client, truncated).status_code == 422
     assert session.exec(select(Asset)).all() == []
+
+
+def bomb_png(width: int = 30000, height: int = 30000) -> bytes:
+    """A tiny PNG whose header *claims* to be enormous — the decompression-bomb shape.
+
+    Hand-built rather than produced by Pillow, because the whole point is a file that costs
+    68 bytes to send and ~2.7GB to decode; `Image.new(30000, 30000)` would allocate that here
+    in the test process. The IHDR CRC is real: a wrong one makes Pillow raise on the checksum
+    before the bomb check ever runs, which would make this test red for a different reason.
+    """
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + kind
+            + data
+            + struct.pack(">I", zlib.crc32(kind + data))
+        )
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", b"") + chunk(b"IEND", b"")
+
+
+def test_a_decompression_bomb_is_refused_and_stores_nothing(client, session):
+    """68 bytes declaring 30000x30000. Pillow refuses to decode it, and that refusal is a
+    `DecompressionBombError`, which subclasses `Exception` directly — so it escaped the
+    `(OSError, ValueError)` handler and left the route answering 500 where its docstring
+    promises a 4xx. A hostile upload must be *refused*, not crash the process handling it."""
+    raw = bomb_png()
+    assert len(raw) < 100  # the asymmetry that makes this an attack rather than a big file
+
+    response = upload(client, raw, name="bomb.png")
+
+    assert response.status_code == 422
+    # Our own wording, not Pillow's — its message text moves between versions.
+    assert "too large to decode" in response.json()["detail"]
+    assert session.exec(select(Asset)).all() == []
+    assert not assets_dir().exists()
 
 
 def test_an_image_format_the_media_mount_cannot_serve_is_refused(client):

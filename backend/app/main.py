@@ -5,7 +5,7 @@ from datetime import UTC, date, datetime, time
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlmodel import col, select
 
@@ -77,10 +77,20 @@ def health() -> dict:
 
     The frontend status page renders this directly, so an operator can see at a glance
     whether the database is up and which credentials are configured.
+
+    `status` is derived, not the literal `"ok"` it used to be: the status row can render a
+    failure (US-007), and a readout structurally incapable of saying anything but "fine" makes
+    that capability unobservable. `database_reachable()` is called once and reused — twice
+    would be two connection attempts that could disagree inside one response.
+
+    ponytail: `degraded` is the only failure word, and credentials do not affect it. Missing
+    credentials break one feature each and are already reported per key; the database is the
+    one dependency without which nothing here answers at all.
     """
+    reachable = database_reachable()
     return {
-        "status": "ok",
-        "database": database_reachable(),
+        "status": "ok" if reachable else "degraded",
+        "database": reachable,
         "credentials": settings.configured(),
     }
 
@@ -269,17 +279,27 @@ class VerdictIn(BaseModel):
     # Typed as the enum, so an unknown value is rejected with a 422 naming the three
     # allowed values rather than being coerced into one of them. What reaches the row is
     # always a `Verdict` member, never a bare string.
-    verdict: Verdict
+    #
+    # `Field(...)` is what makes this **required but nullable**: `null` clears the ruling,
+    # while an empty body or a misspelt key stays a 422. A bare `Verdict | None` would give the
+    # field a default of `None` and turn both of those into a silent wipe of a human's
+    # judgement — a worse bug than the one being fixed.
+    verdict: Verdict | None = Field(...)
     note: str = ""
 
 
 @app.post("/posts/{post_id}/verdict")
 def set_verdict(post_id: int, payload: VerdictIn, session: SessionDep) -> Post:
-    """Record a human's ruling on a post: worked, didnt, or mixed, plus why.
+    """Record a human's ruling on a post: worked, didnt, or mixed, plus why — or clear it.
 
     The only form of learning that is honest at n=1 — a verdict claims judgement, not
     statistics. Re-settable, because a human changes their mind once they have seen how a
     post aged; the later ruling replaces the earlier one and `verdict_at` moves with it.
+
+    `{"verdict": null}` retracts instead, taking the note and the timestamp with it: a note is
+    the reason *for a ruling*, and one left behind after the ruling is gone would keep teaching
+    `generation.verdict_lessons`, which selects on the note being non-empty. The post returns
+    to Inbox queue 4, whose predicate is already `went_live_at is not null and verdict is null`.
 
     ponytail: no verdict history and no audit log. One ruling per post is the real
     cardinality, and a history has no reader until two people use this app.
@@ -297,9 +317,10 @@ def set_verdict(post_id: int, payload: VerdictIn, session: SessionDep) -> Post:
     if post is None:
         raise HTTPException(status_code=404, detail=f"no post {post_id}")
 
+    cleared = payload.verdict is None
     post.verdict = payload.verdict
-    post.verdict_note = payload.note
-    post.verdict_at = datetime.now(UTC)
+    post.verdict_note = "" if cleared else payload.note
+    post.verdict_at = None if cleared else datetime.now(UTC)
     session.add(post)
     session.commit()
     session.refresh(post)
