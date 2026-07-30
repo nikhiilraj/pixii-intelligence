@@ -137,6 +137,11 @@ export type Inbox = {
   built_awaiting_push: InboxQueue;
   pushed_awaiting_monte: InboxQueue;
   published_awaiting_verdict: InboxQueue;
+  /** Laps already completed — a draft that went live whose post now carries a verdict. Not a
+   *  queue: nothing waits behind it. A count of laps and never a score; it says whether the
+   *  machine has run end to end, not how anything performed. 0 today, and rendering that 0
+   *  rather than hiding it is the whole reason the field exists. */
+  closed_circuits: number;
 };
 
 /** `GET /health`. Read by the Inbox footer — the only place it is consumed. */

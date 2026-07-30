@@ -24,8 +24,16 @@ export const dynamic = "force-dynamic";
 
    These are queues, not scores. No ordering between them means anything, they are not
    comparable with each other, and nothing here may be read as a template, draft or post having
-   performed well or badly. That constraint is why there is no total, no chart and no sort
-   control: every one of those would invite a comparison the data cannot support. */
+   performed well or badly. That constraint is why there is no chart and no sort control, and
+   why the queues carry no total: every one of those would invite a comparison the data cannot
+   support.
+
+   The closed-circuit counter is the one number that survives that rule, and it is worth being
+   precise about why. It totals nothing on this page — it is not the queues added up — and it
+   ranks nothing against anything. It answers a question about the machine, not about the work:
+   has a draft ever gone all the way round? Four empty queues cannot answer that. "Nothing has
+   ever been published" and "everything published has been ruled on" render identically, and
+   that is the ambiguity this counter exists to remove. */
 
 /** "waiting 6 days" — the sentence the whole page is for.
  *
@@ -111,6 +119,37 @@ function Queue({
   );
 }
 
+/** "Closed circuits: 0" — whether the loop has ever run, which no queue can say.
+ *
+ *  Rendered at zero, always. A counter that hid itself when it had nothing to report would
+ *  leave the page exactly as ambiguous as it was before it existed, and a dash or an em-rule
+ *  would read as "not measured" when the measurement is the flat, certain 0 below. So the
+ *  copy carries the same three beats as the queues' empty states: what the number is, that 0
+ *  means never-yet rather than nothing-right-now, and what would make it 1.
+ *
+ *  That third beat names the *publish*, not the verdict. Zero drafts have ever gone live, so
+ *  "rule on a live post and this becomes 1" would send a reader looking for a post that does
+ *  not exist — the queues' own rule, never claim a history you cannot see. The step actually
+ *  missing is Monte's, and it stays the missing step even once a draft is live and unruled.
+ *
+ *  A Card rather than a bare heading because it is not a fifth gate — nothing waits behind it,
+ *  and giving it a queue's shape would put it in a list of things a human is meant to clear. */
+function Circuits({ closed }: { closed: number }) {
+  return (
+    <Card className="mt-8 bg-surface-2">
+      <h2 className="text-head font-medium">
+        Closed circuits: <span className="font-mono tabular-nums">{closed}</span>
+      </h2>
+      <p className="mt-1 max-w-2xl text-meta text-muted">
+        {closed === 0
+          ? "The circuit has never been round: no draft this app generated has been pushed, published and ruled on, not once. A pushed draft that Monte publishes and someone then rules on makes this 1."
+          : "Drafts written here that were pushed to Zernio, published by a human, and then ruled on — one full lap each."}{" "}
+        A count of laps, not a score: it says the circuit ran, never that a post did well.
+      </p>
+    </Card>
+  );
+}
+
 function HealthRow({ label, ok }: { label: string; ok: boolean }) {
   return (
     <span className="flex items-center gap-1.5 text-meta">
@@ -140,46 +179,51 @@ export default async function InboxPage() {
       </p>
 
       {inbox.ok ? (
-        <div className="mt-10 flex flex-col gap-10">
-          <Queue
-            title="Proposals awaiting review"
-            gate="Extraction proposes; a human approves or retires. Only an approved template can be generated from."
-            queue={inbox.data.proposals_awaiting_review}
-            href={() => "/templates"}
-            empty="No template is awaiting review. Extraction reads the corpus and proposes hooks, structures and visuals; each proposal waits here until someone approves or retires it."
-          />
-          <Queue
-            title="Built, awaiting push"
-            gate="Drafts written in Studio that have never reached Zernio."
-            queue={inbox.data.built_awaiting_push}
-            /* ponytail: `/studio`, not `/studio?draft=1`. Studio holds one in-session draft in
-               local state and has no way to load an existing one, and teaching it to would be a
-               second page's worth of work in a slice that owns this one. `GET /drafts/{id}`
-               already exists, so the ceiling is a `?draft=` param read in studio/page.tsx. */
-            href={() => "/studio"}
-            empty="No draft is waiting to be pushed. A draft written in Studio waits here until it is pushed to Zernio — nothing in this app ever publishes on its own."
-          />
-          <Queue
-            title="Pushed, awaiting Monte"
-            gate="In Zernio as a draft, not yet live. Publishing is a human act performed there, not here — this app can only notice that it happened."
-            queue={inbox.data.pushed_awaiting_monte}
-            /* ponytail: this is the one gate with no in-app destination — the clearing action
-               happens in Zernio's own dashboard. `InboxItem` carries no `zernio_post_id` and the
-               only Zernio URL in this repo is the API root (`config.py:71`), so there is no
-               honest external link to build; a synthesized dashboard URL would be a guess that
-               looks like a fact. Studio is where the draft came from, so it is where the trail
-               resumes. Ceiling: carry `zernio_post_id` on the item and link the real draft. */
-            href={() => "/studio"}
-            empty="No draft is waiting on a publish. A draft pushed to Zernio waits here until it goes live."
-          />
-          <Queue
-            title="Published, awaiting verdict"
-            gate="Live posts this app generated, with no ruling recorded. A verdict is one human judgement at n=1 — never a statistic."
-            queue={inbox.data.published_awaiting_verdict}
-            href={(item) => `/posts/${item.id}`}
-            empty="Nothing is waiting on a verdict. A generated post that goes live lands here until someone rules on it."
-          />
-        </div>
+        <>
+          {/* Inside `inbox.ok`, with the queues: a lap count invented out of a failed read
+              would be the page making its strongest claim about the circuit on no data. */}
+          <Circuits closed={inbox.data.closed_circuits} />
+          <div className="mt-10 flex flex-col gap-10">
+            <Queue
+              title="Proposals awaiting review"
+              gate="Extraction proposes; a human approves or retires. Only an approved template can be generated from."
+              queue={inbox.data.proposals_awaiting_review}
+              href={() => "/templates"}
+              empty="No template is awaiting review. Extraction reads the corpus and proposes hooks, structures and visuals; each proposal waits here until someone approves or retires it."
+            />
+            <Queue
+              title="Built, awaiting push"
+              gate="Drafts written in Studio that have never reached Zernio."
+              queue={inbox.data.built_awaiting_push}
+              /* ponytail: `/studio`, not `/studio?draft=1`. Studio holds one in-session draft in
+                 local state and has no way to load an existing one, and teaching it to would be a
+                 second page's worth of work in a slice that owns this one. `GET /drafts/{id}`
+                 already exists, so the ceiling is a `?draft=` param read in studio/page.tsx. */
+              href={() => "/studio"}
+              empty="No draft is waiting to be pushed. A draft written in Studio waits here until it is pushed to Zernio — nothing in this app ever publishes on its own."
+            />
+            <Queue
+              title="Pushed, awaiting Monte"
+              gate="In Zernio as a draft, not yet live. Publishing is a human act performed there, not here — this app can only notice that it happened."
+              queue={inbox.data.pushed_awaiting_monte}
+              /* ponytail: this is the one gate with no in-app destination — the clearing action
+                 happens in Zernio's own dashboard. `InboxItem` carries no `zernio_post_id` and the
+                 only Zernio URL in this repo is the API root (`config.py:71`), so there is no
+                 honest external link to build; a synthesized dashboard URL would be a guess that
+                 looks like a fact. Studio is where the draft came from, so it is where the trail
+                 resumes. Ceiling: carry `zernio_post_id` on the item and link the real draft. */
+              href={() => "/studio"}
+              empty="No draft is waiting on a publish. A draft pushed to Zernio waits here until it goes live."
+            />
+            <Queue
+              title="Published, awaiting verdict"
+              gate="Live posts this app generated, with no ruling recorded. A verdict is one human judgement at n=1 — never a statistic."
+              queue={inbox.data.published_awaiting_verdict}
+              href={(item) => `/posts/${item.id}`}
+              empty="Nothing is waiting on a verdict. A generated post that goes live lands here until someone rules on it."
+            />
+          </div>
+        </>
       ) : (
         <ApiFailureNotice failure={inbox} className="mt-10" />
       )}
