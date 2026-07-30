@@ -1,7 +1,14 @@
+from collections.abc import Iterator
+
 import pytest
-from sqlmodel import func, select
+from fastapi.testclient import TestClient
+from sqlmodel import Session, func, select
 
 from app.autonomous import AutonomousRunFailed, propose_topics, run_autonomous
+from app.config import settings
+from app.db import get_session
+from app.deps import get_html_renderer, get_llm
+from app.main import app
 from app.models.draft import Draft
 from app.models.post import Post
 from app.models.template import TemplateKind
@@ -282,3 +289,50 @@ def test_a_run_refuses_when_the_library_is_not_ready(session):
         run_autonomous(session, FakeLLM(), FakeRenderer(), cap=1, notify=notifier)
 
     assert notifier.messages
+
+
+# --- the endpoint's cap is bounded by the setting, not merely defaulted from it ------------
+
+
+@pytest.fixture
+def client(session: Session) -> Iterator[TestClient]:
+    app.dependency_overrides[get_session] = lambda: session
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+def test_the_endpoint_cannot_ask_for_more_drafts_than_the_setting_allows(
+    client, session, monkeypatch
+):
+    """`cap` arrives from a query string. It used to be used verbatim.
+
+    `settings.autonomous_max_drafts` was only the default, so `?cap=500` ran 500 topics: one
+    chat call for topics plus two per topic, ~1001 billed completions against no spend counter
+    anywhere in this app, and 500 renders inside one synchronous request. The setting is the
+    ceiling now. Asserted against the setting rather than a literal, and pinned to 1 so three
+    available topics can prove the bound rather than the topic supply doing it.
+    """
+    monkeypatch.setattr(settings, "autonomous_max_drafts", 1)
+    library(session)
+    add_post(session, "p1")
+    app.dependency_overrides[get_llm] = lambda: FakeLLM(topics=THREE_TOPICS)
+    app.dependency_overrides[get_html_renderer] = FakeRenderer
+
+    body = client.post("/drafts/autonomous-run?cap=500").json()
+
+    assert body["created"] == settings.autonomous_max_drafts
+    assert len(drafts(session)) == settings.autonomous_max_drafts
+
+
+def test_a_cap_below_the_ceiling_is_still_honoured(client, session, monkeypatch):
+    """The clamp is a ceiling, not a floor — asking for less must still mean less."""
+    monkeypatch.setattr(settings, "autonomous_max_drafts", 3)
+    library(session)
+    add_post(session, "p1")
+    app.dependency_overrides[get_llm] = lambda: FakeLLM(topics=THREE_TOPICS)
+    app.dependency_overrides[get_html_renderer] = FakeRenderer
+
+    body = client.post("/drafts/autonomous-run?cap=1").json()
+
+    assert body["created"] == 1
+    assert len(drafts(session)) == 1

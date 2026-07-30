@@ -104,7 +104,10 @@ def run_autonomous(
       stays a human act, even though a Zernio draft would not itself publish. An unattended
       loop that writes to the live account is a different risk from one that does not.
     - **`cap` is hard.** A scheduling fault, a retry storm or a runaway loop cannot produce
-      more than this many drafts in one run.
+      more than this many drafts in one run. Both callers bound it by
+      `settings.autonomous_max_drafts` — the scheduler passes that setting and
+      `POST /drafts/autonomous-run` clamps its query parameter to it — so no caller can ask
+      for more than is configured either.
 
     A failure that prevents the run raises; a failure on one topic costs only that topic.
     Either way the notifier is told — a scheduled job that fails in silence is the exact

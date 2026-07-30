@@ -1,8 +1,12 @@
+from collections.abc import Iterator
 from datetime import UTC, datetime
 
 import pytest
+from fastapi.testclient import TestClient
+from sqlmodel import Session
 
 from app.config import settings
+from app.db import get_session
 from app.generation import (
     LESSON_LIMIT,
     NoUsableTemplates,
@@ -12,9 +16,18 @@ from app.generation import (
     suggest_templates,
     writable_slots,
 )
+from app.main import app
 from app.models.post import Post, Verdict
 from app.models.template import TemplateKind
-from app.templates import approve, create_template
+from app.templates import approve, create_template, edit_template, retire
+from tests.test_rendering import renderer_capturing
+
+
+@pytest.fixture
+def client(session: Session) -> Iterator[TestClient]:
+    app.dependency_overrides[get_session] = lambda: session
+    yield TestClient(app)
+    app.dependency_overrides.clear()
 
 
 class FakeLLM:
@@ -559,3 +572,100 @@ def test_only_the_most_recently_judged_verdicts_are_carried(session):
 
     assert llm.last_user.count("ruling number") == LESSON_LIMIT
     assert "ruling number 0" not in llm.last_user
+
+
+# --- a redraw renders the version the draft names, not whatever is newest -----------------
+#
+# Every renderer here is `renderer_capturing` — a real `CloudflareRenderer` over an
+# `httpx.MockTransport` that keeps the posted markup. `FakeRenderer` above discards its `html`
+# argument, so under it a redraw rendering the wrong template would pass.
+
+
+def edited_visual(session, visual, marker: str):
+    """The next version of the visual family, distinguishable in the markup it renders."""
+    return edit_template(
+        session,
+        visual,
+        body={
+            "renderer": "html",
+            "html": f"<b>{{big_number}}</b><p>{{headline}}</p><i>{marker}</i>",
+        },
+    )
+
+
+def test_a_redraw_renders_the_version_the_draft_was_generated_from(session):
+    """The silent lineage corruption this closes.
+
+    A draft generated from v2, then someone edits the template. The redraw used to render v3
+    — `_current` is `order_by(version.desc()).first()` — and store that PNG while
+    `visual_version` still said 2. `publishing.lineage_metadata` then pushed
+    `visual_version: 2` to Zernio and `metrics.template_performance` credited v2 with a
+    picture v3 produced. Nothing raised.
+
+    Asserted in both directions on the posted markup: v2's marker present *and* v3's absent.
+    """
+    _, _, visual = library(session)
+    v2 = edited_visual(session, visual, "v2")
+    approve(session, v2)
+    draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    assert draft.visual_version == v2.version
+
+    edited_visual(session, v2, "v3")
+    captured: dict = {}
+    regenerate_visual(session, draft, renderer_capturing(captured, png=b"REDRAWN"))
+
+    assert "<i>v2</i>" in captured["html"]
+    assert "<i>v3</i>" not in captured["html"]
+    # And the lineage still agrees with the picture, which is the whole point.
+    assert draft.visual_version == v2.version
+    assert draft.visual_image == b"REDRAWN"
+
+
+def test_a_retired_recorded_version_still_redraws(session):
+    """A redraw is a re-render of what this draft already is, not a new generation.
+
+    So the version its lineage names is the honest picture even once that version is
+    withdrawn. `usable_templates` is what keeps a retired template out of everything that
+    *chooses* one; refusing here would instead mean an operator retiring a template silently
+    broke the redraw button on every draft already built from it.
+    """
+    _, _, visual = library(session)
+    draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    retire(session, visual)
+
+    captured: dict = {}
+    regenerate_visual(session, draft, renderer_capturing(captured, png=b"STILLDRAWN"))
+
+    assert draft.visual_error is None
+    assert draft.visual_image == b"STILLDRAWN"
+    assert "$19k/mo" in captured["html"]
+
+
+def test_a_recorded_version_that_is_gone_refuses_rather_than_redrawing_another(session):
+    """The one case a redraw cannot be faithful in. It must not fall back to a sibling
+    version — that is exactly the mis-attribution being fixed."""
+    _, _, visual = library(session)
+    v2 = edited_visual(session, visual, "v2")
+    approve(session, v2)
+    draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+
+    session.delete(v2)
+    session.flush()
+
+    with pytest.raises(NoUsableTemplates):
+        regenerate_visual(session, draft, renderer_capturing({}))
+
+
+def test_the_redraw_endpoint_reports_a_vanished_version_as_a_conflict(client, session):
+    """A 409 like generation's, not a 500: the library cannot serve this draft's version."""
+    _, _, visual = library(session)
+    v2 = edited_visual(session, visual, "v2")
+    approve(session, v2)
+    draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    session.delete(v2)
+    session.flush()
+
+    response = client.post(f"/drafts/{draft.id}/regenerate-visual")
+
+    assert response.status_code == 409
+    assert visual.family_id in response.json()["detail"]
