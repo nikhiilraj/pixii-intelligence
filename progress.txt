@@ -1113,3 +1113,25 @@ disabled-fill alternative first and rejected it at 4.26:1 — recorded in the co
 
 Verified: ruff, mypy, eslint, tsc green; 258 tests; `pnpm build` compiled in 2.6s with no
 react-compiler warnings.
+
+### Frontend testing policy (decided 2026-07-30, Nikhil) — binding on every frontend slice
+
+There was no frontend test infrastructure at all: no vitest/jest/playwright, no test files, and
+CI ran only `tsc --noEmit`, `lint`, `build` for the frontend while the backend got full pytest.
+Six V2 slices carried "asserted" criteria that were therefore vacuous.
+
+**Decision: Vitest + @testing-library/react + jsdom (dev deps), added in US-003, with
+`pnpm test` appended to the frontend CI job.** Scoped deliberately:
+
+- **DO assert our own logic** — failure-vs-empty rendering, inbox queue membership, form
+  validation and caps, asset-picker behaviour. The error-vs-empty bug class is the reason the
+  harness exists; it is a logic bug that regresses silently.
+- **DO NOT assert Radix's behaviour** — focus trap, typeahead, escape, focus return. We vendor
+  those components precisely because they are tested upstream; re-asserting them tests someone
+  else's library, and jsdom only approximates focus. Verify by hand and say what was exercised.
+- **DO NOT claim contrast or visual layout in a test** — there is no browser in CI. Report
+  computed ratios instead. `--accent` #F2610C is 3.09:1 (fill only); `--accent-text` #ba4b09 is
+  5.80:1. Do not regress these.
+
+Rule that follows: a slice reports what it actually verified. "Verified by hand, here is what I
+exercised" is acceptable; claiming an assertion that does not exist is not.
