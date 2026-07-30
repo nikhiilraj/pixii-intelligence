@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 from sqlmodel import col, select
 
+from app.assets import UnresolvableAsset, resolve_asset_values
 from app.deps import HtmlRendererDep, ImageRendererDep, LLMDep, SessionDep
 from app.extraction import (
     DEFAULT_SAMPLE_SIZE,
@@ -151,15 +152,20 @@ def preview_visual(
 ) -> Response:
     """Render a visual template with real values and return the image.
 
-    The template's declared renderer selects which of the two paths runs.
+    The template's declared renderer selects which of the two paths runs. `values` arrives
+    straight from the request body, so an `image_url` slot here holds whatever the caller
+    put there — it goes through the same `resolve_asset_values` generation uses, or a
+    picked asset would preview as an empty box while generating fine.
     """
     template = _load(session, template_id)
     if template.kind is not TemplateKind.VISUAL:
         raise HTTPException(status_code=400, detail="only visual templates render")
     renderer = image_renderer if template.body.get("renderer") == "ai" else html_renderer
     try:
-        image = render_visual(template, values, renderer)
-    except MissingSlotValue as exc:
+        image = render_visual(template, resolve_asset_values(session, template, values), renderer)
+    except (MissingSlotValue, UnresolvableAsset) as exc:
+        # Both are the caller handing us values we cannot render: a slot with nothing in
+        # it, or a slot holding something that is not an asset.
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except UnsupportedRenderer as exc:
         raise HTTPException(status_code=501, detail=str(exc)) from exc
