@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { postJson, type Draft, type Template } from "@/lib/api";
@@ -32,21 +33,24 @@ export default function Studio({ templates }: { templates: Template[] }) {
   const [picked, setPicked] = useState<Picked>({ hook: null, structure: null, visual: null });
   const [reason, setReason] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
   const approved = templates.filter((t) => t.status === "approved");
   const of = (kind: Template["kind"]) => approved.filter((t) => t.kind === kind);
 
-  // The pending/error bookkeeping stays local; only the request is shared. `busy` holds the
-  // path so a button can label its own in-flight state.
+  // `busy` holds the path so a button can label its own in-flight state. Failures go to a
+  // toast: this component fires four different mutations and they all reported into one
+  // shared paragraph, so which call had failed was already only inferable from the message.
   async function call<T>(path: string, body?: unknown): Promise<T | null> {
     setBusy(path);
-    setError(null);
     const result = await postJson<T>(path, body);
     setBusy(null);
     if (result.ok) return result.data;
-    setError(result.message);
+    // The message alone, with no title. `call` is shared by five different mutations, so any
+    // title it could compose would either be a URL path — which is not something to show a
+    // reader — or invented. The API's `detail` strings are written for a person (US-003), and
+    // the paragraph this replaces showed exactly the message and nothing else.
+    toast.error(result.message);
     return null;
   }
 
@@ -121,7 +125,6 @@ export default function Studio({ templates }: { templates: Template[] }) {
         </div>
 
         {reason && <p className="text-xs opacity-60">{reason}</p>}
-        {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
         {approved.length === 0 && (
           <p className="text-sm text-amber-700 dark:text-amber-400">
             Nothing approved yet. Approve a hook, a structure and a visual first.
