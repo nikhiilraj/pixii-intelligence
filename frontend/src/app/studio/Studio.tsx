@@ -301,7 +301,11 @@ export default function Studio({
         )}
       </section>
 
-      <section className="space-y-4">
+      {/* `min-w-0` for the same reason as TemplateManager's: the `1fr` track's implicit
+          `min-width: auto` is min-content, so a single long unbroken string in a draft would grow
+          the track past the viewport instead of scrolling inside it. Latent here rather than
+          live — today's drafts happen to wrap — which is exactly why it is worth pinning. */}
+      <section className="min-w-0 space-y-4">
         {!draft ? (
           /* The one empty state on this page that is always true on arrival: Studio holds its
              draft in session state and has no way to load an existing one, so this column is

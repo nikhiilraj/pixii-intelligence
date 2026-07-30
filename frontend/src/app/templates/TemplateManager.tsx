@@ -168,7 +168,14 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
 
   return (
     <div className="mt-8 grid gap-10 lg:grid-cols-[1fr_20rem]">
-      <section>
+      {/* `min-w-0` is the whole reason this page is not 10384px wide at a 1440px viewport. A grid
+          track carries an implicit `min-width: auto` that resolves to its item's min-content, and
+          this section's min-content is the longest unwrapped line of the `JSON.stringify` dump in
+          the `<pre>` below — so the track grew to fit it and the `overflow-x-auto` already on that
+          `<pre>` was never asked to scroll. The author column then stretched to match. Do not
+          delete this class because it looks inert; the overflow it prevents is data-dependent and
+          only shows up once a template body contains a long line. */}
+      <section className="min-w-0">
         <div className="mb-4 flex flex-wrap items-center gap-3">
           <select
             value={cohort}
