@@ -61,11 +61,17 @@ function Badge({ status }: { status: string }) {
 /** Whose posts a template was read from.
  *
  * While reviewing a proposal this is the difference between a shape proven in our own
- * posts and one borrowed from a creator. Nothing renders when no cohort was recorded.
+ * posts and one borrowed from a creator.
+ *
+ * Three states, three renderings. Most of the queue predates the field, and rendering
+ * nothing for those would put a blank beside rows explicitly marked as borrowed — which
+ * reads as "not borrowed", a claim the row does not carry. Unrecorded is the true one.
  */
 function CohortTag({ template }: { template: Template }) {
   const cohort = cohortOf(template);
-  if (!cohort) return null;
+  if (!cohort) {
+    return <span className="rounded px-1.5 py-0.5 text-xs opacity-40">cohort unrecorded</span>;
+  }
   return (
     <span className={`rounded px-1.5 py-0.5 text-xs ${COHORT_STYLE[cohort] ?? ""}`}>
       {COHORT_LABEL[cohort] ?? cohort}
