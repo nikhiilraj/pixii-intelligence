@@ -1062,3 +1062,33 @@ default view and Monte's 185 leads it — with five cohort options derived from 
 templates page tags 10 proposals `borrowed from a creator`; the other 37 rows carry no
 `body.cohort` at all (extracted before the field existed, or hand-authored), so nothing is
 claimed for them. `make check` green at 258 tests.
+
+### US-001 — Design tokens and typography foundation (done 2026-07-30)
+
+globals.css: 26 lines of create-next-app boilerplate -> a real token layer in Tailwind v4
+`@theme`. Colour/space/radius/shadow/motion/type tokens, light + dark. Deleted the
+`font-family: Arial` body override, so the Geist that layout.tsx has been loading all along
+finally applies. scoreboard/page.tsx reskinned onto the tokens as the proof (read-only server
+component, so nothing could regress functionally), recharts colours included.
+
+**The accent was wrong in the PRD and is now resolved.** The spec carried `#E8590C` as an
+explicit placeholder. The real brand palette lives in the `body->>'html'` of the APPROVED
+VISUAL templates — the markup that actually renders Pixii's post visuals — and says:
+
+    #F2610C accent (5 uses)   #111 display black (4)   #F5F0E8 cream (3)
+    #E4DAC6 deeper tan (2)    #6B635A muted ink (1)
+
+Prefer those over the spec's guesses for border (`#E4E1D8`) and muted (`#6F6C64`).
+
+**Contrast was measured, not assumed, and it mattered.** `#F2610C` is 3.09:1 on `--bg` and
+3.24:1 on `--surface` — it FAILS AA as text. So the brand orange stays a fill and a derived
+`--accent-text: #ba4b09` (5.80 / 5.34 / 4.87) carries text on light. In dark, `--accent-text`
+flips back to `#f2610c`, which clears AA there. `--chart-1` follows `--accent-text` so charts
+stay legible in both themes. **Rule for later slices: never put `--accent` on text, never put
+`--accent-text` on a fill.**
+
+Cream stays a raised-surface token (`--surface-2`), never the page background — the PRD is
+explicit that the UI takes the brand's temperature "without cosplaying as a post".
+
+Verified: ruff, mypy, eslint, tsc green; 258 tests pass; `pnpm build` clean (7 routes).
+Zero npm packages added — primitives are US-002's job.
