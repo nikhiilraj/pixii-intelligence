@@ -54,9 +54,20 @@ export default function VerdictForm({
   // empty would erase the reason someone wrote the moment they changed worked -> mixed.
   const [text, setText] = useState(note);
   const [busy, setBusy] = useState(false);
+  // Whether the retract has been armed. Retracting throws away a human's judgement and the
+  // reason they wrote for it, so it takes two clicks — see the block that renders it.
+  const [armed, setArmed] = useState(false);
 
-  async function submit() {
-    if (choice === null) return;
+  /* One mutation for both directions, because the route is one route: `next === null` is the
+   * retract. Kept as a parameter rather than reading `choice`, since the whole defect being
+   * fixed was `choice` never being allowed to be null. */
+  async function send(next: Verdict | null) {
+    const clearing = next === null;
+    // Starting a save is an implicit "not retracting". Without this, a user who armed the
+    // retract and then hit save would see "Saving…" and "Retracting…" at once, since `busy` is
+    // shared — a form claiming an action it is not performing, which is the bug this file exists
+    // to avoid.
+    if (!clearing) setArmed(false);
     setBusy(true);
 
     // The field is `note`, not `verdict_note`. `VerdictIn` (main.py:268) names it `note` and
@@ -64,14 +75,22 @@ export default function VerdictForm({
     // whose reason is empty. And an empty note is skipped by `verdict_lessons`
     // (generation.py:211), so that one-word typo would record judgement that teaches nothing,
     // with no error anywhere to find it by. Pinned by test for the same reason.
+    //
+    // On a retract the note goes as "" rather than as whatever is in the box: the route empties
+    // the column either way, so sending the old note would be a body that does not say what it
+    // does — and the note is a reason *for a ruling* that no longer exists.
     const result = await postJson<Post>(`/posts/${postId}/verdict`, {
-      verdict: choice,
-      note: text,
+      verdict: next,
+      note: clearing ? "" : text,
     });
     setBusy(false);
 
     if (!result.ok) {
-      toast.error("Could not save your ruling", { description: result.message });
+      // Two messages, because "could not save" on a retract would read as though a ruling was
+      // being written. Left armed, so the retry is one click.
+      toast.error(clearing ? "Could not retract your ruling" : "Could not save your ruling", {
+        description: result.message,
+      });
       return;
     }
 
@@ -81,7 +100,8 @@ export default function VerdictForm({
     setRecorded(result.data.verdict);
     setChoice(result.data.verdict);
     setText(result.data.verdict_note);
-    toast.success("Ruling saved");
+    setArmed(false);
+    toast.success(clearing ? "Ruling retracted" : "Ruling saved");
     router.refresh();
   }
 
@@ -140,10 +160,47 @@ export default function VerdictForm({
         <span className="text-caption text-muted" aria-live="polite">
           {text.length} of {VERDICT_NOTE_MAX} characters{atCap ? " — at the cap" : ""}
         </span>
-        <Button onClick={submit} disabled={busy || choice === null}>
+        <Button
+          onClick={() => choice !== null && void send(choice)}
+          disabled={busy || choice === null}
+        >
           {busy ? "Saving…" : recorded ? "Change the ruling" : "Record the ruling"}
         </Button>
       </div>
+
+      {/* Only on a post that has a ruling: there is nothing to retract otherwise, and offering
+        * it would imply a ruling exists.
+        *
+        * ponytail: the friction is one extra click and a changed label, not a modal and not a
+        * timer. Two clicks is the standard weight for "discards a human judgement", and it is
+        * the only weight available here — `button.tsx` has no danger variant on purpose
+        * (`--accent` cannot carry text at AA), so the warning has to live in the copy. A
+        * disarm-on-timeout would add flake and buy nothing over an explicit way out. */}
+      {recorded && (
+        <div className="mt-4 border-t border-border pt-3">
+          <p className="text-caption text-muted">
+            Retract if you should not have ruled at all — it takes the ruling and its reason off
+            the post and puts it back in the inbox as unruled. It is not a way to say the post
+            landed badly; that is Didn&apos;t.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {armed ? (
+              <>
+                <Button variant="outline" onClick={() => void send(null)} disabled={busy}>
+                  {busy ? "Retracting…" : "Yes, retract it"}
+                </Button>
+                <Button variant="outline" onClick={() => setArmed(false)} disabled={busy}>
+                  Keep the ruling
+                </Button>
+              </>
+            ) : (
+              <Button variant="outline" onClick={() => setArmed(true)} disabled={busy}>
+                Retract the ruling
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
     </Card>
   );
 }

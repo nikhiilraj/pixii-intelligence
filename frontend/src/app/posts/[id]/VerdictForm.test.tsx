@@ -59,7 +59,9 @@ function pick(label: string) {
   fireEvent.click(screen.getByRole("button", { name: label }));
 }
 
-function submit(name: RegExp = /ruling$/) {
+/** Anchored at both ends on purpose: the retract control's label also ends in "ruling", and a
+ *  loose `/ruling$/` would match two buttons on any post that already has one. */
+function submit(name: RegExp = /^(Record|Change) the ruling$/) {
   fireEvent.click(screen.getByRole("button", { name }));
 }
 
@@ -154,6 +156,95 @@ describe("an existing verdict", () => {
       note: "the opening number did the work",
     });
     await waitFor(() => expect(screen.getByText("Recorded: Mixed")).toBeInTheDocument());
+  });
+});
+
+/* Retracting is a third thing, not a fourth verdict: the human is saying they should not have
+ * ruled at all, which is not the same claim as "Didn't". The route has cleared rulings since the
+ * backend half of US-006 — `{"verdict": null}` nulls `verdict_at`, empties the note and returns
+ * the post to Inbox queue 4 — but `choice === null` guarded both the submit and its disabled
+ * state, so the UI could not reach it. A capability with no form is the exact shape that blocked
+ * the V2 merge.
+ *
+ * Asserted on the parsed body: a "Retract" button that posted `{verdict: "didnt"}` would look
+ * identical from the outside and would write a false ruling into the corpus that
+ * `verdict_lessons` then teaches from. */
+describe("retracting a ruling", () => {
+  it("is not offered on a post with no ruling", () => {
+    stubFetch(jsonResponse(200, postRow()));
+    render(<VerdictForm postId={7} verdict={null} note="" />);
+
+    // There is nothing to retract, and offering it would imply a ruling exists.
+    expect(screen.queryByRole("button", { name: /retract/i })).not.toBeInTheDocument();
+  });
+
+  it("discards nothing on the first click", () => {
+    const spy = stubFetch(jsonResponse(200, postRow()));
+    render(<VerdictForm postId={7} verdict="mixed" note="worth a second go" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retract the ruling" }));
+
+    expect(spy).not.toHaveBeenCalled();
+    expect(screen.getByText("Recorded: Mixed")).toBeInTheDocument();
+  });
+
+  it("can be called off, leaving the ruling and its reason where they were", () => {
+    const spy = stubFetch(jsonResponse(200, postRow()));
+    render(<VerdictForm postId={7} verdict="mixed" note="worth a second go" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retract the ruling" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep the ruling" }));
+
+    expect(spy).not.toHaveBeenCalled();
+    expect(screen.getByText("Recorded: Mixed")).toBeInTheDocument();
+    expect(noteBox()).toHaveValue("worth a second go");
+    // Back to one click away from armed, not still armed behind a different label.
+    expect(screen.getByRole("button", { name: "Retract the ruling" })).toBeInTheDocument();
+  });
+
+  it("sends a null verdict and an empty note, then stops offering itself", async () => {
+    const spy = stubFetch(jsonResponse(200, postRow({ verdict: null, verdict_note: "", verdict_at: null })));
+    render(<VerdictForm postId={7} verdict="mixed" note="worth a second go" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retract the ruling" }));
+    fireEvent.click(screen.getByRole("button", { name: "Yes, retract it" }));
+
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    expect(spy.mock.calls[0][0]).toContain("/posts/7/verdict");
+    expect(spy.mock.calls[0][1]?.method).toBe("POST");
+    // Deep-equal: the route empties `verdict_note` on a clear whatever is sent, so a body that
+    // still carried the old note would pass any end-to-end check while lying on the wire.
+    expect(sentBody(spy)).toEqual({ verdict: null, note: "" });
+
+    // The post is back to un-ruled, so the form is back to the state a never-ruled post has —
+    // this is what catches a `recorded` that was left pointing at the ruling just discarded.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Record the ruling" })).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/^Recorded:/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /retract/i })).not.toBeInTheDocument();
+    expect(noteBox()).toHaveValue("");
+    expect(toastSuccess).toHaveBeenCalledWith("Ruling retracted");
+  });
+
+  it("keeps the ruling on screen when the retract is refused", async () => {
+    stubFetch(jsonResponse(500, { detail: "the database went away mid-query" }));
+    render(<VerdictForm postId={7} verdict="mixed" note="worth a second go" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retract the ruling" }));
+    fireEvent.click(screen.getByRole("button", { name: "Yes, retract it" }));
+
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith("Could not retract your ruling", {
+        description: "the database went away mid-query",
+      }),
+    );
+    expect(toastSuccess).not.toHaveBeenCalled();
+    // Nothing was discarded, so nothing on screen may say it was.
+    expect(screen.getByText("Recorded: Mixed")).toBeInTheDocument();
+    expect(noteBox()).toHaveValue("worth a second go");
+    // Still armed, so the retry is one click rather than two.
+    expect(screen.getByRole("button", { name: "Yes, retract it" })).toBeEnabled();
   });
 });
 
