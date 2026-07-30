@@ -1,0 +1,275 @@
+[
+  {
+    "id": "US-001",
+    "title": "Design tokens and typography foundation",
+    "description": "Replace the create-next-app boilerplate in globals.css with a real token layer in Tailwind v4's @theme: colour (bg/surface/surface-2/text/muted/border/accent, light+dark), space, radius, shadow, motion duration/easing, and the type scale. Delete the `font-family: Arial` body override so the Geist already loaded in layout.tsx (:22) actually applies. Reskin scoreboard/page.tsx onto the tokens as the proof — it is a read-only server component with no mutations, so nothing can regress functionally. Note recharts@3 renders inside it and is itself a design surface: its axis/grid/tooltip colours must read from the tokens, not its defaults.",
+    "acceptanceCriteria": [
+      "globals.css defines tokens in @theme for colour, space, radius, shadow, motion; light and dark both resolve",
+      "the Arial body override is gone and Geist renders",
+      "scoreboard/page.tsx contains no hardcoded hex or arbitrary px values, recharts included",
+      "pnpm tsc && pnpm lint && pnpm build green",
+      "slice tests green"
+    ],
+    "priority": 1,
+    "passes": false
+  },
+  {
+    "id": "US-002",
+    "title": "Presentational primitives and the cn() helper",
+    "description": "Vendor the non-behavioural half of the component layer into frontend/src/components/ui/: Button, Badge, Card, Skeleton, plus cn() over clsx + tailwind-merge. Copied source we own. Absorb the measured duplication: two button class strings pasted verbatim ~14x, the card string `rounded-lg border border-black/10 p-3 dark:border-white/15`, and the identical 'Backend unreachable at … make api' block in all four page.tsx wrappers. IMPORTANT: clsx@2.1.1 is in the lockfile only transitively via recharts — it must be added to package.json explicitly, not resolved by hoisting luck. babel-plugin-react-compiler is enabled, so every vendored component must be compiler-clean.",
+    "acceptanceCriteria": [
+      "components/ui/{button,badge,card,skeleton}.tsx exist with cva variants on the US-001 tokens",
+      "clsx and tailwind-merge are DIRECT deps in package.json",
+      "the two repeated button strings and the card string exist in exactly one place each",
+      "the shared backend-unreachable block is one component used by all four wrappers",
+      "pnpm tsc && pnpm lint && pnpm build green (react-compiler emits no warnings)",
+      "slice tests green"
+    ],
+    "priority": 2,
+    "passes": false
+  },
+  {
+    "id": "US-003",
+    "title": "Honest API layer — failure is distinguishable from empty",
+    "description": "getJson (lib/api.ts:61-69) discards status and message and returns null on every failure, so no truthful error state can be built on it. Return a discriminated result instead, add postJson, and migrate the 5 hand-rolled mutation bodies (Studio.tsx:44, AddExternal.tsx:25, TemplateManager.tsx:105 and :126, ExcludeToggle.tsx:23) plus page.tsx:11 onto the helpers — each is ~15 lines of setBusy/fetch/res.ok/detail/catch/setError repeated. Also delete the duplicate API_BASE re-declared in page.tsx. Prerequisite for US-016, not polish.",
+    "acceptanceCriteria": [
+      "the helper distinguishes ok / http-error / network-error, carrying status and the API's detail message",
+      "postJson exists and all 6 call sites use the helpers; no inline fetch remains in components",
+      "API_BASE is declared once",
+      "a forced 500 renders an error state, NOT an empty state — asserted",
+      "pnpm tsc && pnpm lint && pnpm build green",
+      "slice tests green"
+    ],
+    "priority": 3,
+    "passes": false
+  },
+  {
+    "id": "US-004",
+    "title": "Behavioural primitives via Radix, and toasts",
+    "description": "Vendor Select, Dialog, Tabs and Tooltip over Radix, plus sonner — the parts where focus trap, typeahead, escape/outside-click, scroll lock and ARIA are exactly what must not be hand-rolled. Nothing vendorable is installed today (no Radix, no cva, no tailwind-merge, no sonner). Migrate Explorer.tsx's four filter controls onto Select and route failures from US-003 into toasts, replacing the four copies of the local red-<p> error string.",
+    "acceptanceCriteria": [
+      "components/ui/{select,dialog,tabs,tooltip}.tsx and a toast mount exist and are react-compiler clean",
+      "Explorer's platform / family / since / sort controls use Select and still filter correctly",
+      "keyboard operation asserted: open, arrow, type-ahead, escape, and focus returns to the trigger",
+      "a failed mutation raises a toast",
+      "pnpm tsc && pnpm lint && pnpm build green",
+      "slice tests green"
+    ],
+    "priority": 4,
+    "passes": false
+  },
+  {
+    "id": "US-005",
+    "title": "Asset table, upload, and listing",
+    "description": "New asset model + additive Alembic migration on head 4a783e8a1648: filename, label, kind enum (logo/product/screenshot/brand/photo), tags JSONB, width, height, sha256 unique, source_post_id nullable FK, created_at. The new model module MUST be imported in app/models/__init__.py or autogenerate emits a drop. Migrations here are hand-tidied: single quotes, server_default=sa.false() on non-nullable adds, real downgrade() bodies. POST /assets takes a multipart upload, reads dimensions with Pillow, dedupes on sha256 by returning the existing row, and downscales over 1600px long-edge — justified by disk and upload time ONLY; the Cloudflare payload ceiling does not exist (seams.md) and no slice may cite it. Reuse media.py's _KNOWN_SUFFIXES (:15) and _suffix() (:31-43) for the licdn no-extension case, but NOT media.py:82-84's swallow-all-return-None: an upload must 4xx on failure. GET /assets filters by kind and tag in the bare-kwarg style of /posts (main.py:102-113), 422 with allowed values in detail.",
+    "acceptanceCriteria": [
+      "migration is additive: one new table, no drop_* and no column type change; downgrade() is real",
+      "app/models/__init__.py imports the new module and autogenerate produces no drop",
+      "re-uploading an identical file returns the existing row rather than a duplicate",
+      "an oversized image is stored downscaled with its real stored dimensions recorded",
+      "an unreadable or non-image upload returns 4xx, never a silent None",
+      "make check green",
+      "slice tests green"
+    ],
+    "priority": 5,
+    "passes": false
+  },
+  {
+    "id": "US-006",
+    "title": "One asset-resolution function, wired into all three render call sites",
+    "description": "Resolve image_url slots from asset ids into base64 data: URIs and embed them on the html render path — the remote Cloudflare renderer cannot reach localhost. Base64 is load-bearing: fill() escapes slot values, a base64 URI survives byte-identical, and a raw SVG data URI is mangled to &lt;svg with NO exception raised (the silent-broken-visual class that retired stat-hero v1). Encode base64-only with a ponytail: comment naming why, and do NOT widen fill(escape=False) on the markup path — that is the injection guard for model-written text. CRITICAL: render_visual has THREE consumers, not one — generation._draw_visual (:189, reached from generate_draft :240 AND regenerate_visual :282, which takes no values argument so it must read from the draft) and api_templates.preview_visual (:161), which takes values straight from the request body with no writable_slots filter and is already called by TemplateManager.tsx:105. Resolution must be ONE shared function used by all three, or generation works while every image-template preview 422s. Slot dicts must be read with .get('type') — VISUAL row 556 has no `type` key at all.",
+    "acceptanceCriteria": [
+      "one resolution function is used by generate_draft, regenerate_visual and preview_visual",
+      "a visual template with an image_url slot renders a real embedded image end-to-end",
+      "regenerating a visual preserves its assets rather than losing them",
+      "previewing an image template returns an image, not a 422",
+      "a test asserts the base64 URI reaches the renderer intact — follow renderer_capturing (tests/test_rendering.py:33-41), NOT FakeRenderer (test_generation.py:31-38) which discards the html argument",
+      "a raw non-base64 SVG data URI is rejected loudly rather than silently mangled",
+      "reading a slot with no `type` key does not raise",
+      "fill()'s escape=True markup path is unchanged",
+      "make check green",
+      "slice tests green"
+    ],
+    "priority": 6,
+    "passes": false
+  },
+  {
+    "id": "US-007",
+    "title": "Cloudflare renderer backs off on 429",
+    "description": "CloudflareRenderer.screenshot calls raise_for_status() with no 429 handling (rendering.py:94-103). Free-tier Browser Rendering rate-limits by request cadence and returns 429 code 2001, indistinguishable from a payload rejection — it already caused one phantom size-limit diagnosis during seam verification. Add retry-with-backoff inside the renderer so no caller sees it, and assert it without real sleeping.",
+    "acceptanceCriteria": [
+      "a faked 429 sequence retries then succeeds, via MockTransport, with no real sleep in the test",
+      "a non-429 4xx/5xx still raises immediately",
+      "backoff lives in the renderer, not in any caller",
+      "make check green",
+      "slice tests green"
+    ],
+    "priority": 7,
+    "passes": false
+  },
+  {
+    "id": "US-008",
+    "title": "Assets page — upload, browse, delete",
+    "description": "A /assets page on the US-002/US-004 layer: drag-or-pick upload, grid with thumbnails and dimensions, filter by kind and tag, delete. DELETE /assets/{id} removes the file from disk, so it returns 409 when any draft or template still references it, and the confirm goes through the focus-trapped Dialog.",
+    "acceptanceCriteria": [
+      "upload, browse, filter and delete work against the real API",
+      "deleting a referenced asset returns 409 and the UI names which draft or template holds it",
+      "the delete confirmation is a Dialog, escape-dismissible, focus returned on close",
+      "make check green",
+      "slice tests green"
+    ],
+    "priority": 8,
+    "passes": false
+  },
+  {
+    "id": "US-009",
+    "title": "Asset picker in Studio, and unattended failure stops reporting as success",
+    "description": "The payoff slice. Give image_url slots a picker in Studio, persist to a new Draft.asset_values JSONB (additive), let a template slot carry an optional default_asset_id (4th optional key in Template.slots JSONB, no migration) so it completes unattended, and thread asset_values through publishing.lineage_metadata (:19) so asset lineage survives outside our database. WRITABLE_SLOT_TYPES stays {text, number} — the model still never writes an image slot; note generation._written_values (:170-172) also drops volunteered image_url values post-hoc. SECOND HALF, equally important: run_autonomous calls generate_draft with no visual_id, so suggest_templates may LLM-pick stat-hero v2 (two image_url slots); _draw_visual swallows the failure into visual_error (:191-193) and result.created += 1 still fires, so the notifier reports 'N drafts created' with no signal the visual failed. RunResult must surface _draw_visual failures, or 'it works' stays indistinguishable from 'it silently didn't'. Draft.asset_values must also be added to the hand-mapped DraftOut (api_drafts.py:33-47) and its builder (:72-87) or it is invisible to the frontend.",
+    "acceptanceCriteria": [
+      "a draft using a visual template with an image slot completes end-to-end with a real image",
+      "WRITABLE_SLOT_TYPES is NOT widened",
+      "a template carrying default_asset_id completes with no human picking",
+      "asset_values appears in the Zernio metadata payload and the draft still lands as a DRAFT",
+      "asset_values is exposed through DraftOut and readable by the frontend",
+      "an autonomous run whose visual failed reports that failure in RunResult rather than counting it as created",
+      "make check green",
+      "slice tests green"
+    ],
+    "priority": 9,
+    "passes": false
+  },
+  {
+    "id": "US-010",
+    "title": "Promote existing corpus media into the asset library",
+    "description": "The 107 posts already carry downloaded media under media/ (flat media/<zernio_id><suffix>, media.py:79). A route promotes selected post media into asset rows with source_post_id set, so the library starts populated with real brand material. Lowest-value slice in Track A — cut it first if the run needs trimming.",
+    "acceptanceCriteria": [
+      "promoting a post's media creates an asset with source_post_id set and sha256 dedupe honoured",
+      "promoting the same media twice does not duplicate",
+      "make check green",
+      "slice tests green"
+    ],
+    "priority": 10,
+    "passes": false
+  },
+  {
+    "id": "US-011",
+    "title": "Publish detection — stamp went_live_at, and do not trust the analytics window",
+    "description": "Add went_live_at to Draft (additive). NAMED went_live_at, NOT published_at, because Draft.published_at would shadow Post.published_at (post.py:40) and be silently wrong in any select(Draft, Post) merge with no error. Detect the transition after record_snapshots (metrics.py:95) and before the return (:97). THE TRAP: sync_metrics reads only source.fetch_posts() (:86), Zernio's 50-row analytics window, and 11 published posts already have no analytics row at all — a post publishing outside the window would never be stamped and queue 3 would show it awaiting-publish forever with no error. Detection must therefore scan drafts with zernio_post_id set against Post by late_post_id across the whole table, not only touched ids (note :91 keys on Post.zernio_id, a different namespace, so a detection pass must re-key). The predicate is Post.status == 'published', NOT row existence: analytics also carries partial and failed, and corpus.py writes status='external' for manual rows. sync_metrics does not commit — callers do (scheduler.py:29, main.py:309) — so do not add a commit here. Do not add a DraftStatus enum: pushed_at/went_live_at already derive every state and a status column could disagree. Expose went_live_at through DraftOut (:33-47, :72-87).",
+    "acceptanceCriteria": [
+      "the column is went_live_at and does not shadow Post.published_at",
+      "a published post whose analytics row is absent from the window is still detected",
+      "a post with status partial/failed/external is NOT treated as published",
+      "stamping is idempotent — re-running does not restamp",
+      "sync_metrics still does not commit; existing max(observed, stored) metric semantics preserved",
+      "went_live_at is exposed through DraftOut",
+      "no DraftStatus enum is introduced",
+      "make check green",
+      "slice tests green"
+    ],
+    "priority": 11,
+    "passes": false
+  },
+  {
+    "id": "US-012",
+    "title": "Verdicts — a human ruling per post",
+    "description": "Add verdict (worked/didnt/mixed), verdict_note and verdict_at to Post (additive), with POST /posts/{id}/verdict enforcing the 500-character cap at the route. The only form of learning that is honest at n=1, given engagement spans 12.7x. Verdict columns are sync-safe: corpus._apply (:50-80) writes an explicit field list and its only dynamic write is setattr over _METRICS (:77), so no sync can clobber a verdict — keep it that way. GET /posts returns raw list[Post], so the columns surface to the frontend for free.",
+    "acceptanceCriteria": [
+      "a verdict persists with its timestamp and is re-settable",
+      "an over-length note is rejected at the route with a clear error",
+      "an invalid verdict value is rejected rather than coerced",
+      "a metrics sync over a post with a verdict does not clear it — asserted",
+      "make check green",
+      "slice tests green"
+    ],
+    "priority": 12,
+    "passes": false
+  },
+  {
+    "id": "US-013",
+    "title": "GET /inbox returns the four human-gate queues",
+    "description": "One route returning four queues with counts and item ages: templates where status == PROPOSED; drafts where zernio_post_id IS NULL; drafts where zernio_post_id IS NOT NULL AND went_live_at IS NULL; posts published with verdict IS NULL. Note no existing query yields proposed-awaiting-review — latest_versions (templates.py:109) is status-blind and usable_templates (:117) is APPROVED-only, and GET /templates exposes only kind + usable_only (api_templates.py:60-71) with no status param, so add one. Ages require pushed_at and created_at, which the hand-mapped DraftOut omits — add them or the Inbox cannot render 'days waiting'. Match the /posts filter style (main.py:102-113).",
+    "acceptanceCriteria": [
+      "all four queues return correct membership against seeded fixtures",
+      "GET /templates gains a status filter and proposed-awaiting-review is queryable",
+      "each item carries an age so a stalled gate is visible; DraftOut exposes pushed_at and created_at",
+      "counts agree with the underlying queries",
+      "make check green",
+      "slice tests green"
+    ],
+    "priority": 13,
+    "passes": false
+  },
+  {
+    "id": "US-014",
+    "title": "The Inbox replaces the home page",
+    "description": "page.tsx (71 lines, currently the Status page: fetchHealth :9, Dot :19, Row :28, Home :40) becomes the Inbox: four queues on the component layer, each item linking straight to the action that clears it. layout.tsx's inline NAV (:22) labels / as 'Status' and must change with it; the shell is max-w-5xl (:44). The health rows fold into the Inbox footer rather than surviving as a destination.",
+    "acceptanceCriteria": [
+      "all four queues render with real data and correct empty states",
+      "every item links to the page that clears it",
+      "the NAV label changes and no route still advertises Status as a destination",
+      "the old home page body is deleted, not merely bypassed",
+      "make check green",
+      "slice tests green"
+    ],
+    "priority": 14,
+    "passes": false
+  },
+  {
+    "id": "US-015",
+    "title": "Recorded verdicts feed back into generation as lessons",
+    "description": "Inject a lessons block built from recorded verdicts into the generation prompt. _write_prompt (generation.py:140-142) is static, takes no session, builds parts at :149-155 and appends exemplars at :156-159 — inject after the visual-slots line (:154). CRITICAL: it has TWO call sites, generate_draft (:222-225) and regenerate_text (:266-269). Add a lessons parameter and change BOTH, or lessons silently vanish the moment anyone regenerates. Label lessons as human judgement at n=1, never as statistics, and never imply performance ranking. generation._exemplars must remain hard-restricted to settings.voice_account regardless of any verdict or cohort — widening it makes Pixii's drafts sound like someone else. Verdict notes leave the machine for Azure; that is recorded in the PRD's needs-human-eyes list.",
+    "acceptanceCriteria": [
+      "recorded verdicts appear in the prompt as explicit lessons",
+      "lessons survive regenerate_text — asserted at BOTH call sites",
+      "with no verdicts recorded the prompt is byte-identical to today",
+      "the voice-account exemplar restriction still holds and the existing adversarial test passes untouched",
+      "no ranking or best-performing language is introduced",
+      "make check green",
+      "slice tests green"
+    ],
+    "priority": 15,
+    "passes": false
+  },
+  {
+    "id": "US-016",
+    "title": "Loading, empty and error states across every page",
+    "description": "There is no loading.tsx or error.tsx anywhere and no Suspense; loading is an ad-hoc busy useState and errors are four copies of a local red <p>. Now that US-003 makes failure distinguishable from emptiness, give every page real states: Skeleton while loading, a purposeful empty state saying what to do next, and an error state with a retry reporting the actual failure. An empty state shown for a failed request is the specific bug this slice exists to prevent.",
+    "acceptanceCriteria": [
+      "every route has loading and error boundaries plus a purposeful empty state",
+      "a failed request never renders as an empty state — asserted",
+      "retry actually re-requests",
+      "make check green",
+      "slice tests green"
+    ],
+    "priority": 16,
+    "passes": false
+  },
+  {
+    "id": "US-017",
+    "title": "Motion and accessibility sweep",
+    "description": "Apply token motion durations and easing to state transitions, and sweep accessibility: visible focus rings, full keyboard reachability, correct ARIA on custom controls, AA contrast on the cream palette in both themes, prefers-reduced-motion honoured. Include the recharts surfaces, which ship their own defaults.",
+    "acceptanceCriteria": [
+      "every interactive element is keyboard reachable with a visible focus ring",
+      "prefers-reduced-motion disables transitions",
+      "text and interactive contrast meet AA on both themes, measured not assumed",
+      "make check green",
+      "slice tests green"
+    ],
+    "priority": 17,
+    "passes": false
+  },
+  {
+    "id": "US-018",
+    "title": "IA collapse and the V2 run record",
+    "description": "Final navigation: Inbox / Studio / Corpus / Templates / Assets. Then write the run record — progress.txt session-log entries under the existing '## Session log', a .scratch/v2/HANDOFF.md, and an update to the vault note at ~/Nikhil-workshop/03-tools/Pixii-Intelligence.md. Record explicitly what was deferred: the impressions CSV import (awaiting Monte's export), the ~25 missing scraped posts, and anything a slice could not finish.",
+    "acceptanceCriteria": [
+      "navigation shows exactly the five destinations and every page is reachable",
+      "progress.txt and .scratch/v2/HANDOFF.md record what shipped and what was deferred",
+      "the vault note reflects V2 as built, not as planned",
+      "make check green",
+      "full suite green"
+    ],
+    "priority": 18,
+    "passes": false
+  }
+]
