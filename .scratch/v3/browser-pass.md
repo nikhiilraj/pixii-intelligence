@@ -89,8 +89,44 @@ stretches to match, which is why the *form* measures widest at 1440.
 not overflow today only because the draft column's content happens to wrap; a draft containing one
 long unbroken string would blow it out identically. Fix both, and fix them the same way.
 
-`/posts` and `/scoreboard` at 390 are the plain version of the stated rule — a wide table must
-scroll inside its own `overflow-x-auto` container instead of widening the document.
+`/posts` and `/scoreboard` at 390 look like the plain version of the stated rule — a wide table
+that should scroll inside its own container. **Retracted below.**
+
+### Retraction: the mobile overflow was F1, not a missing scroll container
+
+I attributed `/posts`'s 784px to the native date input in the filter row, on the strength of the
+mobile screenshot showing it at x≈470–610. That was wrong on both counts, and the correction is
+worth more than the original claim.
+
+Both tables **already had** their `overflow-x-auto` wrapper (`Explorer.tsx:347`, with a comment
+saying exactly why). The wrapper could not do its job because nothing constrained it: while
+`<main>` was shrink-to-fit it took `max(min-content, …)` of its contents, so the table's
+`min-w-[46rem]` propagated straight through the scroll container into `<main>`'s own width. The
+arithmetic is exact and leaves no room for a second explanation:
+
+- `/posts`: 736px (`min-w-[46rem]`) + 48px (`px-6`) = **784** — the measured `main.width`
+- `/scoreboard`: 672px (`min-w-2xl`) + 48px = **720** — the measured `main.width`
+
+Instrumenting the scroll containers before and after the one-line `layout.tsx` change:
+
+| route | wrapper client / scroll | scrolls? | fits viewport? | doc.scrollWidth |
+|---|---|---|---|---|
+| `/posts` before | 736 / 736 | no | no | 784 |
+| `/posts` after | 342 / 736 | **yes** | **yes** | **390** |
+| `/scoreboard` before | 672 / 672 | no | no | 720 |
+| `/scoreboard` after | 342 / 672 | **yes** | **yes** | **390** |
+
+So F1 and the two mobile overflows are **one defect with one fix**, and neither `Explorer.tsx` nor
+`scoreboard/page.tsx` needed to change at all. Had I acted on my own reading, the "fix" would have
+been a second redundant wrapper around a container that was already correct — and the page would
+still have overflowed.
+
+**Method note, and the reason my reading was wrong:** an intermediate probe reported
+`recharts-wrapper` as a residual overflower at 736px. That was an artifact of measuring
+synchronously inside the same `page.evaluate` that mutated the class — `ResponsiveContainer` resizes
+via `ResizeObserver`, which had not fired yet. With a settle delay it reads 390. **Any measurement
+taken in the same tick as a layout mutation is suspect**; my date-input reading was probably stale
+the same way.
 
 ## F3 — ROUGH: both list pages render the entire table with no bound
 
