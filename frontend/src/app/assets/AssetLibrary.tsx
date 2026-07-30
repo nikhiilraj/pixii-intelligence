@@ -74,7 +74,10 @@ function altOf(asset: Asset): string {
 export default function AssetLibrary({ initial }: { initial: Asset[] }) {
   const [assets, setAssets] = useState(initial);
   const [filters, setFilters] = useState<AssetFilters>({ kind: "", tag: "" });
-  const [failed, setFailed] = useState(false);
+  // The API's own message when the last read failed, `null` when it did not. Was a boolean: it
+  // only gated the empty state, and the message it withheld went to a toast which then faded,
+  // leaving a library that had not filtered and nothing on screen saying so.
+  const [failed, setFailed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   // The upload form.
@@ -119,12 +122,12 @@ export default function AssetLibrary({ initial }: { initial: Asset[] }) {
 
     if (result.ok) {
       setAssets(result.data);
-      setFailed(false);
+      setFailed(null);
       return;
     }
     // The rows below are kept and the empty-state claim is withheld: after a failed request
     // there is no data to say "the library is empty" about.
-    setFailed(true);
+    setFailed(result.message);
     toast.error("Could not read the library", {
       description: `${result.message} — the assets below are the previous result.`,
     });
@@ -313,6 +316,23 @@ export default function AssetLibrary({ initial }: { initial: Asset[] }) {
           {assets.length} asset{assets.length === 1 ? "" : "s"}
         </span>
       </div>
+
+      {/* The failed read, persistently, with the retry that re-issues it. `reload(filters)`
+          changes nothing about the filter — it rebuilds the same path and requests it again,
+          and the ticket guard above still applies, so a retry racing a keystroke cannot write a
+          stale result. The toast stays too: it fires beside the control just used, and this card
+          sits above a grid that may be a scroll away. */}
+      {failed && (
+        <Card role="alert" className="mt-6 border-danger/40 bg-danger/10 text-body">
+          <p className="font-medium">
+            Could not read the library — the assets below are the previous result.
+          </p>
+          <p className="mt-1 text-muted">{failed}</p>
+          <Button variant="outline" className="mt-3" onClick={() => reload(filters)}>
+            Try again
+          </Button>
+        </Card>
+      )}
 
       {assets.length > 0 ? (
         <ul className="mt-6 grid grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] gap-4">

@@ -51,11 +51,48 @@ export default async function ScoreboardPage() {
         against one another — at this sample size that would be reading noise.
       </p>
 
-      {withEvidence.length === 0 && (
-        <Card className="mt-6 border-warning/40 bg-warning/15 text-body">
-          No template has an attributed post yet. Analytics only covers published posts, so a
-          draft pushed to Zernio contributes nothing until it is actually published.
+      {/* Two different empties, and collapsing them would be a lie in one direction or the
+          other. `rows.length === 0` means the template library itself is empty, so there is
+          nothing to score. `withEvidence.length === 0` means the library is full and no post
+          has ever been attributed to any of it — which is the real state of this app today
+          (zero generated drafts have gone live) and is a statement about the circuit, not
+          about the templates.
+
+          The second case keeps every table below it. All-zero sample counts are worth
+          rendering: they say *which* versions are waiting, and replacing them with an empty
+          state would hide a stocked library behind the words "nothing here".
+
+          Neutral, not the warning tint this carried before. A scoreboard with nothing on it is
+          the expected state of a circuit that has not run a lap, not a fault. */}
+      {rows.length === 0 ? (
+        <Card className="mt-6 bg-surface-2 text-body">
+          <p className="font-medium">No template version exists yet.</p>
+          <p className="mt-1 text-muted">
+            This page reads the template library, and the library is empty. Extraction on the{" "}
+            <Link href="/templates" className="underline">
+              Templates
+            </Link>{" "}
+            page proposes hooks, structures and visuals from the corpus; every version appears
+            here the moment it exists, at a sample count of zero, and starts carrying evidence
+            once a post generated from it goes live.
+          </p>
         </Card>
+      ) : (
+        withEvidence.length === 0 && (
+          <Card className="mt-6 bg-surface-2 text-body">
+            <p className="font-medium">
+              No generated post has been published yet — the scoreboard starts with the first
+              circuit.
+            </p>
+            <p className="mt-1 text-muted">
+              Every version below is listed at a sample count of zero, which is what waiting
+              looks like rather than what failure looks like. Analytics covers published posts
+              only, and publishing is a human act performed in Zernio — a draft pushed from
+              Studio contributes nothing until Monte publishes it. The first published post
+              fills the first row.
+            </p>
+          </Card>
+        )
       )}
 
       {kinds.map((kind) => {
