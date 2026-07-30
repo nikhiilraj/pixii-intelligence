@@ -51,7 +51,16 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">
+      {/* NOT a flex container, and that is load-bearing. While this was `flex flex-col`, every
+          page's `<main className="mx-auto max-w-6xl">` was a flex item — and an auto margin on
+          the cross axis disables `stretch`, so `<main>` fell back to shrink-to-fit and `mx-auto`
+          centred whatever narrow box the content happened to produce. Measured at 1440: `/` sat
+          at x=343 w=754 against a nav content edge of 144, `/posts` at 239/962, and the number
+          moved with the database rather than staying wrong in a fixed way. Nothing consumed the
+          flex — no `<main>` in the app carries `flex-1`, `grow` or `mt-auto`, and there is no
+          sticky footer (the Inbox's `<footer>` is inside its own `<main>`). `items-stretch` is
+          not the fix; auto margins beat it per spec. */}
+      <body className="min-h-full">
         <nav className="border-b border-black/10 dark:border-white/15">
           {/* One shell width, `max-w-6xl`, and it has to be every page or none. The nav sat at
               5xl while posts/, studio/ and assets/ rendered at 6xl, so on exactly the table pages
