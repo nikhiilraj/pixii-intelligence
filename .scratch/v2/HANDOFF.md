@@ -269,3 +269,56 @@ Three traps that cost time during V2 and will cost it again:
    escaped characters, but a raw `data:image/svg+xml,<svg…>` is mangled to `&lt;svg` and renders
    broken **with no exception raised**. Do not "fix" this with `escape=False` — that flag is the
    injection guard.
+
+---
+
+## G2 review findings — added 2026-07-30 after two adversarial review passes
+
+Two reviewers (Standards axis, Spec axis) went over the whole branch against the PRD and the
+repo's own rules. **They found things the per-slice verification did not** — worth knowing that
+per-slice checking of invariants is not a substitute for walking each acceptance criterion.
+
+### Fixed before merge
+1. **The verdict UI did not exist.** Backend route, columns, 500-char cap, six tests and the
+   lessons feedback path were all real, but no form existed on `/posts/[id]` and `Post` in
+   `lib/api.ts` had no verdict fields — so Inbox queue 4 linked to a page that could not clear it,
+   and "know what worked and what didn't" had no human input. US-014 was marked passing with its
+   "every item links to the page that clears it" criterion unmet.
+2. **`cap` on `POST /drafts/autonomous-run` had no ceiling** (`api_drafts.py:245`).
+   `autonomous_max_drafts = 2` was a default, never a bound, while `run_autonomous`'s docstring
+   asserted "`cap` is hard". `?cap=500` meant up to **1001 billed Azure chat completions**, 250x
+   the configured cap, with no spend counter anywhere. (This path uses only `html_renderer`, so it
+   could not reach Azure *image* generation.)
+3. **`regenerate_visual` resolved the template by latest version, not the draft's own**
+   (`generation.py:424`), while `_image_slot_names` (`assets.py:313`) correctly keys on
+   `(family_id, version)`. Redrawing a v2 draft after a v3 existed stored a v3 image while
+   `visual_version` still said 2 — so Zernio metadata and `template_performance` both credited v2
+   with v3's picture. A silent attribution error in the one thing this app exists to record.
+
+### Accepted as follow-up — NOT fixed, do not read the above as "all clear"
+| Item | Where | Note |
+|---|---|---|
+| Circuit counter ("Closed circuits: N") | PRD.md:209 marked **Build** | silently dropped; the Inbox has no counter |
+| Engagement curve + draft lineage on post detail | PRD.md:186; `/posts/{id}/history` + `draft_for_post` exist | routes render nowhere |
+| Lessons in `autonomous.propose_topics` | PRD.md:132 | `verdict_lessons` reaches only `generate_draft` and `regenerate_text` |
+| `DecompressionBombError` escapes `store_image` | `assets.py:114` | a 68-byte PNG claiming 30000x30000 returns **500**, not the documented 422. Verified empirically |
+| recharts never moved onto tokens | `Explorer.tsx:336` hardcodes `#F2610C`; `:326` uses opacity-as-muted | `--chart-1..5` declared and consumed by nothing; the AA pattern PRD.md:373 names as failing |
+| `Card` exists but 6 pasted card strings survive | `Studio.tsx:77,203,330`, `posts/[id]/page.tsx:15`, `ExcludeToggle.tsx:33`, `TemplateManager.tsx:233` | US-002's "exactly one place" criterion literally unmet |
+| Inbox queue 4 is lineage-only | `main.py:437` | reasoned (57 published posts carry no verdict and would flood it), but those 57 have no surface at all |
+| Asset picker is a `Select` per slot | `Studio.tsx:198` | PRD.md:167 specified a dialog with grid, search and upload-in-place; not arrow-key navigable |
+| `{verdict: null}` cannot clear a verdict | `main.py:272` `VerdictIn.verdict` is required | PRD.md:178 said it could |
+| `HealthRow` API row can only render green | `(inbox)/page.tsx:196` | inside the `health.ok` branch; ignores `health.data.status` |
+| The dead `note` param | `main.py:164` | the cut list promised to delete it |
+| `/posts/[id]` is a pre-token holdout | | may read as a different app |
+
+### The honest state of "best UX and UI"
+**No page in this application was ever seen in a browser during the build.** The Chrome extension
+was unresponsive for the whole run (5 attempts). What is verified: tokens, measured contrast
+ratios, one global focus ring, one reduced-motion query, loading+error boundaries on all 7 routes,
+and Vitest coverage of our own logic. What is **not** verified: real layout at any viewport, dark
+mode, whether cream-on-white reads as hierarchy, Radix overlay positioning, the assets grid at 2
+rows versus 200, and how `/posts/[id]`'s untokenised styling sits beside the rest. Two a11y
+criteria rest on hand-verification claims that name nothing specific.
+
+**A browser pass over all seven routes in both themes is the right next step before Track C is
+called done.**
