@@ -1187,3 +1187,29 @@ no react-compiler warnings.
 
 **Phase state: C-thin (US-001..004) done — tokens, primitives, honest API layer, Radix.**
 Tracks A and B now build on a real component layer rather than reskinning later.
+
+### US-005 — Asset table, upload, and listing (done 2026-07-30) — Track A begins
+
+New `Asset` model (`app/models/asset.py`) + `AssetKind` StrEnum, service layer `app/assets.py`,
+router `app/api_assets.py`, migration **443990bee2a6** (additive, one new table, real downgrade).
+Files land under `media/assets/`, served by the existing `/media` mount — no new static plumbing.
+
+**The DROP trap was real and is handled.** `app/models/__init__.py` imports
+`Asset, AssetKind`; without that, autogenerate emits a DROP for the new table. Verified
+empirically, not assumed: ran `alembic revision --autogenerate` and the generated migration
+contained **zero operations** — no `op.drop`, no ops at all. (The probe revision was discarded.)
+
+New dependency: `python-multipart>=0.0.20`. Not optional — FastAPI parses multipart form data
+only when it is installed, so without it `POST /assets` fails at *request* time rather than at
+import, which is the worst failure shape.
+
+Downscale (>1600px long edge) is justified by **disk and upload time only**. The Cloudflare
+render payload ceiling does not exist — 13.17MB body with a 9.88MB embedded PNG was accepted
+live. No code may cite a payload limit as the reason.
+
+Reused `media.py`'s `_KNOWN_SUFFIXES`/`_suffix()` for the licdn no-extension case, but NOT its
+swallow-all-return-None error handling: an upload must 4xx where opportunistic post-media
+download may shrug.
+
+Backend tests 258 -> **275**. Verified: ruff, mypy, eslint, tsc green; alembic upgrade head
+clean; autogenerate emits nothing.
