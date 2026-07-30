@@ -28,7 +28,7 @@ export default async function ScoreboardPage() {
 
   if (!result.ok) {
     return (
-      <main className="mx-auto max-w-5xl px-6 py-16">
+      <main className="mx-auto max-w-6xl px-6 py-16">
         <h1 className="text-title font-semibold tracking-tight">Scoreboard</h1>
         <ApiFailureNotice failure={result} className="mt-8" />
       </main>
@@ -43,7 +43,7 @@ export default async function ScoreboardPage() {
   const kinds = ["hook", "structure", "visual"];
 
   return (
-    <main className="mx-auto max-w-5xl px-6 py-16">
+    <main className="mx-auto max-w-6xl px-6 py-16">
       <h1 className="text-title font-semibold tracking-tight">Scoreboard</h1>
       <p className="mt-1 max-w-2xl text-body text-muted">
         What each template version has actually done. Every figure carries its sample count,
