@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 from sqlmodel import Session, col, select
 
+from app.assets import resolve_asset_values
 from app.config import settings
 from app.llm import LLM
 from app.models.draft import Draft
@@ -182,11 +183,19 @@ def _resolve(session: Session, kind: TemplateKind, template_id: int | None) -> T
 
 
 def _draw_visual(
-    draft: Draft, visual: Template, renderer: HtmlRenderer | ImageRenderer
+    session: Session, draft: Draft, visual: Template, renderer: HtmlRenderer | ImageRenderer
 ) -> None:
-    """Render the visual onto the draft. A failure records why and keeps the words."""
+    """Render the visual onto the draft. A failure records why and keeps the words.
+
+    Asset resolution happens here rather than in either caller, and deliberately so:
+    `regenerate_visual` is handed no values at all — it redraws from what the draft
+    already holds — so resolving at the call sites would leave every re-render embedding
+    nothing. The resolved values stay local; `draft.visual_values` keeps the asset id,
+    which is what makes the next re-render resolvable too.
+    """
     try:
-        draft.visual_image = render_visual(visual, draft.visual_values, renderer)
+        values = resolve_asset_values(session, visual, draft.visual_values)
+        draft.visual_image = render_visual(visual, values, renderer)
         draft.visual_error = None
     except Exception as exc:  # noqa: BLE001 — any failure here must not cost the words
         draft.visual_image = None
@@ -237,7 +246,7 @@ def generate_draft(
         body_text=str(written.get("body") or "").strip(),
         visual_values=_written_values(written, visual),
     )
-    _draw_visual(draft, visual, renderer)
+    _draw_visual(session, draft, visual, renderer)
 
     session.add(draft)
     session.flush()
@@ -279,7 +288,7 @@ def regenerate_visual(
     session: Session, draft: Draft, renderer: HtmlRenderer | ImageRenderer
 ) -> Draft:
     """Redraw the image from the values already written. The words are untouched."""
-    _draw_visual(draft, _current(session, draft.visual_family), renderer)
+    _draw_visual(session, draft, _current(session, draft.visual_family), renderer)
     session.add(draft)
     session.flush()
     return draft
