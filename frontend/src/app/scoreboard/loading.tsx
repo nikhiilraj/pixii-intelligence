@@ -12,6 +12,22 @@ import { Skeleton } from "@/components/ui/skeleton";
    gate names. Ceiling: export them from `lib/api.ts` beside `TemplateKind` if a fourth appears. */
 const KINDS = ["hook", "structure", "visual"];
 
+/* ponytail: the column grid is retyped from page.tsx for the same reason KINDS is. It has to
+   match exactly or the skeleton promises a different table than the one that arrives. Ceiling:
+   export a `<ScoreboardCols />` from a shared module if a third caller appears. */
+function ScoreboardCols() {
+  return (
+    <colgroup>
+      <col className="w-80" />
+      <col className="w-24" />
+      <col className="w-16" />
+      <col className="w-24" />
+      <col className="w-16" />
+      <col className="w-28" />
+    </colgroup>
+  );
+}
+
 export default function ScoreboardLoading() {
   return (
     <main className="mx-auto max-w-6xl px-6 py-16" aria-busy="true">
@@ -30,7 +46,8 @@ export default function ScoreboardLoading() {
         <section key={kind} className="mt-8">
           <h2 className="text-caption font-medium uppercase tracking-widest text-muted">{kind}</h2>
           <div className="mt-2 overflow-x-auto">
-            <table className="w-full min-w-2xl border-collapse text-meta">
+            <table className="w-full min-w-2xl table-fixed border-collapse text-meta">
+              <ScoreboardCols />
               <thead>
                 <tr className="border-b border-border text-left text-muted">
                   <th className="py-2 pr-4 font-medium">Template</th>
