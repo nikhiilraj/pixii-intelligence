@@ -105,7 +105,7 @@
       "slice tests green"
     ],
     "priority": 8,
-    "passes": false
+    "passes": true
   },
   {
     "id": "US-009",
