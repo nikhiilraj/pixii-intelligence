@@ -1,4 +1,4 @@
-import { BackendUnreachable } from "@/components/backend-unreachable";
+import { ApiFailureNotice } from "@/components/api-failure";
 import { getJson, type Template } from "@/lib/api";
 
 import Studio from "./Studio";
@@ -15,10 +15,10 @@ export default async function StudioPage() {
         An idea in, a reviewable draft out — stamped with the templates that produced it.
         Nothing publishes from here.
       </p>
-      {templates === null ? (
-        <BackendUnreachable className="mt-8" />
+      {templates.ok ? (
+        <Studio templates={templates.data} />
       ) : (
-        <Studio templates={templates} />
+        <ApiFailureNotice failure={templates} className="mt-8" />
       )}
     </main>
   );

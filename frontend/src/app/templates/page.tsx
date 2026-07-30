@@ -1,4 +1,4 @@
-import { BackendUnreachable } from "@/components/backend-unreachable";
+import { ApiFailureNotice } from "@/components/api-failure";
 import { getJson, type Template } from "@/lib/api";
 
 import TemplateManager from "./TemplateManager";
@@ -16,10 +16,10 @@ export default async function TemplatesPage() {
         attached to the wording that earned it.
       </p>
 
-      {templates === null ? (
-        <BackendUnreachable className="mt-8" />
+      {templates.ok ? (
+        <TemplateManager initial={templates.data} />
       ) : (
-        <TemplateManager initial={templates} />
+        <ApiFailureNotice failure={templates} className="mt-8" />
       )}
     </main>
   );

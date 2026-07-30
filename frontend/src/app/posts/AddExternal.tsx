@@ -3,7 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-import { API_BASE } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { postJson } from "@/lib/api";
 
 export default function AddExternal() {
   const router = useRouter();
@@ -21,40 +22,31 @@ export default function AddExternal() {
     event.preventDefault();
     setBusy(true);
     setError(null);
-    try {
-      const res = await fetch(`${API_BASE}/corpus/manual`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          content,
-          author: author || null,
-          engaged_actions: Number(engaged) || 0,
-        }),
-      });
-      if (!res.ok) {
-        const detail = await res.json().catch(() => ({}));
-        throw new Error(detail.detail ?? `failed (${res.status})`);
-      }
-      setContent("");
-      setAuthor("");
-      setEngaged("");
-      setOpen(false);
-      router.refresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "failed");
-    } finally {
-      setBusy(false);
+
+    const result = await postJson<unknown>("/corpus/manual", {
+      content,
+      author: author || null,
+      engaged_actions: Number(engaged) || 0,
+    });
+    setBusy(false);
+
+    if (!result.ok) {
+      setError(result.message);
+      return;
     }
+
+    setContent("");
+    setAuthor("");
+    setEngaged("");
+    setOpen(false);
+    router.refresh();
   }
 
   if (!open) {
     return (
-      <button
-        onClick={() => setOpen(true)}
-        className="mt-4 rounded-md border border-black/20 px-3 py-1.5 text-sm dark:border-white/25"
-      >
+      <Button variant="outline" onClick={() => setOpen(true)} className="mt-4">
         Add a post from elsewhere
-      </button>
+      </Button>
     );
   }
 
@@ -89,13 +81,9 @@ export default function AddExternal() {
       </div>
       {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
       <div className="flex gap-3">
-        <button
-          type="submit"
-          disabled={busy || !content.trim()}
-          className="rounded-md bg-black px-3 py-1.5 text-sm text-white disabled:opacity-50 dark:bg-white dark:text-black"
-        >
+        <Button type="submit" disabled={busy || !content.trim()}>
           {busy ? "Adding…" : "Add to corpus"}
-        </button>
+        </Button>
         <button type="button" onClick={() => setOpen(false)} className="text-sm underline opacity-70">
           cancel
         </button>

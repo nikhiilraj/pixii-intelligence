@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 
-import { API_BASE, type Draft, type Template } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { postJson, type Draft, type Template } from "@/lib/api";
 
 type Picked = { hook: number | null; structure: number | null; visual: number | null };
 
@@ -37,26 +38,16 @@ export default function Studio({ templates }: { templates: Template[] }) {
   const approved = templates.filter((t) => t.status === "approved");
   const of = (kind: Template["kind"]) => approved.filter((t) => t.kind === kind);
 
+  // The pending/error bookkeeping stays local; only the request is shared. `busy` holds the
+  // path so a button can label its own in-flight state.
   async function call<T>(path: string, body?: unknown): Promise<T | null> {
     setBusy(path);
     setError(null);
-    try {
-      const res = await fetch(`${API_BASE}${path}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const detail = await res.json().catch(() => ({}));
-        throw new Error(detail.detail ?? `failed (${res.status})`);
-      }
-      return (await res.json()) as T;
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "failed");
-      return null;
-    } finally {
-      setBusy(null);
-    }
+    const result = await postJson<T>(path, body);
+    setBusy(null);
+    if (result.ok) return result.data;
+    setError(result.message);
+    return null;
   }
 
   const payload = {
@@ -66,10 +57,9 @@ export default function Studio({ templates }: { templates: Template[] }) {
     visual_id: picked.visual,
   };
 
+  // Inputs and selects keep their pasted string: the Select migration is US-004's.
   const field =
     "w-full rounded-md border border-black/15 bg-transparent px-3 py-2 text-sm dark:border-white/20";
-  const button =
-    "rounded-md border border-black/20 px-3 py-1.5 text-sm disabled:opacity-50 dark:border-white/25";
 
   return (
     <div className="mt-8 grid gap-10 lg:grid-cols-[22rem_1fr]">
@@ -101,9 +91,9 @@ export default function Studio({ templates }: { templates: Template[] }) {
         ))}
 
         <div className="flex flex-wrap gap-2">
-          <button
+          <Button
+            variant="outline"
             disabled={!idea.trim() || busy !== null}
-            className={button}
             onClick={async () => {
               const s = await call<{
                 hook: { id: number };
@@ -118,17 +108,16 @@ export default function Studio({ templates }: { templates: Template[] }) {
             }}
           >
             Suggest templates
-          </button>
-          <button
+          </Button>
+          <Button
             disabled={!idea.trim() || busy !== null}
-            className="rounded-md bg-black px-3 py-1.5 text-sm text-white disabled:opacity-50 dark:bg-white dark:text-black"
             onClick={async () => {
               const d = await call<Draft>("/drafts", payload);
               if (d) setDraft(d);
             }}
           >
             {busy === "/drafts" ? "Writing…" : "Generate draft"}
-          </button>
+          </Button>
         </div>
 
         {reason && <p className="text-xs opacity-60">{reason}</p>}
@@ -171,36 +160,35 @@ export default function Studio({ templates }: { templates: Template[] }) {
             )}
 
             <div className="flex gap-2">
-              <button
+              <Button
+                variant="outline"
                 disabled={busy !== null}
-                className={button}
                 onClick={async () => {
                   const d = await call<Draft>(`/drafts/${draft.id}/regenerate-text`);
                   if (d) setDraft(d);
                 }}
               >
                 Rewrite text
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="outline"
                 disabled={busy !== null}
-                className={button}
                 onClick={async () => {
                   const d = await call<Draft>(`/drafts/${draft.id}/regenerate-visual`);
                   if (d) setDraft(d);
                 }}
               >
                 Redraw visual
-              </button>
-              <button
+              </Button>
+              <Button
                 disabled={busy !== null || draft.zernio_post_id !== null}
-                className="rounded-md bg-black px-3 py-1.5 text-sm text-white disabled:opacity-50 dark:bg-white dark:text-black"
                 onClick={async () => {
                   const d = await call<Draft>(`/drafts/${draft.id}/push`);
                   if (d) setDraft(d);
                 }}
               >
                 {draft.zernio_post_id ? "In Zernio" : "Push to Zernio as draft"}
-              </button>
+              </Button>
             </div>
           </>
         )}
