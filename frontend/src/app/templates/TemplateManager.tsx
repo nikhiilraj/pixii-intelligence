@@ -6,6 +6,13 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { postBlob, postJson, type Cohort, type Template, type TemplateKind } from "@/lib/api";
 
 const KINDS: TemplateKind[] = ["hook", "structure", "visual"];
@@ -163,8 +170,11 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
     setBody(JSON.stringify(template.body, null, 2));
   }
 
-  const field =
-    "w-full rounded-md border border-black/15 bg-transparent px-3 py-2 text-sm dark:border-white/20";
+  // Dresses the name input and the body textarea, now that the kind select draws its own border
+  // from the same tokens. Retokenised with the select that left it: leaving `border-black/15`
+  // here would put a differently-weighted border on the two controls directly under a
+  // `border-border` trigger, which is the mismatch this slice exists to remove.
+  const field = "w-full rounded-input border border-border bg-transparent px-3 py-2 text-meta";
 
   return (
     <div className="mt-8 grid gap-10 lg:grid-cols-[1fr_20rem]">
@@ -177,19 +187,24 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
           only shows up once a template body contains a long line. */}
       <section className="min-w-0">
         <div className="mb-4 flex flex-wrap items-center gap-3">
-          <select
-            value={cohort}
-            onChange={(e) => setCohort(e.target.value as Cohort)}
-            disabled={busy}
-            className="rounded-md border border-black/15 bg-transparent px-2 py-1.5 text-sm dark:border-white/20"
-            aria-label="extraction cohort"
-          >
-            {COHORTS.map((c) => (
-              <option key={c.value} value={c.value}>
-                {c.label}
-              </option>
-            ))}
-          </select>
+          {/* No sentinel on either Select in this file: both are required choices with a real
+              default ("voice", "hook"), so neither has an unset state and Radix's ban on an
+              empty item value never bites. Worth naming rather than leaving as an absence —
+              `cohort` *does* reach a query string (`/templates/extract/hooks?cohort=`), so the
+              day this grows an "any cohort" option it needs the sentinel and the query test
+              that /posts and /assets carry. */}
+          <Select value={cohort} onValueChange={(v) => setCohort(v as Cohort)} disabled={busy}>
+            <SelectTrigger aria-label="extraction cohort">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {COHORTS.map((c) => (
+                <SelectItem key={c.value} value={c.value}>
+                  {c.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Button
             variant="outline"
             onClick={() => send(`/templates/extract/hooks?${new URLSearchParams({ cohort })}`)}
@@ -313,21 +328,25 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
         </h2>
 
         {!editing && (
-          <select
+          <Select
             value={kind}
-            onChange={(e) => {
-              const next = e.target.value as TemplateKind;
+            onValueChange={(value) => {
+              const next = value as TemplateKind;
               setKind(next);
               setBody(BLANK_BODY[next]);
             }}
-            className={field}
           >
-            {KINDS.map((k) => (
-              <option key={k} value={k}>
-                {k}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger aria-label="template kind" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {KINDS.map((k) => (
+                <SelectItem key={k} value={k}>
+                  {k}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         )}
 
         <input

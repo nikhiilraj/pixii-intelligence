@@ -68,12 +68,18 @@ export function SelectTrigger({
       className={cn(
         "inline-flex min-h-8 items-center justify-between gap-2 rounded-input border border-border bg-transparent px-2 py-1.5 text-meta transition-colors hover:bg-surface-2",
         "data-[placeholder]:text-muted data-[disabled]:bg-surface-2 data-[disabled]:text-muted",
+        // The value truncates rather than widening the trigger. Auto-width triggers (the filter
+        // rows on /posts and /assets) are unaffected — a max-content flex container ignores
+        // `min-width: 0` when sizing itself — but a `w-full` trigger holding a long template name
+        // would otherwise spill out of a fixed-width column, which at 390px is page overflow.
+        // The icon gets `shrink-0` so the same rule cannot squeeze the chevron away.
+        "[&>span]:min-w-0 [&>span]:truncate",
         className,
       )}
       {...props}
     >
       {children}
-      <SelectPrimitive.Icon className="text-muted">
+      <SelectPrimitive.Icon className="shrink-0 text-muted">
         <ChevronDown />
       </SelectPrimitive.Icon>
     </SelectPrimitive.Trigger>

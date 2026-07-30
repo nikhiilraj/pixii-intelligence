@@ -5,9 +5,37 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { assetSrc, postJson, type Asset, type Draft, type Template } from "@/lib/api";
 
 type Picked = { hook: number | null; structure: number | null; visual: number | null };
+
+/* Radix rejects `Select.Item value=""` — it reserves the empty string for "nothing is
+ * selected". Every control on this page has an unset state ("let it suggest" on the three
+ * template selects, "pick an asset" on each image slot), so all of them need a stand-in item
+ * value, and that value must never leave the component.
+ *
+ * The two leaks are not equally loud, which is why both translations live here as functions a
+ * test can call. `hook_id: "__none__"` in the JSON body is a 422 — annoying, but it announces
+ * itself. `asset_values: {left_image_url: "__none__"}` is the silent one: `assetPayload` only
+ * dropped `""`, so a sentinel would pass straight through, the backend would fail to resolve
+ * an asset by that id, and the draft would be created with the image simply missing. Nothing
+ * on screen would say so.
+ */
+export const NONE = "__none__";
+
+/** The sentinel on the way back out, for a value that is a string when set. */
+export const noneOf = (value: string) => (value === NONE ? "" : value);
+
+/** The sentinel on the way back out, for a template id — `null` is what the API reads as
+ *  "choose one for me", and it is what `picked` holds. */
+export const templateId = (value: string) => (value === NONE ? null : Number(value));
 
 /** One `image_url` slot of a visual template, and the asset the template prefers for it. */
 export type ImageSlot = { name: string; defaultAssetId: string };
@@ -48,16 +76,38 @@ export function defaultAssetValues(visual: Template | undefined): Record<string,
  *  Narrowed rather than sent whole because the picker's state outlives a change of visual: a
  *  slot name from the previously selected template would otherwise ride along, and the backend
  *  dropping it silently is not a reason to send it. An unpicked slot is omitted, not sent as
- *  `""` — the backend reads an absent slot as "fall back to the template default". */
+ *  `""` — the backend reads an absent slot as "fall back to the template default".
+ *
+ *  `noneOf` runs here as well as at the Select's own props: an unpicked slot reaches this
+ *  function as `""` today, but the sentinel and `""` mean the same thing and the failure if one
+ *  ever arrives is invisible. This is the one place that can make it impossible. */
 export function assetPayload(
   visual: Template | undefined,
   chosen: Record<string, string>,
 ): Record<string, string> {
   return Object.fromEntries(
     imageSlots(visual)
-      .map((slot) => [slot.name, (chosen[slot.name] ?? "").trim()])
+      .map((slot) => [slot.name, noneOf((chosen[slot.name] ?? "").trim())])
       .filter(([, value]) => value !== ""),
   );
+}
+
+/** The `POST /drafts` body. Lifted out of the component when the five controls moved onto Radix
+ *  Select, so that "the default state asks for nothing" is a property of a function a test can
+ *  call rather than a claim about a component tree. */
+export function draftPayload(
+  idea: string,
+  picked: Picked,
+  visual: Template | undefined,
+  assetValues: Record<string, string>,
+) {
+  return {
+    idea,
+    hook_id: picked.hook,
+    structure_id: picked.structure,
+    visual_id: picked.visual,
+    asset_values: assetPayload(visual, assetValues),
+  };
 }
 
 function Lineage({ draft, assets }: { draft: Draft; assets: Asset[] | null }) {
@@ -144,17 +194,14 @@ export default function Studio({
     return null;
   }
 
-  const payload = {
-    idea,
-    hook_id: picked.hook,
-    structure_id: picked.structure,
-    visual_id: picked.visual,
-    asset_values: assetPayload(visual, assetValues),
-  };
+  const payload = draftPayload(idea, picked, visual, assetValues);
 
-  // Inputs and selects keep their pasted string: the Select migration is US-004's.
+  // Dresses the textarea only, now that the five selects on this page draw their own border from
+  // the same tokens. It was `border-black/15 rounded-md text-sm`, which is what made the old
+  // native selects look like a different app from the Buttons under them — retokenising the one
+  // control left behind is what stops this slice from creating a fresh mismatch on its way out.
   const field =
-    "w-full rounded-md border border-black/15 bg-transparent px-3 py-2 text-sm dark:border-white/20";
+    "w-full rounded-input border border-border bg-transparent px-3 py-2 text-meta";
 
   return (
     <div className="mt-8 grid gap-10 lg:grid-cols-[22rem_1fr]">
@@ -168,24 +215,30 @@ export default function Studio({
         />
 
         {(["hook", "structure", "visual"] as const).map((kind) => (
-          <select
+          <Select
             key={kind}
-            value={picked[kind] ?? ""}
-            aria-label={kind}
-            onChange={(e) => {
-              const id = e.target.value ? Number(e.target.value) : null;
+            value={picked[kind] === null ? NONE : String(picked[kind])}
+            onValueChange={(value) => {
+              const id = templateId(value);
               if (kind === "visual") chooseVisual(id);
               else setPicked({ ...picked, [kind]: id });
             }}
-            className={field}
           >
-            <option value="">{kind} — let it suggest</option>
-            {of(kind).map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name} (v{t.version})
-              </option>
-            ))}
-          </select>
+            {/* `aria-label` on the trigger, not a first option that reads as one. The native
+                select carried the control's name only inside "hook — let it suggest", which
+                stops being the accessible name the moment something else is chosen. */}
+            <SelectTrigger aria-label={kind} className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NONE}>{kind} — let it suggest</SelectItem>
+              {of(kind).map((t) => (
+                <SelectItem key={t.id} value={String(t.id)}>
+                  {t.name} (v{t.version})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         ))}
 
         {slots.length > 0 && (
@@ -194,12 +247,12 @@ export default function Studio({
              and a visual left to be suggested is filled from the template's own defaults on
              the server instead.
 
-             ponytail: a native `<select>` per slot with a thumbnail beside it, matching the
-             three selects already above it in this component. No search, no recent-assets
-             memory, no drag-into-slot, no grid-of-thumbnails dialog. Ceiling: when Studio's
-             selects move onto the Radix `Select` primitive, this moves with them as one job —
-             a single Radix control here would leave four controls in one form behaving two
-             different ways. Reach for a searchable grid when the library outgrows a dropdown. */
+             ponytail: one `Select` per slot with a thumbnail beside it, matching the three
+             template selects above it — which is the whole reason this moved in the same slice
+             they did. Still no search, no recent-assets memory, no drag-into-slot, no
+             grid-of-thumbnails dialog. Ceiling: US-015 replaces this with a picker dialog when
+             the library outgrows a dropdown; a thumbnail-per-row list is fine at 2 assets and
+             unusable at 200. */
           <div className="space-y-3 rounded-lg border border-black/10 p-3 dark:border-white/15">
             <div className="text-xs font-medium uppercase tracking-widest opacity-50">
               Images — {slots.length} slot{slots.length === 1 ? "" : "s"}
@@ -237,22 +290,28 @@ export default function Studio({
                         className="h-10 w-10 shrink-0 rounded-md border border-dashed border-black/15 dark:border-white/20"
                       />
                     )}
-                    <select
-                      value={assetValues[slot.name] ?? ""}
-                      aria-label={slot.name}
-                      onChange={(e) =>
-                        setAssetValues({ ...assetValues, [slot.name]: e.target.value })
+                    <Select
+                      value={assetValues[slot.name] || NONE}
+                      onValueChange={(value) =>
+                        setAssetValues({ ...assetValues, [slot.name]: noneOf(value) })
                       }
-                      className={field}
                     >
-                      <option value="">{slot.name} — pick an asset</option>
-                      {assets.map((a) => (
-                        <option key={a.id} value={a.id}>
-                          {a.label || `untitled ${a.kind}`} ({a.kind})
-                          {String(a.id) === slot.defaultAssetId ? " — template default" : ""}
-                        </option>
-                      ))}
-                    </select>
+                      {/* `flex-1 min-w-0`, not `w-full`: this row is a flex line with a 40px
+                          thumbnail in it, so a full-width trigger would push itself past the
+                          column. `min-w-0` is what lets the label truncate instead. */}
+                      <SelectTrigger aria-label={slot.name} className="min-w-0 flex-1">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={NONE}>{slot.name} — pick an asset</SelectItem>
+                        {assets.map((a) => (
+                          <SelectItem key={a.id} value={String(a.id)}>
+                            {a.label || `untitled ${a.kind}`} ({a.kind})
+                            {String(a.id) === slot.defaultAssetId ? " — template default" : ""}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                 );
               })
