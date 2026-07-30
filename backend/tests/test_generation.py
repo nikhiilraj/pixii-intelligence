@@ -1,7 +1,15 @@
-import pytest
+from collections.abc import Iterator
+from datetime import UTC, datetime
 
+import pytest
+from fastapi.testclient import TestClient
+from sqlmodel import Session
+
+from app.api_drafts import _renderer
 from app.config import settings
+from app.db import get_session
 from app.generation import (
+    LESSON_LIMIT,
     NoUsableTemplates,
     generate_draft,
     regenerate_text,
@@ -9,9 +17,18 @@ from app.generation import (
     suggest_templates,
     writable_slots,
 )
-from app.models.post import Post
+from app.main import app
+from app.models.post import Post, Verdict
 from app.models.template import TemplateKind
-from app.templates import approve, create_template
+from app.templates import approve, create_template, edit_template, retire
+from tests.test_rendering import renderer_capturing
+
+
+@pytest.fixture
+def client(session: Session) -> Iterator[TestClient]:
+    app.dependency_overrides[get_session] = lambda: session
+    yield TestClient(app)
+    app.dependency_overrides.clear()
 
 
 class FakeLLM:
@@ -394,3 +411,322 @@ def test_an_untyped_template_fails_loudly_instead_of_rendering_empty_boxes(sessi
     assert draft.visual_image is None
     assert draft.visual_error is not None
     assert draft.body_text.startswith("not a rebrand")
+
+
+# --- US-015: recorded verdicts feed generation as lessons ---------------------------------
+
+# The prompt exactly as it was built before lessons existed, for the same fixture as
+# `test_generation_is_grounded_in_the_posts_the_hook_came_from`. Captured from the code at
+# the commit before this slice, not typed from the format by hand. It is here so "no
+# verdicts changes nothing" is a byte comparison rather than a claim: a stray newline or a
+# lessons header that leaks in when the list is empty fails this and nothing else would.
+PROMPT_BEFORE_LESSONS = (
+    "Idea:\n"
+    "a seller tested one main image and got +17% CTR\n"
+    "\n"
+    "Hook pattern to follow:\n"
+    "{small} turned into {large}\n"
+    "Hook tone: plain, lowercase\n"
+    "\n"
+    "Structure (deep-research):\n"
+    "1. result: Lead with the dollar outcome.\n"
+    "\n"
+    "Visual slots to fill: big_number, headline\n"
+    "\n"
+    "Exemplar posts — match this voice, not this content:\n"
+    "---\n"
+    "The exemplar post body that proves the pattern."
+)
+
+
+def rule(session, post: Post, verdict: Verdict, note: str) -> Post:
+    """Record a human's ruling the way the verdict route does, without going through it."""
+    post.verdict = verdict
+    post.verdict_note = note
+    post.verdict_at = datetime.now(UTC)
+    session.add(post)
+    session.flush()
+    return post
+
+
+def test_a_recorded_verdict_reaches_the_prompt_as_a_lesson(session):
+    library(session)
+    add_post(session, "win-1", 185, "The exemplar post body that proves the pattern.")
+    judged = add_post(session, "judged-1", 300, "A post that already went out.")
+    rule(session, judged, Verdict.WORKED, "the opening number did the work; the ask fell flat")
+
+    llm = FakeLLM(WRITTEN)
+    generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+
+    assert "the opening number did the work; the ask fell flat" in llm.last_user
+    assert "worked" in llm.last_user
+
+
+def test_lessons_survive_a_regeneration(session):
+    """The trap this slice exists to avoid: two call sites, one of them forgotten.
+
+    Asserted at both — the prompt from `generate_draft` and the prompt from
+    `regenerate_text` — because lessons that only reach the first are lessons that vanish
+    the moment anyone presses regenerate.
+    """
+    library(session)
+    judged = add_post(session, "judged-1", 300, "A post that already went out.")
+    rule(session, judged, Verdict.DIDNT, "opened on the process, nobody stayed for the result")
+
+    llm = FakeLLM(WRITTEN)
+    draft = generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+    generated_prompt = llm.last_user
+    regenerate_text(session, llm, draft)
+    regenerated_prompt = llm.last_user
+
+    assert generated_prompt is not regenerated_prompt
+    for prompt in (generated_prompt, regenerated_prompt):
+        assert "opened on the process, nobody stayed for the result" in prompt
+        assert "didnt" in prompt
+
+
+def test_with_no_verdicts_recorded_the_prompt_is_byte_identical_to_before(session):
+    """Checked at both call sites, for the same reason lessons are: one is not the other."""
+    library(session)
+    add_post(session, "win-1", 185, "The exemplar post body that proves the pattern.")
+
+    llm = FakeLLM(WRITTEN)
+    draft = generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+
+    assert llm.last_user == PROMPT_BEFORE_LESSONS
+
+    regenerate_text(session, llm, draft)
+
+    assert llm.last_user == PROMPT_BEFORE_LESSONS
+
+
+def test_a_verdict_with_no_note_changes_the_prompt_not_at_all(session):
+    """A ruling with no reason is not a lesson.
+
+    The lesson is the human's words; nothing else about the post is sent. So a note-less
+    verdict would arrive as the bare word `worked` attached to no post the model can see —
+    one tick in a tally, and a tally is the statistics reading that must never appear here.
+    """
+    library(session)
+    add_post(session, "win-1", 185, "The exemplar post body that proves the pattern.")
+    judged = add_post(session, "judged-1", 300, "A post that already went out.")
+    rule(session, judged, Verdict.WORKED, "   ")
+
+    llm = FakeLLM(WRITTEN)
+    generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+
+    assert llm.last_user == PROMPT_BEFORE_LESSONS
+
+
+def test_a_lesson_from_a_creator_post_carries_the_note_and_never_the_writing(session):
+    """Lessons may come from any judged post; voice still comes from one account only.
+
+    A creator post here is judged *and* named in the hook's provenance *and* outranks
+    Monte's on engagement — the full adversarial setup — and its text still never reaches
+    the model. The human's note about it does, which is a person's words, not a voice.
+    """
+    hook, _, _ = library(session)
+    hook.provenance = ["win-1", "theirs"]
+    session.add(hook)
+    session.flush()
+    add_post(session, "win-1", 185, "Monte's own post body.")
+    theirs = add_post(
+        session, "theirs", 5000, "Someone else's writing.", author=settings.inspiration_account
+    )
+    rule(session, theirs, Verdict.MIXED, "the contrast opener is worth borrowing")
+
+    llm = FakeLLM(WRITTEN)
+    generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+
+    assert "the contrast opener is worth borrowing" in llm.last_user
+    assert "Someone else's writing." not in llm.last_user
+    assert "Monte's own post body." in llm.last_user
+
+
+def test_the_lessons_block_makes_no_claim_about_performance(session):
+    """Asserted rather than trusted, the same way the scoreboard's payload is.
+
+    A verdict is judgement at n=1. Wording that turns it into a ranking is the failure
+    mode, and it is the kind of thing an edit reintroduces casually, so the words are
+    pinned here.
+    """
+    library(session)
+    judged = add_post(session, "judged-1", 300, "A post that already went out.")
+    rule(session, judged, Verdict.WORKED, "the opening number did the work")
+
+    llm = FakeLLM(WRITTEN)
+    generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+
+    lowered = llm.last_user.lower()
+    for banned in ("best", "rank", "perform", "score", "top-", "average", "win rate"):
+        assert banned not in lowered
+
+
+def test_only_the_most_recently_judged_verdicts_are_carried(session):
+    library(session)
+    for index in range(LESSON_LIMIT + 3):
+        judged = add_post(session, f"judged-{index}", 300, f"post {index}")
+        rule(session, judged, Verdict.WORKED, f"ruling number {index}")
+
+    llm = FakeLLM(WRITTEN)
+    generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+
+    assert llm.last_user.count("ruling number") == LESSON_LIMIT
+    assert "ruling number 0" not in llm.last_user
+
+
+# --- a redraw renders the version the draft names, not whatever is newest -----------------
+#
+# Every renderer here is `renderer_capturing` — a real `CloudflareRenderer` over an
+# `httpx.MockTransport` that keeps the posted markup. `FakeRenderer` above discards its `html`
+# argument, so under it a redraw rendering the wrong template would pass.
+
+
+def edited_visual(session, visual, marker: str):
+    """The next version of the visual family, distinguishable in the markup it renders."""
+    return edit_template(
+        session,
+        visual,
+        body={
+            "renderer": "html",
+            "html": f"<b>{{big_number}}</b><p>{{headline}}</p><i>{marker}</i>",
+        },
+    )
+
+
+def test_a_redraw_renders_the_version_the_draft_was_generated_from(session):
+    """The silent lineage corruption this closes.
+
+    A draft generated from v2, then someone edits the template. The redraw used to render v3
+    — `_current` is `order_by(version.desc()).first()` — and store that PNG while
+    `visual_version` still said 2. `publishing.lineage_metadata` then pushed
+    `visual_version: 2` to Zernio and `metrics.template_performance` credited v2 with a
+    picture v3 produced. Nothing raised.
+
+    Asserted in both directions on the posted markup: v2's marker present *and* v3's absent.
+    """
+    _, _, visual = library(session)
+    v2 = edited_visual(session, visual, "v2")
+    approve(session, v2)
+    draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    assert draft.visual_version == v2.version
+
+    edited_visual(session, v2, "v3")
+    captured: dict = {}
+    regenerate_visual(session, draft, renderer_capturing(captured, png=b"REDRAWN"))
+
+    assert "<i>v2</i>" in captured["html"]
+    assert "<i>v3</i>" not in captured["html"]
+    # And the lineage still agrees with the picture, which is the whole point.
+    assert draft.visual_version == v2.version
+    assert draft.visual_image == b"REDRAWN"
+
+
+def test_a_rewrite_uses_the_hook_the_draft_was_generated_from(session):
+    """The same lineage defect as the redraw, one door along — and it was left behind.
+
+    `regenerate_text` already promised "Lineage does not move", but it resolved each family by
+    newest row, so editing a hook and pressing regenerate rewrote the words against v2's
+    pattern while `hook_version` still said 1. `lineage_metadata` then pushed version 1 to
+    Zernio and `template_performance` credited it with text a different template wrote. Three
+    families were exposed, not one, and `_written_values` took the newest visual's slots too.
+
+    v2 has to exist for this to prove anything — in a single-version family the fix and the
+    bug are indistinguishable.
+    """
+    hook, _, _ = library(session)
+    llm = FakeLLM(WRITTEN)
+    draft = generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+    recorded = draft.hook_version
+
+    v2 = edit_template(
+        session,
+        hook,
+        body={"pattern": "{small} became {large}, eventually", "tone": "plain, lowercase"},
+    )
+    approve(session, v2)
+
+    regenerate_text(session, llm, draft)
+
+    assert "{small} turned into {large}" in llm.last_user
+    assert "eventually" not in llm.last_user
+    # And the column did not move either, so metadata and prompt describe one template.
+    assert draft.hook_version == recorded
+
+
+def test_a_retired_recorded_version_still_redraws(session):
+    """A redraw is a re-render of what this draft already is, not a new generation.
+
+    So the version its lineage names is the honest picture even once that version is
+    withdrawn. `usable_templates` is what keeps a retired template out of everything that
+    *chooses* one; refusing here would instead mean an operator retiring a template silently
+    broke the redraw button on every draft already built from it.
+
+    A newer live version has to exist for this to prove anything — with one version in the
+    family, "recorded" and "latest" are the same row and the old behaviour would pass. So:
+    v2 makes the draft, v3 is authored, *then* v2 is retired. `edit_template` refuses a
+    retired row, which is why the retirement comes last.
+    """
+    _, _, visual = library(session)
+    v2 = edited_visual(session, visual, "v2")
+    approve(session, v2)
+    draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    edited_visual(session, v2, "v3")
+    retire(session, v2)
+
+    captured: dict = {}
+    regenerate_visual(session, draft, renderer_capturing(captured, png=b"STILLDRAWN"))
+
+    assert draft.visual_error is None
+    assert draft.visual_image == b"STILLDRAWN"
+    assert "<i>v2</i>" in captured["html"]
+    assert "<i>v3</i>" not in captured["html"]
+
+
+def test_the_renderer_is_chosen_from_the_recorded_version_too(session):
+    """Picking the renderer off the latest version is the same bug one column over.
+
+    A draft made from a v2 that declares `renderer: "html"` must redraw through the HTML
+    renderer even after v3 switches the family to `ai` — otherwise the redraw hands an HTML
+    template to the image model, or the reverse, on the strength of an edit the draft has no
+    part in.
+    """
+    _, _, visual = library(session)
+    v2 = edited_visual(session, visual, "v2")
+    approve(session, v2)
+    draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    edit_template(session, v2, body={"renderer": "ai", "prompt": "a picture of {big_number}"})
+
+    html_renderer, image_renderer = object(), object()
+
+    assert _renderer(session, draft, html_renderer, image_renderer) is html_renderer
+
+
+def test_a_recorded_version_that_is_gone_refuses_rather_than_redrawing_another(session):
+    """The one case a redraw cannot be faithful in. It must not fall back to a sibling
+    version — that is exactly the mis-attribution being fixed."""
+    _, _, visual = library(session)
+    v2 = edited_visual(session, visual, "v2")
+    approve(session, v2)
+    draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+
+    session.delete(v2)
+    session.flush()
+
+    with pytest.raises(NoUsableTemplates):
+        regenerate_visual(session, draft, renderer_capturing({}))
+
+
+def test_the_redraw_endpoint_reports_a_vanished_version_as_a_conflict(client, session):
+    """A 409 like generation's, not a 500: the library cannot serve this draft's version."""
+    _, _, visual = library(session)
+    v2 = edited_visual(session, visual, "v2")
+    approve(session, v2)
+    draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    session.delete(v2)
+    session.flush()
+
+    response = client.post(f"/drafts/{draft.id}/regenerate-visual")
+
+    assert response.status_code == 409
+    assert visual.family_id in response.json()["detail"]

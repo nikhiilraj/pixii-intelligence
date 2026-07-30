@@ -1,7 +1,14 @@
+from collections.abc import Iterator
+
 import pytest
-from sqlmodel import func, select
+from fastapi.testclient import TestClient
+from sqlmodel import Session, func, select
 
 from app.autonomous import AutonomousRunFailed, propose_topics, run_autonomous
+from app.config import settings
+from app.db import get_session
+from app.deps import get_html_renderer, get_llm
+from app.main import app
 from app.models.draft import Draft
 from app.models.post import Post
 from app.models.template import TemplateKind
@@ -210,6 +217,70 @@ def test_a_run_reports_what_it_did(session):
     assert any("2" in m for m in notifier.messages)
 
 
+class BrokenRenderer:
+    """A renderer that cannot produce the picture.
+
+    Stands in for what `run_autonomous` really meets: it passes no `visual_id`, so
+    `suggest_templates` LLM-picks from every APPROVED visual — including `stat-hero` v2, whose
+    two `image_url` slots nothing fills unless the template carries defaults. Either way the
+    failure lands inside `_draw_visual`, which records it on the draft and keeps the words.
+    """
+
+    def screenshot(self, html: str, width: int, height: int) -> bytes:
+        raise RuntimeError("rendering service unavailable")
+
+
+def test_a_draft_whose_visual_failed_is_not_reported_as_a_clean_success(session):
+    """The silence this closes: `_draw_visual` swallows the failure into `visual_error` and
+    `result.created += 1` fires anyway, so the run used to report "1 draft(s) created" with no
+    signal that the picture never came out.
+
+    The tolerance is correct and stays — a draft whose words are good is worth keeping — so it
+    is still created and still counted. What changes is that the run says so.
+    """
+    library(session)
+    add_post(session, "p1")
+    notifier = RecordingNotifier()
+
+    result = run_autonomous(session, FakeLLM(), BrokenRenderer(), cap=1, notify=notifier)
+
+    assert result.created == 1
+    assert result.failed == 0
+    assert result.visuals_failed == 1
+    assert drafts(session)[0].visual_error is not None
+    assert drafts(session)[0].hook_text == "A hook."
+
+
+def test_the_run_summary_names_the_missing_visuals(session):
+    """Every entry point reads the summary and not the drafts — the notifier, the scheduler's
+    log line, the endpoint's response. A reader who sees only the last message must still be
+    told."""
+    library(session)
+    add_post(session, "p1")
+    notifier = RecordingNotifier()
+
+    run_autonomous(session, FakeLLM(topics=THREE_TOPICS), BrokenRenderer(), cap=2, notify=notifier)
+
+    assert "no visual" in notifier.messages[-1]
+    assert "2" in notifier.messages[-1]
+    # And named per draft as well, with the reason: the count says a redraw is needed, the
+    # message says whether one could possibly help.
+    assert any("rendering service unavailable" in m for m in notifier.messages)
+
+
+def test_a_clean_run_says_nothing_about_visuals(session):
+    """The other direction. A summary that mentioned visuals unconditionally would let a
+    broken count pass, and would train whoever reads it to skip the clause."""
+    library(session)
+    add_post(session, "p1")
+    notifier = RecordingNotifier()
+
+    result = run_autonomous(session, FakeLLM(), FakeRenderer(), cap=1, notify=notifier)
+
+    assert result.visuals_failed == 0
+    assert "visual" not in notifier.messages[-1]
+
+
 def test_a_run_refuses_when_the_library_is_not_ready(session):
     add_post(session, "p1")
     notifier = RecordingNotifier()
@@ -218,3 +289,50 @@ def test_a_run_refuses_when_the_library_is_not_ready(session):
         run_autonomous(session, FakeLLM(), FakeRenderer(), cap=1, notify=notifier)
 
     assert notifier.messages
+
+
+# --- the endpoint's cap is bounded by the setting, not merely defaulted from it ------------
+
+
+@pytest.fixture
+def client(session: Session) -> Iterator[TestClient]:
+    app.dependency_overrides[get_session] = lambda: session
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+def test_the_endpoint_cannot_ask_for_more_drafts_than_the_setting_allows(
+    client, session, monkeypatch
+):
+    """`cap` arrives from a query string. It used to be used verbatim.
+
+    `settings.autonomous_max_drafts` was only the default, so `?cap=500` ran 500 topics: one
+    chat call for topics plus two per topic, ~1001 billed completions against no spend counter
+    anywhere in this app, and 500 renders inside one synchronous request. The setting is the
+    ceiling now. Asserted against the setting rather than a literal, and pinned to 1 so three
+    available topics can prove the bound rather than the topic supply doing it.
+    """
+    monkeypatch.setattr(settings, "autonomous_max_drafts", 1)
+    library(session)
+    add_post(session, "p1")
+    app.dependency_overrides[get_llm] = lambda: FakeLLM(topics=THREE_TOPICS)
+    app.dependency_overrides[get_html_renderer] = FakeRenderer
+
+    body = client.post("/drafts/autonomous-run?cap=500").json()
+
+    assert body["created"] == settings.autonomous_max_drafts
+    assert len(drafts(session)) == settings.autonomous_max_drafts
+
+
+def test_a_cap_below_the_ceiling_is_still_honoured(client, session, monkeypatch):
+    """The clamp is a ceiling, not a floor — asking for less must still mean less."""
+    monkeypatch.setattr(settings, "autonomous_max_drafts", 3)
+    library(session)
+    add_post(session, "p1")
+    app.dependency_overrides[get_llm] = lambda: FakeLLM(topics=THREE_TOPICS)
+    app.dependency_overrides[get_html_renderer] = FakeRenderer
+
+    body = client.post("/drafts/autonomous-run?cap=1").json()
+
+    assert body["created"] == 1
+    assert len(drafts(session)) == 1

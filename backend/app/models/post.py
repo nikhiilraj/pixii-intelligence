@@ -1,9 +1,22 @@
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import Column
+from sqlalchemy import Column, Enum
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
+
+
+class Verdict(StrEnum):
+    """A human's ruling on a published post.
+
+    The only form of learning that is honest at n=1. Engagement spans 12.7x across this
+    corpus at ~3 samples per template, so no aggregate can rank anything yet — a verdict
+    claims judgement, not statistics, and must never be read as a performance measure.
+    """
+
+    WORKED = "worked"
+    DIDNT = "didnt"
+    MIXED = "mixed"
 
 
 class PostSource(StrEnum):
@@ -77,3 +90,41 @@ class Post(SQLModel, table=True):
     engaged_actions: int = Field(default=0, index=True)
 
     metrics_updated_at: datetime | None = None
+
+    # A human's ruling on how the post actually landed, and why. NULL is the queue: a
+    # published post nobody has judged yet.
+    #
+    # A non-native Enum over a plain VARCHAR, deliberately, and each half of that matters:
+    #   - not a Postgres ENUM like `source` above, so a fourth verdict is an edit to
+    #     `Verdict` rather than an ALTER TYPE migration (the migration says the same);
+    #   - not a bare String, because Verdict is a StrEnum: `"worked" == Verdict.WORKED` is
+    #     True but `"worked" is Verdict.WORKED` is False, so a column that read back as a
+    #     bare str would hand every caller a value that fails an identity check. This type
+    #     coerces on read, so a row always carries a real `Verdict`. Same hazard, same
+    #     remedy as the cohort boundary at `extraction.py:196`.
+    # `values_callable` persists the value (`worked`), not the member name (`WORKED`),
+    # matching the migration's String column and what the API speaks.
+    verdict: Verdict | None = Field(
+        default=None,
+        sa_column=Column(
+            # VARCHAR(6) is DDL only, and the migration already made the real column an
+            # unbounded String — a longer fourth verdict needs no schema change.
+            Enum(
+                Verdict,
+                native_enum=False,
+                create_constraint=False,
+                values_callable=lambda enum: [member.value for member in enum],
+            ),
+            nullable=True,
+        ),
+    )
+
+    # Why the human ruled that way. Empty is normal — a ruling without a reason is still a
+    # ruling. The 500-character cap lives at the route; this column is unbounded.
+    verdict_note: str = ""
+
+    # When the ruling was recorded. Moves when a verdict is re-set, because the useful
+    # question is when someone last judged this post, not when they first did.
+    # ponytail: no verdict history table — one ruling per post is the real cardinality, and
+    # a history has no reader until two people use this app.
+    verdict_at: datetime | None = None

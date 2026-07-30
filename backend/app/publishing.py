@@ -22,7 +22,7 @@ def lineage_metadata(draft: Draft) -> dict:
     Written into Zernio as well as our own database so attribution survives the loss of
     our records and is visible to anyone inspecting the post in Zernio itself.
     """
-    metadata: dict[str, str | int] = {
+    metadata: dict[str, str | int | dict[str, str]] = {
         "source": SOURCE_TAG,
         "draft_id": draft.id or 0,
         "mode": draft.mode,
@@ -34,6 +34,17 @@ def lineage_metadata(draft: Draft) -> dict:
     if draft.visual_family:
         metadata["visual_family"] = draft.visual_family
         metadata["visual_version"] = draft.visual_version or 0
+    if draft.asset_values:
+        # Which asset filled which image slot, for the same reason the template versions are
+        # here: the picture Zernio holds is a flattened PNG, and without this nothing outside
+        # our database records that it was built from asset 7 rather than asset 9. A nested
+        # object because `metadata` is an arbitrary JSON object Zernio stores verbatim, so
+        # flattening it into `asset_left_image_url` keys would invent a naming scheme to
+        # answer a question the slot names already answer.
+        #
+        # Only when non-empty: a text-only visual would otherwise carry an empty object into
+        # every post, which reads as "assets were considered" rather than "there are none".
+        metadata["asset_values"] = dict(draft.asset_values)
     return metadata
 
 

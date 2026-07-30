@@ -1,4 +1,5 @@
 import base64
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -28,10 +29,22 @@ class IdeaIn(BaseModel):
     hook_id: int | None = None
     structure_id: int | None = None
     visual_id: int | None = None
+    # Slot name -> asset id, for the visual's `image_url` slots. Ignored for any other slot
+    # (`generation.chosen_assets`), so this is not a second route to writing prose into a
+    # template. Absent slots fall back to the slot's own `default_asset_id`.
+    asset_values: dict[str, str] = {}
 
 
 class DraftOut(BaseModel):
-    """A draft plus the lineage, spelled out so review shows what produced it."""
+    """A draft plus the lineage, spelled out so review shows what produced it.
+
+    **Hand-mapped, and every field has to be added in two places** — here and in `_out`.
+    Nothing derives this from the model, so a new `Draft` column arrives with a green
+    migration, a green query and a green test while the frontend sees nothing at all.
+    `asset_values` (US-009), `went_live_at` (US-011) and now `pushed_at`/`created_at`
+    (US-013) each had to be added by hand for that reason;
+    `test_a_new_draft_column_reaches_the_api` is what keeps the next one from being missed.
+    """
 
     id: int
     idea: str
@@ -40,9 +53,18 @@ class DraftOut(BaseModel):
     body_text: str
     full_text: str
     visual_values: dict
+    asset_values: dict
     visual_error: str | None
     visual_png: str | None
     zernio_post_id: str | None
+    # When Zernio accepted the push. Together with `created_at` this is what gives the Inbox
+    # an age per queue: "built 6 days ago and never pushed" is the thing a count cannot say,
+    # and an age is the only signal that distinguishes a queue from a stalled one.
+    pushed_at: datetime | None
+    # Null means pushed but not yet live. With `zernio_post_id` this is what lets the Inbox
+    # tell "awaiting Monte" from "published" without a status column.
+    went_live_at: datetime | None
+    created_at: datetime
     lineage: dict
 
 
@@ -78,11 +100,15 @@ def _out(session: SessionDep, draft: Draft) -> DraftOut:
         body_text=draft.body_text,
         full_text=draft.full_text,
         visual_values=draft.visual_values,
+        asset_values=draft.asset_values,
         visual_error=draft.visual_error,
         visual_png=(
             base64.b64encode(draft.visual_image).decode() if draft.visual_image else None
         ),
         zernio_post_id=draft.zernio_post_id,
+        pushed_at=draft.pushed_at,
+        went_live_at=draft.went_live_at,
+        created_at=draft.created_at,
         lineage=_lineage(session, draft),
     )
 
@@ -95,10 +121,18 @@ def _load(session: SessionDep, draft_id: int) -> Draft:
 
 
 def _renderer(session: SessionDep, draft: Draft, html_renderer, image_renderer):
-    """Whichever renderer the draft's visual template declares."""
+    """Whichever renderer the draft's own visual version declares.
+
+    `(family_id, version)`, not the newest version of the family: the redraw renders the
+    version the draft's lineage names, so reading `renderer` off a newer row would hand an
+    HTML template to the image renderer — or the reverse — as soon as one edit changes it.
+    Still tolerant of a missing row, because `regenerate_visual` is what refuses that case.
+    """
     template = session.exec(
-        select(Template).where(Template.family_id == draft.visual_family)
-        .order_by(desc(col(Template.version)))
+        select(Template).where(
+            Template.family_id == draft.visual_family,
+            Template.version == draft.visual_version,
+        )
     ).first()
     declared = template.body.get("renderer") if template else "html"
     return image_renderer if declared == "ai" else html_renderer
@@ -154,6 +188,7 @@ def create_draft(
             hook_id=payload.hook_id,
             structure_id=payload.structure_id,
             visual_id=payload.visual_id,
+            asset_values=payload.asset_values,
         )
     except NoUsableTemplates as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -185,9 +220,17 @@ def redraw(
     image_renderer: ImageRendererDep,
     draft_id: int,
 ) -> DraftOut:
-    """Redraw the image from the values already written. The words are untouched."""
+    """Redraw the image from the values already written. The words are untouched.
+
+    Renders the version the draft was generated from, even a retired one — see
+    `generation.generated_from`. A recorded version that is no longer in the table is a 409,
+    not a 500: it is the same "the library cannot serve this" conflict as generation's.
+    """
     draft = _load(session, draft_id)
-    regenerate_visual(session, draft, _renderer(session, draft, html_renderer, image_renderer))
+    try:
+        regenerate_visual(session, draft, _renderer(session, draft, html_renderer, image_renderer))
+    except NoUsableTemplates as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     session.commit()
     session.refresh(draft)
     return _out(session, draft)
@@ -217,16 +260,36 @@ def autonomous_run(
     html_renderer: HtmlRendererDep,
     cap: int | None = None,
 ) -> dict:
-    """Run unattended generation now, capped. Produces drafts here; pushes nothing."""
+    """Run unattended generation now, capped. Produces drafts here; pushes nothing.
+
+    `settings.autonomous_max_drafts` is the ceiling, not merely the default: a `cap` above it
+    is clamped down to it. `run_autonomous` promises its cap is hard, and this is the only
+    entry point where the number arrives from a caller — unclamped, `?cap=500` bought 1001
+    billed chat completions and 500 renders inside one request, 250x the configured limit,
+    against no spend counter anywhere in this app.
+    """
     try:
         result = run_autonomous(
             session,
             llm,
             html_renderer,
-            cap=cap if cap is not None else settings.autonomous_max_drafts,
+            # ponytail: clamped silently rather than rejected with a 422. The ceiling is
+            # configuration, not part of this endpoint's contract, so "you asked for more
+            # than is allowed" has no useful answer for the caller beyond the run it gets.
+            cap=min(cap, settings.autonomous_max_drafts)
+            if cap is not None
+            else settings.autonomous_max_drafts,
             notify=notify,
         )
     except AutonomousRunFailed as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     session.commit()
-    return {"created": result.created, "failed": result.failed, "topics": result.topics}
+    return {
+        "created": result.created,
+        "failed": result.failed,
+        # A draft that was created and has no picture. Reported beside `created` rather than
+        # left to whoever opens the queue: this endpoint's answer is the only thing a caller
+        # sees, and "3 created" with the images missing is the failure US-009 came to close.
+        "visuals_failed": result.visuals_failed,
+        "topics": result.topics,
+    }
