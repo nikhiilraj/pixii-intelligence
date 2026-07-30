@@ -3,8 +3,9 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import InboxPage from "@/app/page";
 import type { Inbox, InboxItem } from "@/lib/api";
+
+import InboxPage from "./page";
 
 /* The Inbox is the page the error-vs-empty bug class costs the most: four queues whose entire
    job is to say "nothing is waiting", rendered from a request that can fail. A failed /inbox
