@@ -1,6 +1,6 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import date, datetime, time
+from datetime import UTC, date, datetime, time
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,7 +25,7 @@ from app.deps import SessionDep
 from app.metrics import sync_metrics, template_performance
 from app.models.draft import Draft
 from app.models.metric import MetricSnapshot
-from app.models.post import Post, PostSource
+from app.models.post import Post, PostSource, Verdict
 from app.scheduler import shutdown as stop_scheduler
 from app.scheduler import start as start_scheduler
 from app.zernio import ZernioClient, ZernioResponseError
@@ -252,6 +252,52 @@ def set_excluded(post_id: int, payload: ExcludeIn, session: SessionDep) -> Post:
     if post is None:
         raise HTTPException(status_code=404, detail=f"no post {post_id}")
     post.excluded_from_extraction = payload.excluded
+    session.add(post)
+    session.commit()
+    session.refresh(post)
+    return post
+
+
+# A verdict note is a reason, not an essay. Capped at the route because the column is an
+# unbounded String — nothing below this line will refuse a 10,000-character note.
+VERDICT_NOTE_MAX = 500
+
+
+class VerdictIn(BaseModel):
+    # Typed as the enum, so an unknown value is rejected with a 422 naming the three
+    # allowed values rather than being coerced into one of them. What reaches the row is
+    # always a `Verdict` member, never a bare string.
+    verdict: Verdict
+    note: str = ""
+
+
+@app.post("/posts/{post_id}/verdict")
+def set_verdict(post_id: int, payload: VerdictIn, session: SessionDep) -> Post:
+    """Record a human's ruling on a post: worked, didnt, or mixed, plus why.
+
+    The only form of learning that is honest at n=1 — a verdict claims judgement, not
+    statistics. Re-settable, because a human changes their mind once they have seen how a
+    post aged; the later ruling replaces the earlier one and `verdict_at` moves with it.
+
+    ponytail: no verdict history and no audit log. One ruling per post is the real
+    cardinality, and a history has no reader until two people use this app.
+    """
+    if len(payload.note) > VERDICT_NOTE_MAX:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"verdict note is {len(payload.note)} characters; "
+                f"the cap is {VERDICT_NOTE_MAX}"
+            ),
+        )
+
+    post = session.get(Post, post_id)
+    if post is None:
+        raise HTTPException(status_code=404, detail=f"no post {post_id}")
+
+    post.verdict = payload.verdict
+    post.verdict_note = payload.note
+    post.verdict_at = datetime.now(UTC)
     session.add(post)
     session.commit()
     session.refresh(post)
