@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlmodel import col, desc, select
 
-from app.autonomous import AutonomousRunFailed, run_autonomous
+from app.autonomous import AutonomousRunFailed, SpendMeter, run_autonomous
 from app.config import settings
 from app.deps import HtmlRendererDep, ImageRendererDep, LLMDep, SessionDep, ZernioDep
 from app.generation import (
@@ -267,12 +267,24 @@ def autonomous_run(
     entry point where the number arrives from a caller — unclamped, `?cap=500` bought 1001
     billed chat completions and 500 renders inside one request, 250x the configured limit,
     against no spend counter anywhere in this app.
+
+    **`settings.enable_autonomous` deliberately does not gate this route, and that is not an
+    oversight.** That flag has exactly one reader — `scheduler.py:76`, where it decides
+    whether the unattended job is registered at all — and what it switches off is generation
+    happening *without anyone asking*. This route is a person asking. Gating a deliberate
+    click behind the scheduler's switch would put the operator's own button behind a setting
+    that is `False` by default and describes a different thing; the control that matters here
+    is the cap, which is enforced above.
     """
+    # The meter is created here rather than inside `run_autonomous` so the count survives the
+    # raise: `AutonomousRunFailed` leaves the run with no result to read, and a failed run is
+    # exactly the one whose spend the caller cannot otherwise see.
+    meter = SpendMeter()
     try:
         result = run_autonomous(
             session,
-            llm,
-            html_renderer,
+            meter.watch(llm),
+            meter.watch(html_renderer),
             # ponytail: clamped silently rather than rejected with a 422. The ceiling is
             # configuration, not part of this endpoint's contract, so "you asked for more
             # than is allowed" has no useful answer for the caller beyond the run it gets.
@@ -282,7 +294,12 @@ def autonomous_run(
             notify=notify,
         )
     except AutonomousRunFailed as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        # Same key names as the success body, so a caller reads the spend one way on both
+        # paths. Note the asymmetry this exposes and does not create: the drafts written
+        # before the raise roll back with the request, the money does not.
+        raise HTTPException(
+            status_code=502, detail={"error": str(exc), **meter.spend()}
+        ) from exc
     session.commit()
     return {
         "created": result.created,
@@ -292,4 +309,7 @@ def autonomous_run(
         # sees, and "3 created" with the images missing is the failure US-009 came to close.
         "visuals_failed": result.visuals_failed,
         "topics": result.topics,
+        # Observed, never derived from `cap` or `topics`: a topic that fails still bought its
+        # completion, and a render that raised still bought its render.
+        **meter.spend(),
     }
