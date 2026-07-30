@@ -131,6 +131,79 @@ def test_an_http_failure_is_raised_rather_than_returning_an_empty_image():
         render_visual(visual(), VALUES, renderer)
 
 
+RATE_LIMITED = {"success": False, "errors": [{"code": 2001, "message": "Rate limit exceeded"}]}
+
+
+def renderer_over(statuses: list[int], sleeps: list[float]) -> tuple[CloudflareRenderer, list]:
+    """A renderer that answers `statuses` in order, recording every sleep instead of taking it.
+
+    Asserting the recorded delays rather than elapsed time is what keeps this suite at ~3
+    seconds: no test here ever really waits, and the retry policy is pinned as data.
+    """
+    attempts: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(request)
+        status = statuses[min(len(attempts) - 1, len(statuses) - 1)]
+        if status == 429:
+            return httpx.Response(429, json=RATE_LIMITED)
+        return httpx.Response(status, content=b"PNG" if status < 400 else b"nope")
+
+    renderer = CloudflareRenderer(
+        account_id="a",
+        token="t",
+        transport=httpx.MockTransport(handler),
+        sleep=sleeps.append,
+    )
+    return renderer, attempts
+
+
+def test_a_rate_limited_render_backs_off_and_then_succeeds():
+    """429 code 2001 is a cadence problem, not a payload problem — waiting fixes it."""
+    sleeps: list[float] = []
+    renderer, attempts = renderer_over([429, 429, 200], sleeps)
+
+    assert render_visual(visual(), VALUES, renderer) == b"PNG"
+    assert len(attempts) == 3
+    assert sleeps == [5.0, 10.0]
+
+
+def test_a_persistent_rate_limit_raises_rather_than_retrying_forever():
+    """Bounded attempts and bounded total wait: 4 tries, 35 seconds, then the error surfaces."""
+    sleeps: list[float] = []
+    renderer, attempts = renderer_over([429], sleeps)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        render_visual(visual(), VALUES, renderer)
+
+    assert len(attempts) == 4
+    assert sleeps == [5.0, 10.0, 20.0]
+    assert sum(sleeps) == 35.0
+
+
+def test_a_server_error_is_not_retried():
+    """Only 429 means 'come back later'. A 500 is real and must not be waited out."""
+    sleeps: list[float] = []
+    renderer, attempts = renderer_over([500], sleeps)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        render_visual(visual(), VALUES, renderer)
+
+    assert len(attempts) == 1
+    assert sleeps == []
+
+
+def test_a_client_error_is_not_retried():
+    sleeps: list[float] = []
+    renderer, attempts = renderer_over([403], sleeps)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        render_visual(visual(), VALUES, renderer)
+
+    assert len(attempts) == 1
+    assert sleeps == []
+
+
 def test_fill_substitutes_only_named_slots_and_leaves_css_braces_alone():
     """CSS in a template is full of braces — they must survive substitution."""
     template = "<style>.card { color: red; }</style><b>{headline}</b>"

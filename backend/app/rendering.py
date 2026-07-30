@@ -2,6 +2,8 @@ import base64
 import html as html_escape
 import io
 import re
+import time
+from collections.abc import Callable
 from typing import Protocol
 
 import httpx
@@ -72,6 +74,15 @@ def fill(template_html: str, values: dict[str, str], *, escape: bool = True) -> 
     return filled
 
 
+# Free-tier Browser Rendering limits by requests-per-minute, not bytes, and answers
+# 429 {"errors":[{"code":2001,"message":"Rate limit exceeded"}]} — which reads exactly like a
+# payload rejection and already caused one phantom size-ceiling diagnosis. A per-minute window
+# cannot be cleared by sub-second retries, so the delays are tens of seconds: 5 + 10 + 20 = 35s
+# of waiting across 4 attempts. That is long enough to outlast the window and short enough that
+# a render never sits behind the retry loop longer than the 120s request timeout it already has.
+_RATE_LIMIT_DELAYS = (5.0, 10.0, 20.0)
+
+
 class CloudflareRenderer:
     """HTML to PNG via Cloudflare Browser Rendering. Verified live 2026-07-29."""
 
@@ -80,9 +91,11 @@ class CloudflareRenderer:
         account_id: str | None = None,
         token: str | None = None,
         transport: httpx.BaseTransport | None = None,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._account_id = account_id or settings.cloudflare_account_id
         bearer = token or settings.cloudflare_browser_rendering_token
+        self._sleep = sleep
         self._client = httpx.Client(
             base_url="https://api.cloudflare.com",
             headers={"Authorization": f"Bearer {bearer}"},
@@ -91,14 +104,30 @@ class CloudflareRenderer:
         )
 
     def screenshot(self, html: str, width: int, height: int) -> bytes:
-        response = self._client.post(
-            f"/client/v4/accounts/{self._account_id}/browser-rendering/screenshot",
-            json={
-                "html": html,
-                "viewport": {"width": width, "height": height},
-                "screenshotOptions": {"type": "png"},
-            },
-        )
+        """Render HTML to PNG bytes, backing off if the account is rate-limited.
+
+        The 429 is absorbed here so no caller ever sees it — a loop over templates would
+        otherwise misreport a cadence problem as a size or format bug. Every other status is
+        the API telling us something real, so it is raised on the first attempt.
+        """
+        for delay in (*_RATE_LIMIT_DELAYS, None):
+            response = self._client.post(
+                f"/client/v4/accounts/{self._account_id}/browser-rendering/screenshot",
+                json={
+                    "html": html,
+                    "viewport": {"width": width, "height": height},
+                    "screenshotOptions": {"type": "png"},
+                },
+            )
+            if response.status_code != 429 or delay is None:
+                break
+            # ponytail: fixed delays, no jitter and no Retry-After. One process renders one
+            # visual at a time, so there is no thundering herd to spread out, and the live
+            # probe never saw a Retry-After header to honour. Read it here if one shows up.
+            self._sleep(delay)
+
+        # Exhausted retries fall through to the same error every other status takes, so the
+        # exception type above screenshot() is unchanged.
         response.raise_for_status()
         return response.content
 
