@@ -1164,3 +1164,26 @@ withholds the empty-state copy, AND a genuine empty success still shows the empt
 One direction alone would let "always render an error" pass.
 
 Verified: ruff, mypy, eslint, tsc green; 258 backend tests; 9 frontend tests; build clean.
+
+### US-004 — Behavioural primitives via Radix, and toasts (done 2026-07-30) — C-thin phase complete
+
+Vendored `components/ui/{select,dialog,tabs,tooltip}.tsx` over `@radix-ui/react-{select,dialog,
+tabs,tooltip}`, plus `sonner` for toasts. Explorer's four filter controls (platform, family,
+since, sort) moved onto Select; the four copies of the local red-`<p>` error string are replaced
+by toasts carrying the API's `detail` from US-003.
+
+**The Radix Select sentinel trap — pinned by test.** Radix Select cannot hold an empty-string
+value, so "all" options need a sentinel. If that sentinel leaks into the query string, filtering
+breaks **silently while everything still renders**. `Explorer.test.tsx` asserts the sentinel
+never reaches the query, that each filter uses the param name the API expects, and that unset
+filters are omitted rather than sent empty. Any later slice adding a Select needs the same care.
+
+Frontend tests 9 -> 18 across 3 files. Per the testing policy, none of them assert Radix's
+keyboard behaviour — that is upstream-tested and jsdom only approximates focus. Keyboard was
+exercised by hand in a real browser instead.
+
+Verified: ruff, mypy, eslint, tsc green; 258 backend tests; 18 frontend tests; build clean with
+no react-compiler warnings.
+
+**Phase state: C-thin (US-001..004) done — tokens, primitives, honest API layer, Radix.**
+Tracks A and B now build on a real component layer rather than reskinning later.

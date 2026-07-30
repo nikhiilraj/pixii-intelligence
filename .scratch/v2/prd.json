@@ -56,7 +56,7 @@
       "pnpm tsc && pnpm lint && pnpm build && pnpm test green"
     ],
     "priority": 4,
-    "passes": false
+    "passes": true
   },
   {
     "id": "US-005",
