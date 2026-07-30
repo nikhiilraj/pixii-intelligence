@@ -66,8 +66,10 @@ line here cost someone an hour.
   assertion and CI runs pytest. Tests assert against a fabricated canary, never the real key —
   comparing against the live value leaks it in the failure output, which is the exact leak the
   test exists to prevent.
-- **`make check` runs backend pytest only.** Frontend vitest is separate. "make check green" does
-  not cover a frontend test; run vitest and report it separately.
+- **`make check` runs BOTH suites as of this run.** It ran backend pytest only for the whole of V1
+  and V2, so every frontend test written in those runs sat outside the gate — "make check green"
+  was no evidence at all about the frontend. Fixed in the Makefile 2026-07-31. There is still no
+  `build` target; do not run `next build`, it writes to the `.next` the dev server is serving.
 - **Pyright import errors in this repo are spurious** — it resolves against system Python, not
   `backend/.venv`. `mypy` inside `make check` is the real check.
 
