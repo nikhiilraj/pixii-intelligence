@@ -1294,3 +1294,31 @@ Delete really removes the file from disk
 confirm Dialog naming the consequence. Unknown id is a 404.
 
 Backend 295 -> **304**. Frontend 18 -> **32** across 4 files.
+
+### US-009 — Asset picker in Studio + visible unattended failure (done 2026-07-30) — TRACK A PAYOFF
+
+`Draft.asset_values` JSONB (migration `f41b8a1ac8ca`), picker in Studio for `image_url` slots,
+`default_asset_id` honoured so a template can complete unattended, and `asset_values` threaded
+into `publishing.lineage_metadata` so asset lineage survives outside our database.
+
+`WRITABLE_SLOT_TYPES` is **unchanged** — the model still never writes an image slot.
+`DraftOut` exposes `asset_values` at both the model (`api_drafts.py:34`) and the builder (`:93`);
+without the second, the column would have been invisible to the UI with everything green.
+`pushed_at`/`created_at` are still absent there — noted in a comment, and US-013 needs them.
+
+**Unattended failure is no longer silent.** `RunResult.visuals_failed` counts drafts created
+without a picture, kept **separate** from `failed` (a topic that produced no draft at all) so
+`created + failed == topics` stays an invariant a reader can trust. The swallow itself is
+unchanged on purpose: a draft with good words and a failed image is still worth keeping — the
+bug was the silence, not the tolerance.
+
+**PROVEN LIVE, not just unit-tested.** `stat-hero` v2 (id 1101) is the only template with
+`image_url` slots and had **zero** drafts ever. Probed against real Cloudflare: two asset rows
+created, resolved to base64 data URIs (5134 and 4670 chars), rendered to a **31KB 1080x1350 PNG
+containing both real images** — not empty boxes. Probe rows and files cleaned up, 0 left behind.
+
+**Template-design note for Nikhil (pre-existing, not V2's doing):** stat-hero v2 renders
+`big_number` in a near-background cream tone, so the hero stat reads as almost invisible. Now
+that this template can actually complete, that is worth a look.
+
+Backend 304 -> **331**. Frontend 32 -> **45**.
