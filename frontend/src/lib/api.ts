@@ -44,6 +44,19 @@ export type Post = {
   verdict_at: string | null;
 };
 
+/** What `GET /posts/{id}` answers with — the raw row, including the one field only the detail
+ *  page reads.
+ *
+ *  `late_post_id` is Zernio's *other* identifier for the same post and the only one a draft
+ *  carries: `Draft.zernio_post_id == Post.late_post_id` is `metrics.draft_for_post`'s join,
+ *  verified 13/13 against the live account. `zernio_id` is a different namespace and matching
+ *  on it finds nothing. Null on any post this app never pushed, which is 63 of the 107 here.
+ *
+ *  It sits beside `Post` rather than inside it because the corpus list has no use for it and
+ *  every `Post` literal in the app would have to carry it; fold it in when a second surface
+ *  needs the join. Same intersection idiom the detail page already used for its media path. */
+export type PostRow = Post & { late_post_id: string | null };
+
 export type TemplateKind = "hook" | "structure" | "visual";
 // The body of work a template was read from — `Cohort` in backend/app/extraction.py.
 // Sent as the plain string value; FastAPI coerces it into the StrEnum.
@@ -108,6 +121,31 @@ export type Draft = {
   visual_png: string | null;
   zernio_post_id: string | null;
   lineage: { hook: LineageEntry; structure: LineageEntry; visual: LineageEntry };
+};
+
+/** `MetricSnapshot` in backend/app/models/metric.py, as `GET /posts/{id}/history` returns it —
+ *  one reading of one post's numbers, oldest first.
+ *
+ *  Readings accumulate rather than overwrite, so this is the only place the *shape* of a post's
+ *  engagement lives; the Post row keeps the latest values only. Note what the numbers are not:
+ *  `impressions` is `0` on every scraped row because Zernio never measured it there, not
+ *  because nobody saw the post, so a zero here is an absence and must not be plotted as a
+ *  measurement. `captured_at` is naive — every datetime column in this app is `timestamp
+ *  without time zone`. */
+export type MetricSnapshot = {
+  id: number;
+  post_id: number;
+  captured_at: string;
+  impressions: number;
+  reach: number;
+  likes: number;
+  comments: number;
+  shares: number;
+  saves: number;
+  clicks: number;
+  views: number;
+  engagement_rate: number;
+  engaged_actions: number;
 };
 
 /* `InboxItem` / `InboxQueue` / `Inbox` in backend/app/main.py:309-349.
