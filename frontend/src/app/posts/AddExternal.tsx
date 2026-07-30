@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { postJson } from "@/lib/api";
@@ -12,7 +13,6 @@ export default function AddExternal() {
   const [content, setContent] = useState("");
   const [author, setAuthor] = useState("");
   const [engaged, setEngaged] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const field =
@@ -21,7 +21,6 @@ export default function AddExternal() {
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setBusy(true);
-    setError(null);
 
     const result = await postJson<unknown>("/corpus/manual", {
       content,
@@ -31,7 +30,8 @@ export default function AddExternal() {
     setBusy(false);
 
     if (!result.ok) {
-      setError(result.message);
+      // The form is still filled in and still open, so there is something to retry.
+      toast.error("Could not add the post", { description: result.message });
       return;
     }
 
@@ -79,7 +79,6 @@ export default function AddExternal() {
           className={field}
         />
       </div>
-      {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
       <div className="flex gap-3">
         <Button type="submit" disabled={busy || !content.trim()}>
           {busy ? "Adding…" : "Add to corpus"}

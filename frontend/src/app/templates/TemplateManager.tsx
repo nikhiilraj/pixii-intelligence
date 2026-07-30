@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { postBlob, postJson, type Cohort, type Template, type TemplateKind } from "@/lib/api";
@@ -87,13 +88,11 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
   const [name, setName] = useState("");
   const [body, setBody] = useState(BLANK_BODY.hook);
   const [editing, setEditing] = useState<Template | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<{ id: number; url: string } | null>(null);
 
   async function renderPreview(template: Template) {
     setBusy(true);
-    setError(null);
 
     // Slot examples are what the template author wrote down as representative, so
     // they are the honest default for a preview.
@@ -107,18 +106,19 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
     setBusy(false);
 
     if (result.ok) setPreview({ id: template.id, url: URL.createObjectURL(result.data) });
-    else setError(result.message);
+    else toast.error("Preview failed", { description: result.message });
   }
 
   async function send(path: string, body?: unknown, method: "POST" | "PUT" = "POST") {
     setBusy(true);
-    setError(null);
 
     const result = await postJson(path, body, method);
     setBusy(false);
 
     if (!result.ok) {
-      setError(result.message);
+      // Message only, no title — `send` covers seven mutations and a URL path is not a title
+      // to show a reader. Same reasoning as Studio's `call`.
+      toast.error(result.message);
       return false;
     }
     router.refresh();
@@ -129,7 +129,10 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
     try {
       return JSON.parse(body);
     } catch {
-      setError("Body is not valid JSON.");
+      // The only client-side failure here, and it reported into the same shared paragraph as
+      // the API failures rather than beside the textarea — so a toast loses no locality it
+      // had. It is not an API detail and is deliberately outside the toast test.
+      toast.error("Body is not valid JSON.");
       return null;
     }
   }
@@ -325,8 +328,6 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
           spellCheck={false}
           className={`${field} font-mono text-xs`}
         />
-
-        {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
 
         <div className="flex gap-3">
           <Button type="submit" disabled={busy}>

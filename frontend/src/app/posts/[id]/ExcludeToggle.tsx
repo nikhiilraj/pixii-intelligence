@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { postJson } from "@/lib/api";
@@ -15,11 +16,9 @@ export default function ExcludeToggle({
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   async function toggle() {
     setBusy(true);
-    setError(null);
 
     // This was the one call site that threw away the body entirely — `failed (404)` where
     // the API had written "no post 999". The helper carries the message, so it gets shown.
@@ -27,7 +26,7 @@ export default function ExcludeToggle({
     setBusy(false);
 
     if (result.ok) router.refresh();
-    else setError(result.message);
+    else toast.error("Could not change the extraction setting", { description: result.message });
   }
 
   return (
@@ -40,7 +39,6 @@ export default function ExcludeToggle({
       <Button variant="outline" onClick={toggle} disabled={busy} className="mt-3">
         {busy ? "Saving…" : excluded ? "Let back into extraction" : "Hold out of extraction"}
       </Button>
-      {error && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>}
     </div>
   );
 }
