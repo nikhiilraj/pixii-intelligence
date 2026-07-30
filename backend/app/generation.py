@@ -15,6 +15,12 @@ from app.templates import usable_templates
 # voice, few enough that the model imitates rather than collages.
 EXEMPLAR_LIMIT = 3
 
+# How many human rulings are carried into a prompt, most recently judged first.
+# ponytail: a cap, not a summarisation pass. Ten notes is a paragraph the model can hold;
+# beyond that the honest upgrade is a human editing a standing "what we learned" note, not
+# this app compressing rulings it cannot weigh.
+LESSON_LIMIT = 10
+
 # Slots the model may write prose into. Anything else — an image URL, say — must come from
 # a real asset: a sentence in an <img src> renders as an empty box and reports success,
 # which is worse than failing.
@@ -193,8 +199,53 @@ def _exemplars(session: Session, hook: Template) -> list[Post]:
     return list(session.exec(statement).all())
 
 
+def verdict_lessons(session: Session) -> list[str]:
+    """What a human ruled about individual published posts, as lines for the prompt.
+
+    This is the whole of V2's learning, and its shape is set by what the data can carry.
+    Engagement spans 12.7x across this corpus at ~3 samples per template and no post here
+    records lineage attribution, so no aggregate over verdicts could rank anything. Hence:
+    no averages, no counts, no win rates — each line is one ruling on one post, and the
+    prompt says so.
+
+    **A verdict with no note is skipped**, and that is load-bearing rather than tidy. The
+    lesson deliberately carries only the human's own words, never the post's text, so a
+    note-less ruling would reduce to the bare word `worked` attached to nothing the model
+    can see — which is not advice, it is one tick in a tally, and a tally is precisely the
+    statistics framing this must not introduce. The only way to make a note-less verdict
+    mean anything would be to send the post's content, which is the voice-leak path
+    `_exemplars` exists to keep closed. So the note is the lesson.
+
+    Any post with a note qualifies, Monte's or a creator's, and that does not leak voice:
+    a note is a human writing about a post, not a post handed over as a voice to imitate.
+    `_exemplars` remains the only path where post content reaches the model.
+    """
+    statement = (
+        select(Post)
+        .where(col(Post.verdict).is_not(None))
+        .where(col(Post.verdict_note) != "")
+        # Most recently judged first, so the cap drops the oldest thinking rather than an
+        # arbitrary row. `id` only breaks ties deterministically.
+        .order_by(col(Post.verdict_at).desc(), col(Post.id).desc())
+        .limit(LESSON_LIMIT)
+    )
+    lessons = []
+    for post in session.exec(statement).all():
+        note = post.verdict_note.strip()
+        if note and post.verdict is not None:
+            lessons.append(f'{post.verdict.value} — "{note}"')
+    return lessons
+
+
+# `lessons` takes no default on purpose. Two functions build this prompt, and a default
+# would let either of them quietly stop passing them with nothing failing.
 def _write_prompt(
-    idea: str, hook: Template, structure: Template, visual: Template, exemplars: list[Post]
+    idea: str,
+    hook: Template,
+    structure: Template,
+    visual: Template,
+    exemplars: list[Post],
+    lessons: list[str],
 ) -> str:
     sections = "\n".join(
         f"{index}. {section.get('name', '')}: {section.get('guidance', '')}"
@@ -209,6 +260,18 @@ def _write_prompt(
         f"\nStructure ({structure.body.get('post_type', '')}):\n{sections}",
         f"\nVisual slots to fill: {slots}",
     ]
+    # Before the exemplars, not after: the exemplar block ends with raw post bodies under a
+    # `---` rule, so anything appended below it reads as commentary on the last post shown.
+    # Nothing is appended at all when there are no lessons, which keeps a prompt written
+    # before any verdict existed byte-identical to one written after.
+    if lessons:
+        parts.append(
+            "\nHuman review notes on individual published posts. Each line is one person's"
+            " judgement about one post, written after it went out — not a measurement, not a"
+            " count, and not evidence about the pattern in general. Weigh each as advice;"
+            " they say nothing about how one template compares to another:"
+        )
+        parts.extend(f"- {lesson}" for lesson in lessons)
     if exemplars:
         parts.append("\nExemplar posts — match this voice, not this content:")
         for post in exemplars:
@@ -290,7 +353,9 @@ def generate_draft(
 
     written = llm.complete_json(
         _WRITE_SYSTEM,
-        _write_prompt(idea, hook, structure, visual, _exemplars(session, hook)),
+        _write_prompt(
+            idea, hook, structure, visual, _exemplars(session, hook), verdict_lessons(session)
+        ),
     )
 
     draft = Draft(
@@ -335,7 +400,12 @@ def regenerate_text(session: Session, llm: LLM, draft: Draft) -> Draft:
 
     written = llm.complete_json(
         _WRITE_SYSTEM,
-        _write_prompt(draft.idea, hook, structure, visual, _exemplars(session, hook)),
+        # Lessons are fetched here too, not only in `generate_draft`. Passing them at one
+        # call site would make every rewrite silently drop them — the draft would improve
+        # once and un-improve the moment anyone pressed regenerate.
+        _write_prompt(
+            draft.idea, hook, structure, visual, _exemplars(session, hook), verdict_lessons(session)
+        ),
     )
     draft.hook_text = str(written.get("hook") or "").strip()
     draft.body_text = str(written.get("body") or "").strip()

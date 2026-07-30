@@ -1,7 +1,10 @@
+from datetime import UTC, datetime
+
 import pytest
 
 from app.config import settings
 from app.generation import (
+    LESSON_LIMIT,
     NoUsableTemplates,
     generate_draft,
     regenerate_text,
@@ -9,7 +12,7 @@ from app.generation import (
     suggest_templates,
     writable_slots,
 )
-from app.models.post import Post
+from app.models.post import Post, Verdict
 from app.models.template import TemplateKind
 from app.templates import approve, create_template
 
@@ -394,3 +397,165 @@ def test_an_untyped_template_fails_loudly_instead_of_rendering_empty_boxes(sessi
     assert draft.visual_image is None
     assert draft.visual_error is not None
     assert draft.body_text.startswith("not a rebrand")
+
+
+# --- US-015: recorded verdicts feed generation as lessons ---------------------------------
+
+# The prompt exactly as it was built before lessons existed, for the same fixture as
+# `test_generation_is_grounded_in_the_posts_the_hook_came_from`. Captured from the code at
+# the commit before this slice, not typed from the format by hand. It is here so "no
+# verdicts changes nothing" is a byte comparison rather than a claim: a stray newline or a
+# lessons header that leaks in when the list is empty fails this and nothing else would.
+PROMPT_BEFORE_LESSONS = (
+    "Idea:\n"
+    "a seller tested one main image and got +17% CTR\n"
+    "\n"
+    "Hook pattern to follow:\n"
+    "{small} turned into {large}\n"
+    "Hook tone: plain, lowercase\n"
+    "\n"
+    "Structure (deep-research):\n"
+    "1. result: Lead with the dollar outcome.\n"
+    "\n"
+    "Visual slots to fill: big_number, headline\n"
+    "\n"
+    "Exemplar posts — match this voice, not this content:\n"
+    "---\n"
+    "The exemplar post body that proves the pattern."
+)
+
+
+def rule(session, post: Post, verdict: Verdict, note: str) -> Post:
+    """Record a human's ruling the way the verdict route does, without going through it."""
+    post.verdict = verdict
+    post.verdict_note = note
+    post.verdict_at = datetime.now(UTC)
+    session.add(post)
+    session.flush()
+    return post
+
+
+def test_a_recorded_verdict_reaches_the_prompt_as_a_lesson(session):
+    library(session)
+    add_post(session, "win-1", 185, "The exemplar post body that proves the pattern.")
+    judged = add_post(session, "judged-1", 300, "A post that already went out.")
+    rule(session, judged, Verdict.WORKED, "the opening number did the work; the ask fell flat")
+
+    llm = FakeLLM(WRITTEN)
+    generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+
+    assert "the opening number did the work; the ask fell flat" in llm.last_user
+    assert "worked" in llm.last_user
+
+
+def test_lessons_survive_a_regeneration(session):
+    """The trap this slice exists to avoid: two call sites, one of them forgotten.
+
+    Asserted at both — the prompt from `generate_draft` and the prompt from
+    `regenerate_text` — because lessons that only reach the first are lessons that vanish
+    the moment anyone presses regenerate.
+    """
+    library(session)
+    judged = add_post(session, "judged-1", 300, "A post that already went out.")
+    rule(session, judged, Verdict.DIDNT, "opened on the process, nobody stayed for the result")
+
+    llm = FakeLLM(WRITTEN)
+    draft = generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+    generated_prompt = llm.last_user
+    regenerate_text(session, llm, draft)
+    regenerated_prompt = llm.last_user
+
+    assert generated_prompt is not regenerated_prompt
+    for prompt in (generated_prompt, regenerated_prompt):
+        assert "opened on the process, nobody stayed for the result" in prompt
+        assert "didnt" in prompt
+
+
+def test_with_no_verdicts_recorded_the_prompt_is_byte_identical_to_before(session):
+    """Checked at both call sites, for the same reason lessons are: one is not the other."""
+    library(session)
+    add_post(session, "win-1", 185, "The exemplar post body that proves the pattern.")
+
+    llm = FakeLLM(WRITTEN)
+    draft = generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+
+    assert llm.last_user == PROMPT_BEFORE_LESSONS
+
+    regenerate_text(session, llm, draft)
+
+    assert llm.last_user == PROMPT_BEFORE_LESSONS
+
+
+def test_a_verdict_with_no_note_changes_the_prompt_not_at_all(session):
+    """A ruling with no reason is not a lesson.
+
+    The lesson is the human's words; nothing else about the post is sent. So a note-less
+    verdict would arrive as the bare word `worked` attached to no post the model can see —
+    one tick in a tally, and a tally is the statistics reading that must never appear here.
+    """
+    library(session)
+    add_post(session, "win-1", 185, "The exemplar post body that proves the pattern.")
+    judged = add_post(session, "judged-1", 300, "A post that already went out.")
+    rule(session, judged, Verdict.WORKED, "   ")
+
+    llm = FakeLLM(WRITTEN)
+    generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+
+    assert llm.last_user == PROMPT_BEFORE_LESSONS
+
+
+def test_a_lesson_from_a_creator_post_carries_the_note_and_never_the_writing(session):
+    """Lessons may come from any judged post; voice still comes from one account only.
+
+    A creator post here is judged *and* named in the hook's provenance *and* outranks
+    Monte's on engagement — the full adversarial setup — and its text still never reaches
+    the model. The human's note about it does, which is a person's words, not a voice.
+    """
+    hook, _, _ = library(session)
+    hook.provenance = ["win-1", "theirs"]
+    session.add(hook)
+    session.flush()
+    add_post(session, "win-1", 185, "Monte's own post body.")
+    theirs = add_post(
+        session, "theirs", 5000, "Someone else's writing.", author=settings.inspiration_account
+    )
+    rule(session, theirs, Verdict.MIXED, "the contrast opener is worth borrowing")
+
+    llm = FakeLLM(WRITTEN)
+    generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+
+    assert "the contrast opener is worth borrowing" in llm.last_user
+    assert "Someone else's writing." not in llm.last_user
+    assert "Monte's own post body." in llm.last_user
+
+
+def test_the_lessons_block_makes_no_claim_about_performance(session):
+    """Asserted rather than trusted, the same way the scoreboard's payload is.
+
+    A verdict is judgement at n=1. Wording that turns it into a ranking is the failure
+    mode, and it is the kind of thing an edit reintroduces casually, so the words are
+    pinned here.
+    """
+    library(session)
+    judged = add_post(session, "judged-1", 300, "A post that already went out.")
+    rule(session, judged, Verdict.WORKED, "the opening number did the work")
+
+    llm = FakeLLM(WRITTEN)
+    generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+
+    lowered = llm.last_user.lower()
+    for banned in ("best", "rank", "perform", "score", "top-", "average", "win rate"):
+        assert banned not in lowered
+
+
+def test_only_the_most_recently_judged_verdicts_are_carried(session):
+    library(session)
+    for index in range(LESSON_LIMIT + 3):
+        judged = add_post(session, f"judged-{index}", 300, f"post {index}")
+        rule(session, judged, Verdict.WORKED, f"ruling number {index}")
+
+    llm = FakeLLM(WRITTEN)
+    generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+
+    assert llm.last_user.count("ruling number") == LESSON_LIMIT
+    assert "ruling number 0" not in llm.last_user
