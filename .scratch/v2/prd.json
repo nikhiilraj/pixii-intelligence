@@ -242,7 +242,7 @@
       "pnpm test green"
     ],
     "priority": 16,
-    "passes": false
+    "passes": true
   },
   {
     "id": "US-017",
@@ -257,7 +257,7 @@
       "pnpm test green"
     ],
     "priority": 17,
-    "passes": false
+    "passes": true
   },
   {
     "id": "US-018",

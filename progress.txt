@@ -1481,3 +1481,41 @@ Frontend 45 -> **53**. Backend 399. Build clean.
 
 **Phase state: Track B (US-011..015) COMPLETE.** Publish detection, verdicts, the four queues, the
 Inbox, and verdict lessons feeding generation. What remains is C-polish (US-016..018).
+
+### US-016 — Loading, empty and error states across every route (done 2026-07-30)
+
+`loading.tsx` + `error.tsx` for **all 7 routes** — skeletons mirroring the real layout, not
+spinners; errors in plain words surfacing the API's own `detail` strings, with a retry that
+actually re-requests. Empty states say what would fill them.
+
+**A real bug was found and fixed inside the slice** (`c2faa1a`): a root-level `loading.tsx`
+applies to *every* route, so the Inbox skeleton was flashing on `/posts`, `/studio` and the rest.
+Fixed by moving the Inbox into an **`(inbox)` route group**, which scopes its boundaries without
+changing the URL. This is invisible in any single-page test — the page under test looks perfect.
+
+The load-bearing assertion, only possible because US-003 replaced `getJson`'s swallow-into-`null`:
+**a failed request renders the error state and NOT the empty state.** Before US-003 a page could
+only ever say "nothing here yet", including when the backend was down.
+
+### US-017 — Motion tokens and accessibility sweep (done 2026-07-30)
+
+`globals.css` motion tokens applied to state transitions (120ms micro / 200ms structural,
+`cubic-bezier(0.2, 0, 0, 1)`), plus fixes in `ui/{dialog,select,skeleton,tabs}`.
+
+**`prefers-reduced-motion: reduce` is one global media query** over `*`, `*::before`, `*::after` in
+the tokens file (`globals.css:164`) — zeroes every duration app-wide, not per component.
+
+**The focus ring is one global `:focus-visible` rule** (`globals.css:138`) and the primitives
+deliberately add **no** focus-visible classes. Reason, recorded at `select.tsx:123`: the unlayered
+`:focus-visible` rule beats `@layer utilities`, so a per-component class would silently lose to it.
+One rule therefore covers every element, including pages added later.
+
+Contrast baselines from US-001 held: `--accent` #F2610C is **3.09:1 — fill only, never text**;
+`--accent-text` #ba4b09 is **5.80:1** and carries text on light, flipping to #f2610c in dark.
+Keyboard/focus exercised by hand via CDP scripts rather than asserted in jsdom, per the testing
+policy.
+
+**Ownership split held perfectly** — US-016 touched only route files and page bodies, US-017 only
+`globals.css` and `components/ui/`. Zero collisions across two concurrent frontend slices.
+
+Backend **399**. Frontend 53 -> **62** across 7 files. Build clean.
