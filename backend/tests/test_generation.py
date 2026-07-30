@@ -622,6 +622,38 @@ def test_a_redraw_renders_the_version_the_draft_was_generated_from(session):
     assert draft.visual_image == b"REDRAWN"
 
 
+def test_a_rewrite_uses_the_hook_the_draft_was_generated_from(session):
+    """The same lineage defect as the redraw, one door along — and it was left behind.
+
+    `regenerate_text` already promised "Lineage does not move", but it resolved each family by
+    newest row, so editing a hook and pressing regenerate rewrote the words against v2's
+    pattern while `hook_version` still said 1. `lineage_metadata` then pushed version 1 to
+    Zernio and `template_performance` credited it with text a different template wrote. Three
+    families were exposed, not one, and `_written_values` took the newest visual's slots too.
+
+    v2 has to exist for this to prove anything — in a single-version family the fix and the
+    bug are indistinguishable.
+    """
+    hook, _, _ = library(session)
+    llm = FakeLLM(WRITTEN)
+    draft = generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+    recorded = draft.hook_version
+
+    v2 = edit_template(
+        session,
+        hook,
+        body={"pattern": "{small} became {large}, eventually", "tone": "plain, lowercase"},
+    )
+    approve(session, v2)
+
+    regenerate_text(session, llm, draft)
+
+    assert "{small} turned into {large}" in llm.last_user
+    assert "eventually" not in llm.last_user
+    # And the column did not move either, so metadata and prompt describe one template.
+    assert draft.hook_version == recorded
+
+
 def test_a_retired_recorded_version_still_redraws(session):
     """A redraw is a re-render of what this draft already is, not a new generation.
 

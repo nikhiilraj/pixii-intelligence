@@ -379,24 +379,20 @@ def generate_draft(
     return draft
 
 
-def _current(session: Session, family: str | None) -> Template:
-    """The version of a family this draft was generated from."""
-    statement = (
-        select(Template)
-        .where(Template.family_id == family)
-        .order_by(col(Template.version).desc())
-    )
-    template = session.exec(statement).first()
-    if template is None:
-        raise NoUsableTemplates(f"template family {family} no longer exists")
-    return template
-
-
 def regenerate_text(session: Session, llm: LLM, draft: Draft) -> Draft:
-    """Rewrite the words against the same templates. Lineage does not move."""
-    hook = _current(session, draft.hook_family)
-    structure = _current(session, draft.structure_family)
-    visual = _current(session, draft.visual_family)
+    """Rewrite the words against the same templates. Lineage does not move.
+
+    `generated_from`, not the newest row in each family: that sentence has to be true of the
+    templates actually used, not merely of the columns left unchanged. Resolving by family
+    alone rewrote the words against an edited hook while `hook_version` still named the old
+    one, so `lineage_metadata` pushed the old version to Zernio and `template_performance`
+    credited it with text a different template wrote. The same defect `regenerate_visual` had,
+    on three families instead of one — and it reached `_written_values` below too, since the
+    newest visual's slots are not necessarily this draft's.
+    """
+    hook = generated_from(session, draft.hook_family, draft.hook_version)
+    structure = generated_from(session, draft.structure_family, draft.structure_version)
+    visual = generated_from(session, draft.visual_family, draft.visual_version)
 
     written = llm.complete_json(
         _WRITE_SYSTEM,
