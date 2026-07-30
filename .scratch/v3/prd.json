@@ -12,7 +12,7 @@
       "slice tests green"
     ],
     "priority": 1,
-    "passes": false
+    "passes": true
   },
   {
     "id": "US-002",
@@ -78,7 +78,7 @@
       "A ruling can be retracted from /posts/[id] \u2014 the API-only version is the exact shape that blocked the V2 merge (a verdict route with no form)"
     ],
     "priority": 6,
-    "passes": false
+    "passes": true
   },
   {
     "id": "US-007",
