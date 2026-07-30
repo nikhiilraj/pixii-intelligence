@@ -197,7 +197,7 @@
       "slice tests green"
     ],
     "priority": 13,
-    "passes": false
+    "passes": true
   },
   {
     "id": "US-014",
@@ -228,7 +228,7 @@
       "slice tests green"
     ],
     "priority": 15,
-    "passes": false
+    "passes": true
   },
   {
     "id": "US-016",

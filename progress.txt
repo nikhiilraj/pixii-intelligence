@@ -1406,3 +1406,50 @@ Engagement spans 12.7x at ~3 samples per template, so nothing here may imply ran
 Backend **365** tests. Slices US-011 and US-012 ran concurrently on disjoint files and both
 landed clean — the shared resource was the Alembic head, which the master serialised by writing
 both migrations up front.
+
+### US-013 — GET /inbox, four human-gate queues (done 2026-07-30)
+
+`Inbox` -> `proposals_awaiting_review`, `built_awaiting_push`, `pushed_awaiting_monte`,
+`published_awaiting_verdict`; each an `InboxQueue{count, items[InboxItem{id,label,waiting_since,
+age_days}]}`, oldest first. `InboxQueue` deliberately carries **no rate, no mean, no ranking**,
+and the queues are not comparable with each other. `GET /templates` gained a `status` filter (none
+existed — `latest_versions` is status-blind, `usable_templates` is APPROVED-only). `DraftOut` now
+also exposes `pushed_at` and `created_at`, without which ages were unrenderable.
+
+**Queue 4 is lineage-only, decided from Postgres rather than taste.** 57 posts are published and
+57 carry no verdict, while zero drafts have ever gone live — so "all published posts" would open
+the Inbox with a 57-row backlog of Monte's historical writing, none of it a gate anyone intends to
+clear, burying the circuit the page exists to reveal. `POST /posts/{id}/verdict` still accepts any
+post, so an operator can rule on one; it just is not a queue.
+
+Queues 2/3/4 **partition** the drafts by the two timestamps — not pushed, pushed but not live,
+live but not judged. No draft is in two, and no status column exists that could disagree.
+
+⚠ **New cross-cutting hazard found and handled: every datetime column is `timestamp without time
+zone`.** A value written as `datetime.now(UTC)` reads back **naive** once the row round-trips, and
+whether that has happened depends on when the ORM expired the object — so one query can yield both
+aware and naive datetimes, and comparing them **raises**. Normalised once in `main._utc`;
+`test_publish_detection.utc_naive` documents the same hazard resolved the other way. Any later
+slice comparing datetimes must expect both kinds.
+
+### US-015 — Verdicts feed generation as lessons (done 2026-07-30)
+
+`verdict_lessons(session) -> list[str]` and a `lessons: list[str]` parameter on `_write_prompt`.
+
+**The two-call-sites trap is solved structurally, not by memory:** `lessons` takes **no default on
+purpose** (comment at `generation.py:240`), so the type checker forces both `generate_draft`
+(`:357`) and `regenerate_text` (`:407`) to pass it. Lessons wired into one alone would have worked
+until the first regenerate, then vanished silently.
+
+`if lessons:` means nothing is appended when none are recorded, so a prompt written before this
+slice is **byte-identical** — proved with a golden dump, not asserted.
+
+**The voice line did not move.** `_exemplars` remains `.where(Post.account_username ==
+settings.voice_account)` (`:195`) regardless of verdict or cohort, and the existing adversarial
+test — a creator post at 5000 engaged actions against Monte's 185, *named in the hook's
+provenance* — passes untouched.
+
+Lessons are judgement at **n=1**, never statistics: no averages, no win rates, no ranking language.
+⚠ Verdict notes are sent to Azure in prompts — anything typed there leaves the machine.
+
+Backend **399** tests. US-013 and US-015 ran concurrently on disjoint files; both landed clean.
