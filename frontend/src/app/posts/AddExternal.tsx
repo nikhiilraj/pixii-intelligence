@@ -15,8 +15,12 @@ export default function AddExternal() {
   const [engaged, setEngaged] = useState("");
   const [busy, setBusy] = useState(false);
 
+  /* The last pre-token field string on this page, sitting beside the four Radix Selects and
+     the date input US-003 converted. Same tokens as that date input (`Explorer.tsx`), keeping
+     this form's own px-3/py-2 — it is a form field, not a filter chip. `border-border` carries
+     its own dark variant, so the `dark:` half of the old string is gone rather than dropped. */
   const field =
-    "w-full rounded-md border border-black/15 bg-transparent px-3 py-2 text-sm dark:border-white/20";
+    "w-full min-h-8 rounded-input border border-border bg-transparent px-3 py-2 text-meta";
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();

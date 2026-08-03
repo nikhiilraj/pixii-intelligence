@@ -61,6 +61,44 @@ export const noFilter = (value: string) => (value === ALL ? "" : value);
 
 const nf = new Intl.NumberFormat("en-US");
 
+/* How many rows the table renders before it says it is holding some back. 69 rows made the
+ * page 3936px tall (4030 when the finding was filed), which is not broken but is not a table
+ * anyone reads to the end of either. 25 brings it to 1896.
+ * ponytail: a slice and a toggle, not pagination — `/posts` already answers with the whole
+ * filtered set in one request, so there is no second request for a page control to make and
+ * nothing to keep in the URL. Ceiling: server paging, once the corpus outgrows one response.
+ */
+const PAGE = 25;
+
+/* Impressions and engagement rate are `0` by column default and are written by exactly one
+ * thing: a Zernio analytics read (`corpus.py::_apply`). The LinkedIn scrape ingest and
+ * `ingest_inspiration_posts` write likes/comments/shares and never touch either column, so 35
+ * of the 69 rows in the default view carry engagement and no impressions data at all.
+ *
+ * Two separate facts decide how that renders, and both are in the data rather than assumed:
+ *
+ *  - Where `engaged_actions > 0` and `impressions === 0` the absence is *provable*. A post
+ *    with 1240 engaged actions did not have zero impressions. That is arithmetic, not a guess,
+ *    and it covers every scraped row.
+ *  - Where both read 0 the row is genuinely ambiguous and the schema cannot be made to say
+ *    which. `_apply` stamps `metrics_updated_at` whether or not analytics returned anything,
+ *    and `sync_metrics` reads a 50-row window that 11 published posts fall outside — so "never
+ *    measured" and "measured zero" are byte-identical rows.
+ *
+ * So a 0 is not printed in either column: it is a dash, with the footnote below the table
+ * saying which of the two it is and why the page will not choose. An absence reading as a
+ * measurement is the one failure this app removes everywhere else.
+ *
+ * The two columns are keyed independently and must stay that way. Nine rows carry a Zernio
+ * engagement rate (11.27, 7.5, 15.0 …) with no impressions figure beside it; deriving the ER
+ * dash from the impressions dash would erase nine real measurements. They sit outside the
+ * default cohort, so no screenshot of the landing view would catch it.
+ *
+ * ponytail: display only. The impressions CSV import stays deferred — its trigger is Monte's
+ * analytics export and it has not arrived. A parser for a file nobody has seen is the ceiling.
+ */
+const UNMEASURED = "—";
+
 function accountLabel(account: string): string {
   if (account === VOICE_ACCOUNT) return `${account} — our voice`;
   if (account === INSPIRATION_ACCOUNT) return `${account} — creators`;
@@ -161,6 +199,7 @@ export default function Explorer({
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
 
   const platforms = useMemo(
     () => Array.from(new Set(initial.map((p) => p.platform))).sort(),
@@ -204,6 +243,11 @@ export default function Explorer({
       });
     }
   }
+
+  // The rows the table actually draws. The chart below still reads `posts`, not this — the
+  // shape of the run is a property of the whole filtered set, and bounding a table is a
+  // reading aid, not a filter.
+  const visible = showAll ? posts : posts.slice(0, PAGE);
 
   // Engagement over time, oldest first — the shape of the run, not a leaderboard.
   const series = useMemo(
@@ -367,7 +411,7 @@ export default function Explorer({
             </tr>
           </thead>
           <tbody>
-            {posts.map((post) => (
+            {visible.map((post) => (
               <tr key={post.id} className="border-b border-black/8 last:border-0 dark:border-white/10">
                 <td className="max-w-md py-3 pr-4">
                   <Link href={`/posts/${post.id}`} className="hover:underline">
@@ -383,16 +427,61 @@ export default function Explorer({
                 <td className="py-3 pr-4 text-right font-medium tabular-nums">
                   {nf.format(post.engaged_actions)}
                 </td>
+                {/* See UNMEASURED above: a stored 0 in either column is an unread analytics
+                    figure as often as it is a real zero, and the two are keyed separately. */}
                 <td className="py-3 pr-4 text-right tabular-nums opacity-70">
-                  {nf.format(post.impressions)}
+                  {post.impressions ? nf.format(post.impressions) : UNMEASURED}
                 </td>
                 <td className="py-3 text-right tabular-nums opacity-70">
-                  {post.engagement_rate.toFixed(2)}
+                  {post.engagement_rate ? post.engagement_rate.toFixed(2) : UNMEASURED}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
+
+        {/* What is hidden, stated — and which end of the sort it was cut from, because
+            hiding the tail of a list is only honest if the reader knows what the tail is.
+            The `aria-live` count above deliberately still reads the filtered total: it is
+            the only confirmation a filter took effect, and rewriting it to 25 would make
+            every filter look like it returned 25 posts. Two numbers, two jobs. */}
+        {posts.length > PAGE && (
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <span className="text-meta text-muted">
+              Showing {showAll ? "all " : ""}
+              {nf.format(visible.length)} of {nf.format(posts.length)}, sorted by{" "}
+              {filters.sort.replace(/_/g, " ")}, {filters.order === "desc" ? "highest" : "lowest"}{" "}
+              first.
+            </span>
+            <Button variant="outline" onClick={() => setShowAll(!showAll)}>
+              {showAll ? `Show ${PAGE}` : `Show all ${nf.format(posts.length)}`}
+            </Button>
+          </div>
+        )}
+
+        {/* The footnote half of the dash. Placed here rather than in `posts/page.tsx` because
+            the rule it explains lives in this component and nowhere else.
+
+            One interpolated string rather than `{UNMEASURED}` followed by JSX prose, and that
+            is not a style preference: the two-child form renders as two adjacent text nodes
+            and the leading space of the second survived on the client but not in the server
+            HTML, which threw a hydration mismatch and made React discard and re-render the
+            tree. Caught in Chrome — the vitest suite renders client-side only and cannot see
+            it. One child, one text node, nothing to disagree about. */}
+        {posts.length > 0 && (
+          <p className="mt-3 max-w-2xl text-caption text-muted">
+            {/* Both reasons, not just the scrape one. On the creators cohort every dashed
+                impressions cell is a Zernio row the analytics window did not cover, carrying a
+                real engagement rate beside it — a footnote that blamed scraping there would
+                name a cause that applies to none of the rows on screen. */}
+            {`${UNMEASURED} in Impressions or ER means the figure was never measured, not that ` +
+              `it was zero. Both columns are filled only by a Zernio analytics read — posts ` +
+              `scraped into the corpus never had one, and Zernio's analytics window does not ` +
+              `cover every published post — and a stored 0 cannot be told apart from one that ` +
+              `was never read. Impressions arrive with Monte's analytics export.`}
+          </p>
+        )}
+
         {/* Suppressed while `error` is set: "nothing matches" is a claim about the data,
             and after a failed request there is no data to make it about. That one boolean is
             the whole bug class this slice exists to prevent, so it is pinned by test.
