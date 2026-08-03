@@ -241,7 +241,7 @@ and no `/health` flag. No new secret is introduced by this slice.
 
 | Condition | Behaviour |
 |---|---|
-| No post has a still image | `ExtractionError`, named — same as an empty hook sample |
+| No post has a still image | returns `[]`, model never called — same as an empty hook sample. `propose_hooks` and `propose_structures` both return `[]` here, and one extractor that raises where its siblings return empty is a difference an operator has to memorise |
 | Model returns no proposals | `ExtractionError` |
 | One proposal has undeclared slots | dropped, reason into `notes`, others proceed |
 | One proposal fails to render | dropped, reason into `notes`, others proceed |
