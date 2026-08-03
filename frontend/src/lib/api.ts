@@ -44,6 +44,13 @@ export type Post = {
   verdict_at: string | null;
 };
 
+/* `PostRow` — `Post & { late_post_id }` — was here, and it is gone with US-019. Its whole
+ * justification was "the one field only the detail page reads": the detail page joined
+ * `Draft.zernio_post_id == Post.late_post_id` in the browser over `GET /drafts?limit=500`.
+ * `GET /posts/{id}/draft` does that join in the database, so no page reads `late_post_id` any
+ * more and a type declaring it would be describing a consumer that no longer exists. The
+ * backend still returns the column; nothing here asks about it. */
+
 export type TemplateKind = "hook" | "structure" | "visual";
 // The body of work a template was read from — `Cohort` in backend/app/extraction.py.
 // Sent as the plain string value; FastAPI coerces it into the StrEnum.
@@ -110,6 +117,31 @@ export type Draft = {
   lineage: { hook: LineageEntry; structure: LineageEntry; visual: LineageEntry };
 };
 
+/** `MetricSnapshot` in backend/app/models/metric.py, as `GET /posts/{id}/history` returns it —
+ *  one reading of one post's numbers, oldest first.
+ *
+ *  Readings accumulate rather than overwrite, so this is the only place the *shape* of a post's
+ *  engagement lives; the Post row keeps the latest values only. Note what the numbers are not:
+ *  `impressions` is `0` on every scraped row because Zernio never measured it there, not
+ *  because nobody saw the post, so a zero here is an absence and must not be plotted as a
+ *  measurement. `captured_at` is naive — every datetime column in this app is `timestamp
+ *  without time zone`. */
+export type MetricSnapshot = {
+  id: number;
+  post_id: number;
+  captured_at: string;
+  impressions: number;
+  reach: number;
+  likes: number;
+  comments: number;
+  shares: number;
+  saves: number;
+  clicks: number;
+  views: number;
+  engagement_rate: number;
+  engaged_actions: number;
+};
+
 /* `InboxItem` / `InboxQueue` / `Inbox` in backend/app/main.py:309-349.
  *
  * `id` is the id of whatever the gate acts on — a template, a draft, a post — so the queue an
@@ -137,14 +169,44 @@ export type Inbox = {
   built_awaiting_push: InboxQueue;
   pushed_awaiting_monte: InboxQueue;
   published_awaiting_verdict: InboxQueue;
+  /** Laps already completed — a draft that went live whose post now carries a verdict. Not a
+   *  queue: nothing waits behind it. A count of laps and never a score; it says whether the
+   *  machine has run end to end, not how anything performed. 0 today, and rendering that 0
+   *  rather than hiding it is the whole reason the field exists. */
+  closed_circuits: number;
 };
 
-/** `GET /health`. Read by the Inbox footer — the only place it is consumed. */
+/** `GET /health`. Read by the Inbox footer and by the Studio page.
+ *
+ *  `variants_max` is a **sibling** of `credentials`, not a key inside it, and the shape is
+ *  load-bearing: the footer renders `credentials` row-per-key as a health light, so a number
+ *  in there would draw a junk one. It is the ceiling `POST /drafts/variants` clamps to, and
+ *  the client reads it only to *say* what a run will spend — the server is still the only
+ *  thing that applies it. */
 export type Health = {
   status: string;
   database: boolean;
   credentials: Record<string, boolean>;
+  variants_max: number;
 };
+
+/** What a paid route reports it spent, on top of whatever it produced — `RetopicOut` and
+ *  `VariantsOut` both carry exactly this pair, and `POST /drafts/variants`'s 502 detail
+ *  carries it too, because the drafts roll back with the request and the money does not.
+ *
+ *  Hoisted here with `calls` when the second consumer arrived: two surfaces report a spend
+ *  and both have to word it identically. */
+export type Spend = { llm_calls: number; image_calls: number };
+
+/** "1 chat completion", "2 chat completions", "0 image renders" — the observed count, in
+ *  words, never a price. The meter counts calls; nothing in this app knows what a call cost.
+ *
+ *  In `lib/api` rather than in either component that says it: it was written twice, in Studio
+ *  and in `RetopicForm`, only because a second agent held this file at the time. One wording
+ *  of a spend, in one place. */
+export function calls(n: number, unit: string): string {
+  return `${n} ${unit}${n === 1 ? "" : "s"}`;
+}
 
 /* The result of a request, where failing is not the same as having nothing.
  *
@@ -186,6 +248,29 @@ function messageFrom(detail: unknown, status: number): string {
       return where ? `${where}: ${what}` : what;
     });
     return parts.join("; ");
+  }
+
+  /* And a plain object, which is the third shape a raised `HTTPException` can carry: the batch
+   * routes report what was already spent on the failure path — `POST /drafts/variants` raises
+   * 502 with `{"error": ..., "llm_calls": n, "image_calls": n}` because the drafts roll back
+   * with the request and the money does not. Without this branch that landed as "request failed
+   * (502)": the reason dropped, and the spend the backend went out of its way to report dropped
+   * with it — on the one path where nothing arrived to show for it.
+   *
+   * The message first, then the remaining scalars as `key: value`. Never `String(detail)` or a
+   * bare `JSON.stringify`: `[object Object]` on screen is the bug the branch above exists to
+   * prevent, and this one must not reintroduce it in a different shape. After the array check,
+   * because FastAPI's own 422s are a list of objects and keep their own handling. */
+  if (typeof detail === "object" && detail !== null) {
+    const entries = Object.entries(detail as Record<string, unknown>);
+    const said = entries.find(
+      ([k, v]) => typeof v === "string" && v && ["error", "detail", "message"].includes(k),
+    );
+    const rest = entries
+      .filter(([k, v]) => k !== said?.[0] && (typeof v === "string" || typeof v === "number"))
+      .map(([k, v]) => `${k}: ${v}`);
+    const parts = [said?.[1] as string | undefined, ...rest].filter(Boolean);
+    if (parts.length > 0) return parts.join(", ");
   }
 
   return `request failed (${status})`;

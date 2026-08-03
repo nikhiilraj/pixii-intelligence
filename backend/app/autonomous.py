@@ -1,10 +1,11 @@
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any, TypeVar, cast
 
 from sqlmodel import Session, col, select
 
-from app.generation import NoUsableTemplates, generate_draft
+from app.generation import NoUsableTemplates, generate_draft, lesson_lines, verdict_lessons
 from app.llm import LLM
 from app.models.post import Post
 from app.rendering import HtmlRenderer, ImageRenderer
@@ -61,6 +62,80 @@ class RunResult:
 
 Notifier = Callable[[str], None]
 
+_Adapter = TypeVar("_Adapter")
+
+
+class SpendMeter:
+    """Counts the paid calls made through the adapters it wraps.
+
+    There was no spend counter anywhere in this app: `POST /drafts/autonomous-run` buys chat
+    completions and renders and reported neither, which is how `?cap=500` bought up to 1001
+    billed completions before the clamp landed with every response still saying nothing.
+
+    **Owned by the caller, not by `run_autonomous`.** That is the whole design: the counter
+    outlives the call that raises, so an `AutonomousRunFailed` still leaves the number in the
+    hands of the handler that has to answer. A run that dies after three completions has
+    spent them, and that is precisely when the number is worth having.
+
+    ponytail: one object per request, nothing module-level. A process-wide counter would
+    reset on restart and would attribute one request's spend to another under concurrency —
+    a number that is wrong in exactly the situation it is consulted in is worse than none.
+    """
+
+    def __init__(self) -> None:
+        self.llm_calls = 0
+        self.image_calls = 0
+
+    def watch(self, adapter: _Adapter) -> _Adapter:
+        """The same adapter, counting. Typed as what it wraps because that is what it is."""
+        return cast(_Adapter, _Metered(self, adapter))
+
+    def spend(self) -> dict[str, int]:
+        """What has been bought so far, in the shape both the run response and the 502 use."""
+        return {"llm_calls": self.llm_calls, "image_calls": self.image_calls}
+
+
+class _Metered:
+    """An adapter that counts what is asked of it, and delegates everything else.
+
+    `complete_json` is a billed completion. `screenshot` and `generate` both count as
+    `image_calls` — the field says how many images the run asked a renderer for, not which
+    vendor billed for them; counting only Azure's `generate` would ship a number that is
+    structurally always zero at the one endpoint that reports it, since `autonomous_run` is
+    injected an HTML renderer and can never reach the image path.
+
+    Delegation goes through `__getattr__` rather than declared methods on purpose:
+    `rendering.render_visual` picks its path with `hasattr(renderer, "screenshot")`, so a
+    wrapper carrying both methods outright would make an HTML-only renderer claim it can
+    generate images and send every `ai` template down the wrong branch.
+    """
+
+    _COUNTED = {
+        "complete_json": "llm_calls",
+        "screenshot": "image_calls",
+        "generate": "image_calls",
+    }
+
+    def __init__(self, meter: SpendMeter, adapter: Any) -> None:
+        self._meter = meter
+        self._adapter = adapter
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self._adapter, name)
+        field = self._COUNTED.get(name)
+        if field is None:
+            return attr
+
+        def counted(*args: Any, **kwargs: Any) -> Any:
+            # Counted before the call and never after. A completion that comes back
+            # unparseable was still billed, and a call that raises is the one whose cost
+            # would otherwise vanish — which is the reading this whole slice exists to
+            # close. The count is what was bought, not what was usable.
+            setattr(self._meter, field, getattr(self._meter, field) + 1)
+            return attr(*args, **kwargs)
+
+        return counted
+
 
 def _log_notify(message: str) -> None:
     log.warning("autonomous: %s", message)
@@ -70,7 +145,10 @@ def propose_topics(session: Session, llm: LLM, count: int) -> list[dict]:
     """Ask for angles the corpus has not already covered.
 
     Grounded in what has actually been posted, so unattended output follows from the real
-    account rather than from nothing.
+    account rather than from nothing — and in what a human ruled about what went out. The
+    verdict lessons reached only `generate_draft` and `regenerate_text` before, which are
+    the steps deciding *how* to write; the choice of subject, which a ruling speaks to most
+    directly, saw nothing.
     """
     recent = session.exec(
         select(Post)
@@ -80,10 +158,14 @@ def propose_topics(session: Session, llm: LLM, count: int) -> list[dict]:
     ).all()
 
     shown = "\n---\n".join(post.content.strip()[:600] for post in recent)
-    result = llm.complete_json(
-        _TOPIC_SYSTEM,
-        f"Propose {count} topics.\n\nRecent posts:\n{shown}",
-    )
+    # Lessons above the posts, not below, for the reason `_write_prompt` gives: `shown` ends
+    # in a raw post body, so anything appended after it reads as commentary on that post.
+    # `lesson_lines` contributes nothing when there are no verdicts, which keeps this prompt
+    # byte-identical to the one sent before any ruling existed.
+    parts = [f"Propose {count} topics."]
+    parts.extend(lesson_lines(verdict_lessons(session)))
+    parts.append(f"\nRecent posts:\n{shown}")
+    result = llm.complete_json(_TOPIC_SYSTEM, "\n".join(parts))
     topics = result.get("topics")
     return [t for t in topics if t.get("idea")] if isinstance(topics, list) else []
 

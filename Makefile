@@ -25,8 +25,14 @@ api: migrate
 web:
 	cd frontend && pnpm dev
 
+# Both suites. `check` ran backend pytest only for the whole of V1 and V2, so every frontend
+# test written in those runs was outside the gate: an agent that ran `make check` and reported
+# green had no evidence at all about the frontend, and said so honestly only because it happened
+# to run vitest separately. Two of the three US-00x frontend slices in this run reported exactly
+# that discrepancy unprompted, which is how it was found.
 test:
 	cd backend && .venv/bin/pytest -q
+	cd frontend && pnpm test
 
 lint:
 	cd backend && .venv/bin/ruff check . && .venv/bin/mypy app

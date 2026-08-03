@@ -151,6 +151,23 @@ def test_a_post_nobody_generated_has_no_draft(session):
     assert draft_for_post(session, post) is None
 
 
+def test_a_post_with_no_late_post_id_matches_no_draft_at_all(session):
+    """The guard at the top of `draft_for_post`, which nothing exercised.
+
+    Without it the query becomes `zernio_post_id == None`, and an unpushed draft — every draft
+    in Studio before someone presses Push — has exactly that. A post that reached the corpus
+    without a `latePostId` would then be credited with whichever draft nobody has pushed yet:
+    a lineage attribution invented out of two nulls, on the surface whose only job is
+    attribution.
+    """
+    a_draft(session, zernio_post_id=None)  # never pushed
+    sync_metrics(session, FakeZernio([analytics_post("organic-1")]))
+    post = session.exec(select(Post)).one()
+    post.late_post_id = None
+
+    assert draft_for_post(session, post) is None
+
+
 def test_template_performance_counts_only_posts_with_lineage(session):
     draft, hook, _ = a_draft(session, zernio_post_id="late-1")
     sync_metrics(

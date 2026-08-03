@@ -116,6 +116,14 @@ def store_image(
         # `open` is lazy — it reads the header only. Forcing the decode here is what turns
         # a truncated or corrupt file into a 4xx instead of a surprise 500 further on.
         opened.load()
+    except Image.DecompressionBombError as exc:
+        # A separate clause because `DecompressionBombError` subclasses `Exception` directly —
+        # not `OSError`, not `ValueError` — so it walked straight past the handler below and
+        # out of the route as a 500. It is raised from `open`, on the *header*: a 68-byte PNG
+        # declaring 30000x30000 costs nothing to send and ~2.7GB to decode, which is the whole
+        # attack. Re-raised as `UnreadableUpload` rather than a sibling class so both callers
+        # in `api_assets` (upload and promote) answer 422 with no change of their own.
+        raise UnreadableUpload(f"that image is too large to decode safely: {exc}") from exc
     except (OSError, ValueError) as exc:
         # `UnidentifiedImageError` is an `OSError`; a decode failure raises one too.
         raise UnreadableUpload(f"not a readable image: {exc}") from exc

@@ -30,7 +30,18 @@ function stubFetch(routes: { inbox: Response | Error; health?: Response | Error 
     vi.fn((url: string) => {
       const answer = url.includes("/inbox")
         ? routes.inbox
-        : (routes.health ?? jsonResponse(200, { status: "ok", database: true, credentials: {} }));
+        : (routes.health ??
+          /* `variants_max` is a sibling of `credentials`, not a key inside it: the footer
+             renders `credentials` one health light per key, so a scalar in there would draw a
+             bogus light. Carried in every /health *success* stub so these keep typechecking
+             once `Health` gains the field. The 503 stub below is a failure body and does not
+             get one — an error response carries `detail`, not a Health payload. */
+          jsonResponse(200, {
+            status: "ok",
+            database: true,
+            credentials: {},
+            variants_max: 3,
+          }));
       return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer);
     }),
   );
@@ -48,6 +59,9 @@ function inbox(overrides: Partial<Inbox> = {}): Inbox {
     built_awaiting_push: empty,
     pushed_awaiting_monte: empty,
     published_awaiting_verdict: empty,
+    // The value today's database actually returns, so every test that does not care about the
+    // counter still renders the state that ships.
+    closed_circuits: 0,
     ...overrides,
   };
 }
@@ -80,15 +94,18 @@ describe("the four queues", () => {
       "href",
       "/templates",
     );
+    // Queues 2 and 3 hold drafts, and an `InboxItem.id` is the id of the thing its gate acts
+    // on — so these are draft ids and each link opens that draft. Both read a bare `/studio`
+    // until US-012, which was a link to a page that was empty on every single visit.
     expect(screen.getByRole("link", { name: /Why listings rot/ })).toHaveAttribute(
       "href",
-      "/studio",
+      "/studio?draft=11",
     );
     expect(screen.getByRole("link", { name: /The 12\.7x spread/ })).toHaveAttribute(
       "href",
-      "/studio",
+      "/studio?draft=12",
     );
-    // Queue 4 is the only one whose item has a page of its own, so its link is item-scoped.
+    // Queue 4's item is a post, not a draft, so it is scoped to a different page entirely.
     expect(screen.getByRole("link", { name: /A post that went live/ })).toHaveAttribute(
       "href",
       "/posts/40",
@@ -117,6 +134,33 @@ describe("the four queues", () => {
     // The bug the wording exists to prevent, asserted rather than assumed.
     expect(screen.queryByText(/waiting 1 days/)).not.toBeInTheDocument();
     expect(screen.queryByText(/waiting 0 days/)).not.toBeInTheDocument();
+  });
+
+  it("marks a gate stalled at seven days and not at six", async () => {
+    /* The stall threshold had no test at all: raising STALLED_DAYS to 700, and moving `>=` to
+       `>`, both left the suite green. Both ends are asserted because an off-by-one here is the
+       likely mistake, and 7 is exactly where "in progress" stops being a plausible reading.
+
+       This is a colour-only signal — the Badge tints, the words do not change — so what a jsdom
+       test can honestly hold is the variant class the Badge was given. It is NOT a claim about
+       the rendered colour or the contrast; those need a browser. */
+    stubFetch({
+      inbox: jsonResponse(
+        200,
+        inbox({
+          built_awaiting_push: {
+            count: 2,
+            items: [item(1, "Six days", 6), item(2, "Seven days", 7)],
+          },
+        }),
+      ),
+    });
+
+    render(await InboxPage());
+
+    expect(screen.getByText("waiting 6 days")).toHaveClass("bg-surface-2");
+    expect(screen.getByText("waiting 6 days")).not.toHaveClass("bg-warning/15");
+    expect(screen.getByText("waiting 7 days")).toHaveClass("bg-warning/15");
   });
 
   it("shows each queue's designed empty state when it is genuinely empty", async () => {
@@ -151,6 +195,92 @@ describe("the four queues", () => {
   });
 });
 
+/* The one number on this page that is not a queue. It reads 0 against today's database and
+   showing that 0 is the entire feature: a counter that hid itself at zero, or that rendered a
+   dash, would leave "the loop has never run" and "we have no idea" looking identical — which is
+   the state this page already had. */
+/* The proposals queue held 50 items in one ungrouped column and the page stood 2998px tall, so
+ * the gate that most often needs no action owned the fold. Bounded — but the count that is
+ * hidden has to be *stated*, and it has to come from `queue.count` (the backend's own total,
+ * the same number the heading prints) rather than from the length of the list after slicing,
+ * which would always report the cap and never the truth. */
+describe("a queue longer than the page shows", () => {
+  const long = {
+    count: 50,
+    items: Array.from({ length: 50 }, (_, i) => item(i + 1, `Proposal ${i + 1}`, 50 - i)),
+  };
+
+  it("bounds the list and says how many it is holding back", async () => {
+    stubFetch({
+      inbox: jsonResponse(200, inbox({ proposals_awaiting_review: long })),
+    });
+
+    render(await InboxPage());
+
+    // Six drawn, and they are the six the backend put first — oldest-waiting, not a re-sort.
+    expect(screen.getAllByRole("link", { name: /^Proposal / })).toHaveLength(6);
+    // By label text, not accessible name: the name concatenates the age Badge, so a `$`-anchored
+    // name pattern can never match. `getByText` is exact, so "Proposal 1" excludes "Proposal 10".
+    expect(screen.getByText("Proposal 1")).toBeInTheDocument();
+    expect(screen.queryByText("Proposal 7")).not.toBeInTheDocument();
+
+    // The total is the queue's own count, not the number of rows drawn.
+    expect(screen.getByText(/Showing the 6 that have waited longest, of 50/)).toBeInTheDocument();
+  });
+
+  it("says nothing about a bound on a queue short enough to show whole", async () => {
+    stubFetch({
+      inbox: jsonResponse(
+        200,
+        inbox({
+          proposals_awaiting_review: { count: 2, items: [item(1, "One", 1), item(2, "Two", 2)] },
+        }),
+      ),
+    });
+
+    render(await InboxPage());
+
+    expect(screen.getAllByRole("link", { name: /One|Two/ })).toHaveLength(2);
+    expect(screen.queryByText(/Showing the/)).not.toBeInTheDocument();
+  });
+});
+
+describe("the circuit counter", () => {
+  it("reads 0 as never-yet, not as an error and not as nothing to show", async () => {
+    stubFetch({ inbox: jsonResponse(200, inbox()) });
+
+    render(await InboxPage());
+
+    expect(screen.getByRole("heading", { name: "Closed circuits: 0" })).toBeInTheDocument();
+    // 0 is a fact about the circuit, stated in words, plus what would make it 1.
+    expect(screen.getByText(/never been round/)).toBeInTheDocument();
+    expect(screen.getByText(/makes this 1/)).toBeInTheDocument();
+    // Not a failure and not a warning: nothing is broken, the lap simply has not happened.
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("states the real count once laps have closed, and drops the never-yet copy", async () => {
+    stubFetch({ inbox: jsonResponse(200, inbox({ closed_circuits: 3 })) });
+
+    render(await InboxPage());
+
+    expect(screen.getByRole("heading", { name: "Closed circuits: 3" })).toBeInTheDocument();
+    expect(screen.queryByText(/never been round/)).not.toBeInTheDocument();
+  });
+
+  it("says it is a lap count and not a score, at every value", async () => {
+    // The page's own constraint: these are queues, not scores. A bare number in the header is
+    // exactly what invites the comparison the rest of the page refuses, so the disclaimer is
+    // part of the counter rather than a thing the reader is trusted to remember.
+    for (const closed_circuits of [0, 3]) {
+      stubFetch({ inbox: jsonResponse(200, inbox({ closed_circuits })) });
+      render(await InboxPage());
+      expect(screen.getByText(/not a score/)).toBeInTheDocument();
+      cleanup();
+    }
+  });
+});
+
 /* The bug class this codebase keeps hitting, in both directions. One direction alone is not a
    test: "always render the error" passes the first assertion, "never render the error" passes
    the second. */
@@ -166,6 +296,10 @@ describe("a failed /inbox is not an empty inbox", () => {
     expect(screen.queryByText(/No draft is waiting to be pushed/)).not.toBeInTheDocument();
     expect(screen.queryByText(/No draft is waiting on a publish/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Nothing is waiting on a verdict/)).not.toBeInTheDocument();
+    // Same direction for the counter: a failed read has no lap count, and rendering "0" from
+    // a response that never arrived would be the page asserting the strongest claim it makes
+    // about the circuit on the strength of no data at all.
+    expect(screen.queryByText(/Closed circuits/)).not.toBeInTheDocument();
   });
 
   it("says the backend is unreachable when it is, rather than showing four empty queues", async () => {
@@ -200,6 +334,7 @@ describe("the health footer", () => {
         status: "ok",
         database: true,
         credentials: { zernio: true, azure_openai: false },
+        variants_max: 3,
       }),
     });
 
@@ -213,6 +348,70 @@ describe("the health footer", () => {
     expect(screen.getByText("Database")).toHaveTextContent("ok");
     expect(screen.getByText("zernio")).toHaveTextContent("ok");
     expect(screen.getByText("azure_openai")).toHaveTextContent("down");
+  });
+
+  it("says the API is down when the backend answered and called itself unhealthy", async () => {
+    // The row that could only ever be green. `database` and every credential are true here on
+    // purpose: the only "down" the page may contain is the API row's own, so the assertion
+    // cannot pass by picking up somebody else's badge.
+    stubFetch({
+      inbox: jsonResponse(200, inbox()),
+      health: jsonResponse(200, {
+        status: "degraded",
+        database: true,
+        credentials: { zernio: true },
+        variants_max: 3,
+      }),
+    });
+
+    render(await InboxPage());
+
+    expect(screen.getByText("API")).toHaveTextContent("down");
+    expect(screen.getByText("Database")).toHaveTextContent("ok");
+    // A backend that answered is not a backend that could not be reached. These two failures
+    // are different states and must read differently — the transport-failure sentences belong
+    // to the /health-never-arrived path, not to this one.
+    expect(screen.queryByText(/Status unavailable/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Backend unreachable/)).not.toBeInTheDocument();
+  });
+
+  it("says the database is down when the backend reports it is", async () => {
+    // Every other fixture in this file has `database: true`, so hardcoding the row to "ok"
+    // survived them all. `status` stays "ok" here for the same reason the API test above sets
+    // everything else green: the only "down" on the page must be the one being asserted.
+    stubFetch({
+      inbox: jsonResponse(200, inbox()),
+      health: jsonResponse(200, {
+        status: "ok",
+        database: false,
+        credentials: { zernio: true },
+        variants_max: 3,
+      }),
+    });
+
+    render(await InboxPage());
+
+    expect(screen.getByText("Database")).toHaveTextContent("down");
+    expect(screen.getByText("API")).toHaveTextContent("ok");
+  });
+
+  it("names the address when /health could not be reached at all", async () => {
+    // The footer's other failure branch, which nothing exercised — the 503 test below covers
+    // only the HTTP half, so collapsing the two into one sentence went unnoticed. A transport
+    // failure has no status to report, and saying "HTTP undefined" is the shape being refused.
+    stubFetch({
+      inbox: jsonResponse(200, inbox()),
+      health: new TypeError("fetch failed"),
+    });
+
+    render(await InboxPage());
+
+    expect(screen.getByText(/Status unavailable/)).toHaveTextContent(
+      "could not reach http://localhost:8000 (fetch failed)",
+    );
+    expect(screen.getByText(/Status unavailable/)).not.toHaveTextContent("HTTP");
+    // Still a footer-sized failure: the queues rendered and nothing claims the app is down.
+    expect(screen.queryByText(/Backend unreachable/)).not.toBeInTheDocument();
   });
 
   it("does not take the queues down with it when only /health fails", async () => {

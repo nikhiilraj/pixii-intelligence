@@ -5,11 +5,12 @@ from datetime import UTC, date, datetime, time
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlmodel import col, select
 
 from app.api_assets import router as assets_router
+from app.api_drafts import DraftOut, _out
 from app.api_drafts import router as drafts_router
 from app.api_templates import router as templates_router
 from app.config import settings
@@ -22,7 +23,7 @@ from app.corpus import (
 )
 from app.db import engine
 from app.deps import SessionDep
-from app.metrics import sync_metrics, template_performance
+from app.metrics import draft_for_post, sync_metrics, template_performance
 from app.models.draft import Draft
 from app.models.metric import MetricSnapshot
 from app.models.post import Post, PostSource, Verdict
@@ -73,15 +74,34 @@ def database_reachable() -> bool:
 
 @app.get("/health")
 def health() -> dict:
-    """Liveness plus what the app can actually reach.
+    """Liveness plus what the app can actually reach, and the ceilings it will enforce.
 
     The frontend status page renders this directly, so an operator can see at a glance
     whether the database is up and which credentials are configured.
+
+    **Presence flags and scalar ceilings, never a value.** `configured()` reports whether a
+    credential is set and nothing about its content; `variants_max` is a public limit the
+    client has to know to say what a variants run will spend — without it a count control
+    hardcodes 3 and drifts the day the setting changes. Anything added here must be a boolean
+    or a scalar of the same kind. `variants_max` is a **sibling** of `credentials`, not a key
+    inside it: the Inbox footer renders `credentials` row-per-key as a health light, so a
+    number in there would render as a junk boolean.
+
+    `status` is derived, not the literal `"ok"` it used to be: the status row can render a
+    failure (US-007), and a readout structurally incapable of saying anything but "fine" makes
+    that capability unobservable. `database_reachable()` is called once and reused — twice
+    would be two connection attempts that could disagree inside one response.
+
+    ponytail: `degraded` is the only failure word, and credentials do not affect it. Missing
+    credentials break one feature each and are already reported per key; the database is the
+    one dependency without which nothing here answers at all.
     """
+    reachable = database_reachable()
     return {
-        "status": "ok",
-        "database": database_reachable(),
+        "status": "ok" if reachable else "degraded",
+        "database": reachable,
         "credentials": settings.configured(),
+        "variants_max": settings.variants_max,
     }
 
 
@@ -231,6 +251,43 @@ def post_history(session: SessionDep, post_id: int) -> list[MetricSnapshot]:
     return list(session.exec(statement).all())
 
 
+@app.get("/posts/{post_id}/draft")
+def post_draft(session: SessionDep, post_id: int) -> DraftOut | None:
+    """The draft that produced this post, if this app produced it.
+
+    **Three outcomes, not two.** A draft; `null` for a post with no draft behind it; 404 for
+    no such post. The middle one is the *normal* answer here — 57 published posts carry no
+    lineage and zero generated drafts have ever gone live — so it is a 200 with an empty body,
+    not an error. `POST /drafts/retopic` tells the same two apart and answers 409 for the
+    middle case, correctly: re-topicking a post with no recorded templates cannot proceed,
+    while reading one can. What carries over is the distinction and the 404's wording, not
+    the status code.
+
+    This replaces a `GET /drafts?limit=500` plus a `find` in the browser. That join had a
+    silent ceiling: the list is `created_at DESC`, so what fell off the end was the *oldest*
+    drafts — exactly the ones whose posts have been live longest — and the page then said
+    "no draft behind this post" while the draft sat in the database.
+
+    Returns `_out`'s `DraftOut`, the one mapping. `DraftOut` is hand-mapped, so a second
+    shape built here would drift from it the next time a column is added.
+
+    ponytail: `draft_for_post`'s unordered `.first()`, not newest-wins. The browser's `find`
+    over a `created_at DESC` list picked the newest match, and that divergence *dissolves*
+    rather than needing resolving — the browser-side join goes away with this route. Going
+    through the same function `_source_draft` uses is what matters: the draft this shows and
+    the draft a re-topic inherits from can never be different rows. The ceiling is two drafts
+    sharing one `zernio_post_id`, which needs a forced re-push (`publishing.py:74` returns
+    early once the id is set, and each push mints a fresh Zernio id) and would be a data bug
+    rather than a case to choose between. Sorting here would also mean comparing `created_at`
+    values in Python, which is the naive/aware trap `_utc` exists for.
+    """
+    post = session.get(Post, post_id)
+    if post is None:
+        raise HTTPException(status_code=404, detail=f"no post {post_id}")
+    draft = draft_for_post(session, post)
+    return _out(session, draft) if draft else None
+
+
 @app.get("/posts/{post_id}")
 def get_post(post_id: int, session: SessionDep) -> Post:
     post = session.get(Post, post_id)
@@ -269,17 +326,27 @@ class VerdictIn(BaseModel):
     # Typed as the enum, so an unknown value is rejected with a 422 naming the three
     # allowed values rather than being coerced into one of them. What reaches the row is
     # always a `Verdict` member, never a bare string.
-    verdict: Verdict
+    #
+    # `Field(...)` is what makes this **required but nullable**: `null` clears the ruling,
+    # while an empty body or a misspelt key stays a 422. A bare `Verdict | None` would give the
+    # field a default of `None` and turn both of those into a silent wipe of a human's
+    # judgement — a worse bug than the one being fixed.
+    verdict: Verdict | None = Field(...)
     note: str = ""
 
 
 @app.post("/posts/{post_id}/verdict")
 def set_verdict(post_id: int, payload: VerdictIn, session: SessionDep) -> Post:
-    """Record a human's ruling on a post: worked, didnt, or mixed, plus why.
+    """Record a human's ruling on a post: worked, didnt, or mixed, plus why — or clear it.
 
     The only form of learning that is honest at n=1 — a verdict claims judgement, not
     statistics. Re-settable, because a human changes their mind once they have seen how a
     post aged; the later ruling replaces the earlier one and `verdict_at` moves with it.
+
+    `{"verdict": null}` retracts instead, taking the note and the timestamp with it: a note is
+    the reason *for a ruling*, and one left behind after the ruling is gone would keep teaching
+    `generation.verdict_lessons`, which selects on the note being non-empty. The post returns
+    to Inbox queue 4, whose predicate is already `went_live_at is not null and verdict is null`.
 
     ponytail: no verdict history and no audit log. One ruling per post is the real
     cardinality, and a history has no reader until two people use this app.
@@ -297,9 +364,10 @@ def set_verdict(post_id: int, payload: VerdictIn, session: SessionDep) -> Post:
     if post is None:
         raise HTTPException(status_code=404, detail=f"no post {post_id}")
 
+    cleared = payload.verdict is None
     post.verdict = payload.verdict
-    post.verdict_note = payload.note
-    post.verdict_at = datetime.now(UTC)
+    post.verdict_note = "" if cleared else payload.note
+    post.verdict_at = None if cleared else datetime.now(UTC)
     session.add(post)
     session.commit()
     session.refresh(post)
@@ -347,6 +415,15 @@ class Inbox(BaseModel):
     built_awaiting_push: InboxQueue
     pushed_awaiting_monte: InboxQueue
     published_awaiting_verdict: InboxQueue
+
+    # Laps already finished — not a fifth queue, because nothing is waiting behind it. It is
+    # the complement of queue 4 over the same join: a draft that went live whose post now
+    # carries a verdict has been all the way round, generate → push → publish → rule.
+    #
+    # **It is a count of laps, never a score.** Nothing about it ranks or rates a template,
+    # draft or post; it says only whether the machine has ever run end to end. Today it is 0,
+    # and that 0 is the point — see the route.
+    closed_circuits: int
 
 
 # An inbox label identifies a row; it is not a preview. LinkedIn posts in this corpus average
@@ -413,6 +490,12 @@ def inbox(session: SessionDep) -> Inbox:
     Queues 2, 3 and 4 therefore partition the drafts by the two timestamps: not pushed, pushed
     but not live, live but not judged. No draft is ever in two of them, and there is no status
     column that could disagree.
+
+    `closed_circuits` is the fifth thing here and the only one that is not a queue: laps
+    already completed, which is queue 4's join with the verdict present instead of absent. It
+    is **0** against today's database, and reporting that 0 is the point — four empty queues
+    are equally consistent with a circuit that has never run and one that is fully cleared,
+    and until this number existed nothing on the page told them apart.
     """
     # `latest_versions` filtered to PROPOSED — the same definition `GET /templates?status=`
     # now serves, so the page and the list endpoint cannot disagree about what is awaiting
@@ -440,6 +523,21 @@ def inbox(session: SessionDep) -> Inbox:
         .where(col(Draft.went_live_at).is_not(None), col(Post.verdict).is_(None))
     ).all()
 
+    # The same join and the same lineage predicate as queue 4 with `verdict` flipped, so the
+    # two cannot disagree about what a lap is: a post is either still waiting on a ruling or
+    # its circuit is closed. Deliberately not folded into one partitioned read — that would
+    # rewrite a working query for no gain.
+    #
+    # ponytail: `len` over the join rows, not `count(distinct Draft.id)`. `zernio_post_id` and
+    # `late_post_id` are one-to-one in practice — `push_draft` writes one, `stamp_published`
+    # matches one — so a fan-out would be a data bug rather than a lap counted twice. Ceiling
+    # if that ever stops holding: count distinct drafts, since N is defined over drafts.
+    closed = session.exec(
+        select(Post, Draft)
+        .join(Draft, col(Draft.zernio_post_id) == col(Post.late_post_id))
+        .where(col(Draft.went_live_at).is_not(None), col(Post.verdict).is_not(None))
+    ).all()
+
     return Inbox(
         proposals_awaiting_review=_queue(proposals),
         built_awaiting_push=_queue(
@@ -465,6 +563,7 @@ def inbox(session: SessionDep) -> Inbox:
                 if d.went_live_at is not None
             ]
         ),
+        closed_circuits=len(closed),
     )
 
 

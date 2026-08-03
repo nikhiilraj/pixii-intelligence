@@ -181,6 +181,42 @@ def suggest_templates(session: Session, llm: LLM, idea: str) -> Suggestion:
     )
 
 
+def variant_combinations(
+    session: Session, count: int
+) -> list[tuple[Template, Template, Template]]:
+    """Up to `count` distinct approved (hook, structure, visual) combinations to write one idea
+    through — in the order they are produced, which is the only order this slice may have.
+
+    **Rotated, not the cartesian product.** `product(hooks, structures, visuals)[:3]` returns
+    three combinations sharing the first hook and the first structure, so the three drafts would
+    be the same post with three pictures — three billed completions for one comparison. Taking
+    the i-th of each list moves all three axes at once, which is what makes the drafts worth
+    putting side by side at all.
+
+    Deduplicated, so a library offering fewer combinations than asked for returns fewer variants
+    rather than the same combination twice at full price: with one approved template of each kind
+    there is exactly one combination, and three copies of it is three times the spend for one
+    draft. `usable_templates` orders by name, so the rotation is stable across calls.
+
+    ponytail: no diversity metric, no coverage bookkeeping, no memory of what previous batches
+    used. Ceiling: something that picks combinations by what has not been tried lately — which is
+    a different feature and needs a reason to prefer one axis over another.
+    """
+    hooks = _approved(session, TemplateKind.HOOK)
+    structures = _approved(session, TemplateKind.STRUCTURE)
+    visuals = _approved(session, TemplateKind.VISUAL)
+
+    combos: dict[tuple[int | None, ...], tuple[Template, Template, Template]] = {}
+    for index in range(max(count, 0)):
+        combo = (
+            hooks[index % len(hooks)],
+            structures[index % len(structures)],
+            visuals[index % len(visuals)],
+        )
+        combos.setdefault(tuple(t.id for t in combo), combo)
+    return list(combos.values())
+
+
 def _exemplars(session: Session, hook: Template) -> list[Post]:
     """The posts this hook was derived from — the voice the draft should sound like."""
     if not hook.provenance:
@@ -237,8 +273,30 @@ def verdict_lessons(session: Session) -> list[str]:
     return lessons
 
 
-# `lessons` takes no default on purpose. Two functions build this prompt, and a default
-# would let either of them quietly stop passing them with nothing failing.
+# `lessons` takes no default on purpose, here and below. Three prompts now carry them, and a
+# default would let any of them quietly stop passing them with nothing failing.
+def lesson_lines(lessons: list[str]) -> list[str]:
+    """The verdict lessons as prompt lines — and nothing at all when there are none.
+
+    Shared with `autonomous.propose_topics` rather than restated there, so the two prompts
+    frame a ruling identically: one person's judgement about one post, never a measurement.
+    Restating it would let the framing drift on one side, and the framing is the whole
+    guard against a verdict being read as a statistic.
+
+    Returning `[]` for an empty list is the byte-identity guarantee both callers rely on:
+    a prompt built before any verdict existed is unchanged by this code path.
+    """
+    if not lessons:
+        return []
+    return [
+        "\nHuman review notes on individual published posts. Each line is one person's"
+        " judgement about one post, written after it went out — not a measurement, not a"
+        " count, and not evidence about the pattern in general. Weigh each as advice;"
+        " they say nothing about how one template compares to another:",
+        *(f"- {lesson}" for lesson in lessons),
+    ]
+
+
 def _write_prompt(
     idea: str,
     hook: Template,
@@ -264,14 +322,7 @@ def _write_prompt(
     # `---` rule, so anything appended below it reads as commentary on the last post shown.
     # Nothing is appended at all when there are no lessons, which keeps a prompt written
     # before any verdict existed byte-identical to one written after.
-    if lessons:
-        parts.append(
-            "\nHuman review notes on individual published posts. Each line is one person's"
-            " judgement about one post, written after it went out — not a measurement, not a"
-            " count, and not evidence about the pattern in general. Weigh each as advice;"
-            " they say nothing about how one template compares to another:"
-        )
-        parts.extend(f"- {lesson}" for lesson in lessons)
+    parts.extend(lesson_lines(lessons))
     if exemplars:
         parts.append("\nExemplar posts — match this voice, not this content:")
         for post in exemplars:
@@ -450,3 +501,53 @@ def regenerate_visual(
     session.add(draft)
     session.flush()
     return draft
+
+
+def retopic(
+    session: Session,
+    llm: LLM,
+    renderer: HtmlRenderer | ImageRenderer,
+    source: Draft,
+    *,
+    idea: str,
+) -> Draft:
+    """A new draft on a new subject, written through the source's exact templates.
+
+    The pillar this app was asked for: "have the template and hooks and visuals as kind of
+    template so that we can easily recreate them using another topic." Not a rewrite —
+    `regenerate_text` is that, and it deliberately holds one draft's lineage still. This
+    writes a **new row** whose three `(family, version)` pairs are the source's own.
+
+    **Resolved through `generated_from`, never the newest version of the family**, and that
+    is the whole of the slice. Passing `family` alone — or reading `usable_templates` — would
+    write the new draft with v3 while stamping it v1, which is the G2 defect
+    (`regenerate_visual` storing a v3 picture under `visual_version: 2`) reproduced in a
+    route whose entire purpose is to carry a template forward faithfully. The version history
+    is the attribution record, so a retired or superseded version re-topics exactly like a
+    live one: nothing is being *chosen* here, it is being inherited.
+
+    `generate_draft` does the rest — it already takes the three templates as parameters, so
+    there is no second generation path to keep in step with this one. It is handed ids of the
+    resolved rows rather than families, so `_resolve` reads back the same versions.
+
+    ponytail: the source's `asset_values` carry over as the picks. The visual is the *same
+    template row*, so `chosen_assets`' image-slot filter is a no-op here rather than a silent
+    drop, and a re-topic that rendered a `MissingSlotValue` where its source rendered a
+    picture would be useless. Ceiling: choosing different assets for the new subject is the
+    picker's job (US-015), on the draft this returns.
+    """
+    hook = generated_from(session, source.hook_family, source.hook_version)
+    structure = generated_from(session, source.structure_family, source.structure_version)
+    visual = generated_from(session, source.visual_family, source.visual_version)
+    return generate_draft(
+        session,
+        llm,
+        renderer,
+        idea=idea,
+        hook_id=hook.id,
+        structure_id=structure.id,
+        visual_id=visual.id,
+        asset_values=source.asset_values,
+        # `mode` stays "directed": a human supplied this idea. A third value would be a new
+        # partition of every query that reads the column, for no reader.
+    )

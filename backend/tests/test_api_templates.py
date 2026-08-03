@@ -82,7 +82,12 @@ def test_revising_a_retired_template_is_rejected(session):
 
 
 def test_an_unknown_template_is_not_found(session):
-    assert client_with(session).get("/templates/999999/versions").status_code == 404
+    response = client_with(session).get("/templates/999999/versions")
+
+    assert response.status_code == 404
+    # Not the status alone: an unrouted path is a 404 as well, so this passed with the route
+    # renamed away. The detail is what says `_load` refused it.
+    assert response.json()["detail"] == "no template 999999"
     app.dependency_overrides.clear()
 
 
