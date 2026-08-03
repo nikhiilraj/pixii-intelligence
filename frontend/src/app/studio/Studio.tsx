@@ -7,13 +7,27 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { assetSrc, postJson, type Asset, type Draft, type Template } from "@/lib/api";
+import {
+  assetSrc,
+  postForm,
+  postJson,
+  type Asset,
+  type AssetKind,
+  type Draft,
+  type Template,
+} from "@/lib/api";
 
 type Picked = { hook: number | null; structure: number | null; visual: number | null };
 
@@ -90,6 +104,266 @@ export function assetPayload(
     imageSlots(visual)
       .map((slot) => [slot.name, noneOf((chosen[slot.name] ?? "").trim())])
       .filter(([, value]) => value !== ""),
+  );
+}
+
+/** Which assets the picker's search box leaves on screen — label, kind and tags, folded to
+ *  lower case and matched as substrings.
+ *
+ *  Not `filename`: it is a sha256 digest, so nobody can mean it and a hex query would hit rows
+ *  at random. Not `source_post_id` either — a number typed into a search box is a label or a
+ *  size, never a foreign key.
+ *
+ *  A pure function because it is the half of the dialog a jsdom test can hold honestly. The
+ *  grid itself lives in a Radix portal; "typing narrows what is offered" is a claim about this
+ *  list, and this is where it can be made without asserting anything Radix owns.
+ *
+ *  ponytail: substring, not fuzzy, not ranked, not tokenised. Ceiling: a real matcher the day
+ *  the library is long enough that "cool" failing to find "Cooler comparison" is plausible —
+ *  substring already covers that one. */
+export function matches(assets: Asset[], query: string): Asset[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return assets;
+  return assets.filter((asset) =>
+    [asset.label, asset.kind, ...asset.tags].some((field) =>
+      field.toLowerCase().includes(needle),
+    ),
+  );
+}
+
+/** Where an arrow key moves focus in the grid, or `null` for a key the grid does not handle.
+ *
+ *  Linear rather than two-dimensional on purpose: the grid is `auto-fill`, so its column count
+ *  is a function of the rendered width and is not knowable here — a hard-coded row length would
+ *  be wrong at every breakpoint but one. Up/Left step back, Down/Right step forward, and both
+ *  clamp rather than wrap: wrapping from the last tile to the first reads as a jump when
+ *  nothing on screen says the list ended.
+ *
+ *  `index` is `-1` while focus is still in the search field, and a forward key from there lands
+ *  on the first tile — which is what makes type-then-arrow work without a second handler. */
+export function nextIndex(key: string, index: number, count: number): number | null {
+  if (count === 0) return null;
+  if (key === "ArrowRight" || key === "ArrowDown") return Math.min(index + 1, count - 1);
+  if (key === "ArrowLeft" || key === "ArrowUp") return Math.max(index - 1, 0);
+  if (key === "Home") return 0;
+  if (key === "End") return count - 1;
+  return null;
+}
+
+/* ponytail: the five kinds re-declared rather than imported from `assets/AssetLibrary`, for the
+ * reason `assetSrc` was lifted into `lib/api` instead — importing that module here would pull a
+ * whole other client component into this page's bundle for one array. */
+const KINDS: AssetKind[] = ["logo", "product", "screenshot", "brand", "photo"];
+
+/** The picker dialog for one slot: a searchable grid of the library, plus an upload that does
+ *  not leave this page.
+ *
+ *  Mounted only while a slot is being picked for, so its search box and its upload form start
+ *  clean on every open without an effect resetting them — the same reason `chooseVisual` is a
+ *  handler.
+ *
+ *  ponytail: no pagination, no kind filter, no sort, no multi-select, no drag-into-slot, no
+ *  crop. Search plus a grid is the spec; the Assets page is still where the library is managed,
+ *  and this upload deliberately carries no label or tag fields — the API defaults the label to
+ *  the file name. Ceiling: a kind filter beside the search box once the library is long enough
+ *  that searching by kind through the same box is not enough. */
+function AssetPicker({
+  slot,
+  assets,
+  chosen,
+  onPick,
+  onUploaded,
+}: {
+  slot: ImageSlot;
+  assets: Asset[];
+  chosen: string;
+  onPick: (assetId: string) => void;
+  onUploaded: (asset: Asset) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [kind, setKind] = useState<AssetKind>("logo");
+  const [uploading, setUploading] = useState(false);
+
+  const shown = matches(assets, query);
+  const fallback = assets.find((a) => String(a.id) === slot.defaultAssetId);
+
+  /** Arrow keys across the tiles. The tiles are read out of the DOM rather than tracked in
+   *  state: they are already the rendered order, `document.activeElement` already says where
+   *  focus is, and a roving-tabindex state would have to be kept in step with a list the search
+   *  box rewrites on every keystroke.
+   *
+   *  A text field owns Left/Right/Home/End while it has focus — stealing those would break the
+   *  caret in the search box, which is the one control someone is guaranteed to be typing in. */
+  function move(event: React.KeyboardEvent<HTMLDivElement>) {
+    const typing = (event.target as HTMLElement).tagName === "INPUT";
+    if (typing && event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+
+    const tiles = Array.from(
+      event.currentTarget.querySelectorAll<HTMLButtonElement>("[data-tile]"),
+    );
+    const at = nextIndex(event.key, tiles.indexOf(document.activeElement as HTMLButtonElement), tiles.length);
+    if (at === null) return;
+    event.preventDefault();
+    tiles[at]?.focus();
+  }
+
+  async function upload(event: React.FormEvent) {
+    event.preventDefault();
+    if (!file) return;
+
+    const body = new FormData();
+    body.append("file", file);
+    body.append("kind", kind);
+
+    setUploading(true);
+    const result = await postForm<Asset>("/assets", body);
+    setUploading(false);
+
+    if (!result.ok) {
+      // The API's own words — "not a readable image", "not a format this library serves", and
+      // the 422 listing the five kinds are all written for a reader. The form keeps the file it
+      // has, so a refusal is something to retry rather than something to redo.
+      toast.error("Upload failed", { description: result.message });
+      return;
+    }
+
+    // Dedupe is on the bytes, so re-adding a file the library already holds hands back the row
+    // it already has. Both outcomes fill the slot; only this says which happened.
+    toast.success(assets.some((a) => a.id === result.data.id) ? "Already in the library" : "Added to the library", {
+      description: `${result.data.label} — ${result.data.width}×${result.data.height}`,
+    });
+    onUploaded(result.data);
+  }
+
+  return (
+    <DialogContent
+      aria-describedby="picker-fallback"
+      className="max-h-[85vh] max-w-2xl overflow-y-auto"
+    >
+      <DialogTitle>Pick an image for {slot.name}</DialogTitle>
+      <DialogDescription id="picker-fallback">
+        {fallback
+          ? `Picking nothing leaves this slot on the template's own default, “${fallback.label || fallback.kind}”.`
+          : slot.defaultAssetId
+            ? `This template names asset #${slot.defaultAssetId} as the default for this slot, and it is not in the library — pick one, or the visual will not render.`
+            : "This template has no default for this slot, so the visual will not render until something is picked here."}
+      </DialogDescription>
+
+      {/* The search box and the grid under one keydown handler, so ArrowDown out of the field
+          lands on the first result. */}
+      <div className="mt-4" onKeyDown={move}>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="search by label, kind or tag"
+          aria-label="search the library"
+          autoFocus
+          className="min-h-8 w-full rounded-input border border-border bg-transparent px-2 py-1.5 text-meta"
+        />
+
+        {assets.length === 0 ? (
+          <p className="mt-3 text-meta text-muted">
+            Nothing in the library yet. Upload one below and it fills this slot without leaving
+            the page.
+          </p>
+        ) : shown.length === 0 ? (
+          <p className="mt-3 text-meta text-muted">
+            Nothing in the library matches “{query}”. {assets.length} asset
+            {assets.length === 1 ? " is" : "s are"} stored.
+          </p>
+        ) : (
+          /* `minmax(0,…)` and `min-w-0` on every tile, not `minmax(11rem,1fr)` copied off the
+             Assets page: a `1fr` track's implicit `min-width: auto` is min-content, and a tile
+             holding one long unbroken label is exactly the shape that blew `/templates` out to
+             10384px. `wrap-anywhere` on the label is the other half and is not the same fix —
+             `break-words` contributes no soft-wrap opportunity to min-content sizing, so it
+             would let a 320-character token size the track it sits in. */
+          <ul className="mt-3 grid grid-cols-[repeat(auto-fill,minmax(min(8rem,100%),1fr))] gap-2">
+            {shown.map((asset) => (
+              <li key={asset.id} className="min-w-0">
+                <button
+                  type="button"
+                  data-tile
+                  aria-pressed={String(asset.id) === chosen}
+                  onClick={() => onPick(String(asset.id))}
+                  className="flex w-full min-w-0 flex-col gap-1 rounded-input border border-border p-2 text-left transition-colors hover:bg-surface-2 aria-pressed:border-accent aria-pressed:bg-surface-2"
+                >
+                  {/* alt="" — the label is right underneath as real text, so the button already
+                      has an accessible name and repeating it in the alt reads it twice.
+                      A plain <img>: served by the backend at an arbitrary path, the case
+                      next/image is wrong for. The directive must sit immediately above the tag. */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={assetSrc(asset)}
+                    alt=""
+                    className="h-20 w-full rounded-input bg-surface-2 object-contain"
+                  />
+                  <span className="text-caption font-medium wrap-anywhere">
+                    {asset.label || `untitled ${asset.kind}`}
+                  </span>
+                  <span className="text-caption text-muted">
+                    {asset.kind}
+                    {String(asset.id) === slot.defaultAssetId ? " — template default" : ""}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {/* Only where there is a default to fall back to. A slot without one has no third state:
+            an omitted slot with no default is what `chosen_assets` leaves absent and `fill()`
+            raises `MissingSlotValue` for, so a "no image" tile would promise a render that
+            cannot happen. */}
+        {slot.defaultAssetId && chosen !== "" && (
+          <Button variant="outline" className="mt-3" onClick={() => onPick("")}>
+            Use the template&apos;s default
+          </Button>
+        )}
+      </div>
+
+      {/* Upload-in-place. ponytail: one file input and the kind, no dropzone, no label or
+          tag fields, no progress — the API downscales anything over 1600px and defaults the
+          label to the file name, and the Assets page is where a library gets curated. `kind` is
+          the one field with no honest default: it is required by `POST /assets` and filing a
+          logo as a photo is wrong data, not a cosmetic choice. */}
+      <form onSubmit={upload} className="mt-5 flex flex-wrap items-center gap-2 border-t border-border pt-4">
+        {/* `sr-only` on the input, with the `<label>` showing the chosen file — AssetLibrary's
+            finding, and it applies here for the reason this whole slice exists: the native
+            widget's own chrome (a grey OS button reading "Choose file" beside "No file chosen")
+            would be the one unstyled control left in this dialog, sitting between a tokenised
+            Select and a tokenised Button. Every behaviour survives — a label click opens the
+            file picker and the input keeps keyboard focus. `has-[:focus-visible]` is not
+            decoration: the input is clipped to 1px, so the global ring would draw around nothing
+            and a keyboard user would see nothing move. */}
+        <label className="flex min-h-8 min-w-0 flex-1 cursor-pointer items-center rounded-input border border-dashed border-border px-2 py-1.5 text-meta transition-colors hover:bg-surface-2 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent-text">
+          <span className="min-w-0 truncate">{file ? file.name : "Choose an image to add"}</span>
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/gif,image/webp"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            aria-label="image file"
+            className="sr-only"
+          />
+        </label>
+        <Select value={kind} onValueChange={(v) => setKind(v as AssetKind)}>
+          <SelectTrigger aria-label="kind">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {KINDS.map((k) => (
+              <SelectItem key={k} value={k}>
+                {k}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button type="submit" disabled={uploading || !file}>
+          {uploading ? "Uploading…" : "Upload and use"}
+        </Button>
+      </form>
+    </DialogContent>
   );
 }
 
@@ -353,6 +627,25 @@ export default function Studio({
   const [batch, setBatch] = useState<Batch | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [assetValues, setAssetValues] = useState<Record<string, string>>({});
+  // The library, seeded from the prop and grown by an upload made from inside the picker. State
+  // rather than the prop directly, because an asset uploaded here has to be pickable, and
+  // nameable in the Lineage under the draft, without a round trip through the server component.
+  //
+  // `null` still means the read failed and is still not the same as an empty library — which is
+  // why the upload lives only inside the picker, and the picker only opens when this is a list:
+  // adding a row to a library that could not be read would turn a failed request into the claim
+  // that the library holds exactly one thing.
+  const [library, setLibrary] = useState<Asset[] | null>(assets);
+  // The slot a picker dialog is open for, or `null`. One Dialog for the whole form rather than
+  // one per slot — AssetLibrary's reason: N dialogs is N overlays and N focus traps for one
+  // decision.
+  //
+  // Nulling it on close is what unmounts `AssetPicker`, which is what resets the search box and
+  // the upload form for the next open. Radix's own Presence does not do that for us here: it
+  // unmounts the portalled content, but `AssetPicker` is our element and its hooks live one
+  // fiber above the boundary, so holding the slot across a close keeps the previous search
+  // string on screen the next time the dialog opens. Measured, not assumed.
+  const [picking, setPicking] = useState<ImageSlot | null>(null);
 
   const approved = templates.filter((t) => t.status === "approved");
   const of = (kind: Template["kind"]) => approved.filter((t) => t.kind === kind);
@@ -443,77 +736,107 @@ export default function Studio({
              and a visual left to be suggested is filled from the template's own defaults on
              the server instead.
 
-             ponytail: one `Select` per slot with a thumbnail beside it, matching the three
-             template selects above it — which is the whole reason this moved in the same slice
-             they did. Still no search, no recent-assets memory, no drag-into-slot, no
-             grid-of-thumbnails dialog. Ceiling: US-015 replaces this with a picker dialog when
-             the library outgrows a dropdown; a thumbnail-per-row list is fine at 2 assets and
-             unusable at 200. */
+             One button per slot, opening a searchable grid — US-015, and it replaces the
+             `Select` per slot that shipped alongside the three template selects. A dropdown of
+             text rows is fine at 2 assets and unusable at 200: the thing being chosen is a
+             picture, so the control has to show pictures.
+
+             ponytail: the button is a button, not a Radix anything. It opens one dialog and
+             shows what is currently picked; there is no combobox behaviour to inherit. */
           <div className="space-y-3 rounded-lg border border-black/10 p-3 dark:border-white/15">
             <div className="text-xs font-medium uppercase tracking-widest opacity-50">
               Images — {slots.length} slot{slots.length === 1 ? "" : "s"}
             </div>
 
-            {assets === null ? (
+            {library === null ? (
               <p className="text-sm text-amber-700 dark:text-amber-400">
                 The asset library could not be read, so there is nothing to pick from. This is a
                 failed request, not an empty library — the visual will not render until it is
                 readable.
               </p>
-            ) : assets.length === 0 ? (
-              <p className="text-sm text-amber-700 dark:text-amber-400">
-                Nothing in the library yet. This template has an image slot, so it cannot render
-                until an asset is uploaded on the Assets page.
-              </p>
             ) : (
-              slots.map((slot) => {
-                const chosen = assets.find((a) => String(a.id) === assetValues[slot.name]);
-                return (
-                  <div key={slot.name} className="flex items-center gap-2">
-                    {chosen ? (
-                      // A plain <img>: served by the backend at an arbitrary path, the case
-                      // next/image is wrong for. The directive has to sit immediately above the
-                      // tag — anything between them makes it an unused directive.
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={assetSrc(chosen)}
-                        alt={`${slot.name}: ${chosen.label || chosen.kind}`}
-                        className="h-10 w-10 shrink-0 rounded-md border border-black/10 object-contain dark:border-white/15"
-                      />
-                    ) : (
-                      <span
-                        aria-hidden
-                        className="h-10 w-10 shrink-0 rounded-md border border-dashed border-black/15 dark:border-white/20"
-                      />
-                    )}
-                    <Select
-                      value={assetValues[slot.name] || NONE}
-                      onValueChange={(value) =>
-                        setAssetValues({ ...assetValues, [slot.name]: noneOf(value) })
-                      }
+              <>
+                {library.length === 0 && (
+                  <p className="text-sm text-amber-700 dark:text-amber-400">
+                    Nothing in the library yet. This template has an image slot, so it cannot
+                    render until an asset is added — the picker below uploads one without
+                    leaving this page.
+                  </p>
+                )}
+
+                {slots.map((slot) => {
+                  const chosen = library.find((a) => String(a.id) === assetValues[slot.name]);
+                  return (
+                    /* `aria-label={slot.name}` on the button and the asset's label as its text:
+                       the same two properties the Select trigger carried, so what a reader —
+                       and a test — anchors on does not change with the control. */
+                    <button
+                      key={slot.name}
+                      type="button"
+                      aria-label={slot.name}
+                      onClick={() => setPicking(slot)}
+                      className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-input border border-border px-2 py-1.5 text-left text-meta transition-colors hover:bg-surface-2"
                     >
-                      {/* `flex-1 min-w-0`, not `w-full`: this row is a flex line with a 40px
-                          thumbnail in it, so a full-width trigger would push itself past the
-                          column. `min-w-0` is what lets the label truncate instead. */}
-                      <SelectTrigger aria-label={slot.name} className="min-w-0 flex-1">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value={NONE}>{slot.name} — pick an asset</SelectItem>
-                        {assets.map((a) => (
-                          <SelectItem key={a.id} value={String(a.id)}>
-                            {a.label || `untitled ${a.kind}`} ({a.kind})
-                            {String(a.id) === slot.defaultAssetId ? " — template default" : ""}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                );
-              })
+                      {chosen ? (
+                        // A plain <img>: served by the backend at an arbitrary path, the case
+                        // next/image is wrong for. The directive has to sit immediately above
+                        // the tag — anything between them makes it an unused directive.
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={assetSrc(chosen)}
+                          alt=""
+                          className="h-10 w-10 shrink-0 rounded-md border border-black/10 object-contain dark:border-white/15"
+                        />
+                      ) : (
+                        <span
+                          aria-hidden
+                          className="h-10 w-10 shrink-0 rounded-md border border-dashed border-black/15 dark:border-white/20"
+                        />
+                      )}
+                      {/* `min-w-0` + `truncate`: this row is a flex line inside the `1fr`
+                          column, so a long unbroken label has to be cut rather than allowed to
+                          size the track. */}
+                      <span className="min-w-0 flex-1 truncate">
+                        {chosen
+                          ? `${chosen.label || `untitled ${chosen.kind}`} (${chosen.kind})`
+                          : `${slot.name} — pick an asset`}
+                      </span>
+                    </button>
+                  );
+                })}
+              </>
             )}
           </div>
         )}
+
+        {/* Mounted only while a slot is being picked for, so the search box and the upload form
+            are fresh on every open with no effect resetting them, and only one picker's state
+            exists at a time. `Dialog.Root` renders no element of its own, so this sits inside
+            the column's `space-y-3` without adding a gap. */}
+        <Dialog open={picking !== null} onOpenChange={(open) => !open && setPicking(null)}>
+          {picking && (
+            <AssetPicker
+              slot={picking}
+              assets={library ?? []}
+              chosen={assetValues[picking.name] ?? ""}
+              onPick={(assetId) => {
+                // `noneOf` for the same reason `assetPayload` still runs it: `""` is what an
+                // unpicked slot is, and one spelling of "nothing here" is one fewer way for a
+                // slot to be sent as a pick of nothing that shadows the template default.
+                setAssetValues({ ...assetValues, [picking.name]: noneOf(assetId) });
+                setPicking(null);
+              }}
+              onUploaded={(asset) => {
+                // Prepended, and de-duplicated by id: `POST /assets` answers with the row it
+                // already had when the bytes match, and a second copy in this list would be a
+                // library this page invented.
+                setLibrary([asset, ...(library ?? []).filter((a) => a.id !== asset.id)]);
+                setAssetValues({ ...assetValues, [picking.name]: String(asset.id) });
+                setPicking(null);
+              }}
+            />
+          )}
+        </Dialog>
 
         <div className="flex flex-wrap gap-2">
           <Button
@@ -529,8 +852,13 @@ export default function Studio({
               if (s) {
                 setPicked({ hook: s.hook.id, structure: s.structure.id, visual: s.visual.id });
                 // A suggested visual brings its own image slots, so the picker has to be reset
-                // to that template's defaults exactly as choosing one by hand does.
-                setAssetValues(defaultAssetValues(templates.find((t) => t.id === s.visual.id)));
+                // to that template's defaults exactly as choosing one by hand does — through
+                // `chooseVisual` itself rather than through a second copy of its body. This was
+                // two copies of the same two lines, and the copies are not equally covered: a
+                // Radix trigger cannot be driven in jsdom, so the Select path is reachable in a
+                // test *only* through here. A mutation that broke `chooseVisual` was caught by
+                // nothing while the duplicate stood.
+                chooseVisual(s.visual.id);
                 setReason(s.reason);
               }
             }}
@@ -616,7 +944,7 @@ export default function Studio({
              decision in it. */
           <Variants
             batch={batch}
-            assets={assets}
+            assets={library}
             busy={busy}
             onKeep={async (kept) => {
               const d = await call<Draft>("/drafts/variants/keep", {
@@ -637,7 +965,7 @@ export default function Studio({
           />
         ) : draft ? (
           <>
-            <Lineage draft={draft} assets={assets} />
+            <Lineage draft={draft} assets={library} />
 
             {draft.zernio_post_id && (
               <p className="text-xs opacity-60">
