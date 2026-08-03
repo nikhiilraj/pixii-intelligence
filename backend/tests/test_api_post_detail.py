@@ -53,6 +53,10 @@ def test_an_unknown_post_is_not_found(session):
     response = client_with(session).get("/posts/999999")
 
     assert response.status_code == 404
+    # The detail, not just the status. FastAPI answers 404 for an unrouted path too, so a
+    # status-only assertion passes with the route deleted — measured: renaming this route
+    # left the assertion green. The body is the only proof the handler ran.
+    assert response.json()["detail"] == "no post 999999"
     app.dependency_overrides.clear()
 
 
@@ -72,6 +76,7 @@ def test_excluding_an_unknown_post_is_not_found(session):
     response = client_with(session).post("/posts/999999/exclude", json={"excluded": True})
 
     assert response.status_code == 404
+    assert response.json()["detail"] == "no post 999999"
     app.dependency_overrides.clear()
 
 

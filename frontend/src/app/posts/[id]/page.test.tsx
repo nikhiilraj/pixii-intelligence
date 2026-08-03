@@ -199,14 +199,31 @@ describe("a post with a draft behind it", () => {
   });
 
   it("reports the readings behind the curve rather than implying a measurement", async () => {
+    /* Two syncs on the same day, hours apart — which is what the 6h sync interval produces and
+       what the date-carrying label exists for. NOT the 21:22:25 / 21:22:26 pair this fixture
+       used to carry: `readingLabel` has minute resolution, so those two really do render
+       identically, and an assertion that they differ cannot pass. Worth stating rather than
+       hiding, because `Readings`' own docstring implies the opposite. */
     stubFetch({
       draft: draft(),
-      history: [snapshot("2026-07-28T21:22:25", 185), snapshot("2026-07-28T21:22:26", 185)],
+      history: [snapshot("2026-07-28T09:15:00", 185), snapshot("2026-07-28T21:22:25", 185)],
     });
 
     render(await renderPage());
 
-    expect(screen.getByText(/2 readings/)).toBeInTheDocument();
+    // The window, both ends, and they must differ: every snapshot in the database was written
+    // by syncs on one day — two of them a second apart — so a date-only label prints two
+    // distinct readings identically and the caption reads "21:22 → 21:22". Dropping the time
+    // from the formatter, and rendering `first` at both ends, each left this test green.
+    const caption = screen.getByText(/2 readings/).textContent!;
+    // Non-greedy on both ends: the flat-series sentence that follows carries its own full stop,
+    // and a greedy `(.+)\.` swallows it — which made the first version of this assertion pass
+    // with both ends rendering the same label. Measured, and then fixed.
+    const [, from, to] = caption.match(/^2 readings, (.+?) → (.+?)\./)!;
+    expect(from).not.toBe(to);
+    // And both ends carry a clock time, not a bare date.
+    expect(from).toMatch(/\d{2}:\d{2}/);
+    expect(to).toMatch(/\d{2}:\d{2}/);
     // Both readings carry the same number, and a flat line that does not say so reads as
     // "engagement stopped" instead of "measured twice, effectively once".
     expect(screen.getByText(/unchanged across all of them/)).toBeInTheDocument();
@@ -246,6 +263,32 @@ describe("a post with a draft behind it", () => {
     });
   });
 
+  it("hands the stored ruling and the exclusion state to the forms that own them", async () => {
+    /* Wiring, and it is the same class as the `source_post_id` assertion above: both forms
+       take their state as props from this page, and both render plausibly with the wrong one.
+       A `note=""` silently erases the reason a human wrote the moment they change the ruling —
+       `VerdictForm` seeds its textarea from the prop and the route assigns the note it is
+       sent, unconditionally. An `excluded={false}` offers to hold out a post already held out.
+       Measured: hardcoding either left the whole suite green. */
+    stubFetch({
+      post: post({
+        verdict: "mixed",
+        verdict_note: "the opening number did the work",
+        excluded_from_extraction: true,
+      }),
+      draft: null,
+      history: [],
+    });
+
+    render(await renderPage());
+
+    expect(screen.getByText("Recorded: Mixed")).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Why/)).toHaveValue("the opening number did the work");
+    expect(
+      screen.getByRole("button", { name: "Let back into extraction" }),
+    ).toBeInTheDocument();
+  });
+
   it("says a curve needs readings when none were ever taken", async () => {
     stubFetch({ draft: draft(), history: [] });
 
@@ -263,6 +306,31 @@ describe("a post with a draft behind it", () => {
    exactly the ones whose posts have been live longest and are most likely to be read here. A
    post would then have rendered "no draft behind this post" while its draft sat in the
    database. `GET /posts/{id}/draft` answers the same question with no list and no limit. */
+/* The media block, which had no test: a `.mov` rendered as an `<img>` and a path served off
+   the wrong mount both leave a broken box on the page, and 3 of the 62 files in `media/` are
+   `.mp4`. Both mutations survived the whole suite. */
+describe("the post's own media", () => {
+  it("serves an image off the /media mount, with an alt that names the post", async () => {
+    stubFetch({ post: post({ local_media_path: "a1.png" }), draft: null, history: [] });
+
+    render(await renderPage());
+
+    const image = screen.getByAltText("Media for post 6a303ac95f7d1751abc3034b");
+    expect(image.tagName).toBe("IMG");
+    expect(image).toHaveAttribute("src", "http://localhost:8000/media/a1.png");
+  });
+
+  it("renders a video as a video, not as an image that cannot load", async () => {
+    stubFetch({ post: post({ local_media_path: "clip.mov" }), draft: null, history: [] });
+
+    const { container } = render(await renderPage());
+
+    const video = container.querySelector("video");
+    expect(video).toHaveAttribute("src", "http://localhost:8000/media/clip.mov");
+    expect(container.querySelector("figure img")).toBeNull();
+  });
+});
+
 describe("which request answers the lineage question", () => {
   it("asks the route for this post's draft, and never for the drafts list", async () => {
     const fetchMock = stubFetch({ draft: draft(), history: [] });
@@ -307,6 +375,38 @@ describe("a post with no draft behind it", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByText(/Request failed/i)).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/history"))).toBe(false);
+  });
+});
+
+/* The bug US-003 exists for, at the one place this app still calls `notFound()`: only a real
+   404 is a missing post. Every other failure used to arrive as `null` and rendered "this page
+   could not be found", which is a wrong answer wearing the shape of a right one. Nothing tested
+   it — every fixture in this file answers the post read with a 200, so widening the predicate
+   to any HTTP failure left the suite green. */
+describe("when the post itself cannot be read", () => {
+  it("reports a 500 rather than claiming the post does not exist", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(500, { detail: "the database went away" }))),
+    );
+
+    render(await renderPage());
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Request failed — HTTP 500");
+    expect(screen.getByRole("alert")).toHaveTextContent("the database went away");
+    // The back link survives, because it is the one thing that still works.
+    expect(screen.getByRole("link", { name: "← Corpus" })).toBeInTheDocument();
+  });
+
+  it("still routes a genuine 404 to the not-found UI", async () => {
+    // The other direction, and without it the test above passes on a page that never calls
+    // `notFound()` at all. The mock at the top of this file throws for it.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(404, { detail: "no post 95" }))),
+    );
+
+    await expect(renderPage()).rejects.toThrow("notFound");
   });
 });
 

@@ -119,6 +119,36 @@ describe("a failed upload", () => {
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
 
+  it("sends the file, the kind, the label and one field per tag", async () => {
+    /* The multipart body had no assertion anywhere: `tagList` is tested as a function, but
+       nothing checked that the form uses it. `tags: list[str] | None` from `Form()` reads the
+       key once per value, so one comma-joined field stores a single tag called "brand,orange"
+       — accepted, stored, and wrong. Measured: joining them, and dropping the label outright,
+       both left this suite green. */
+    const fetchStub = stubFetch(jsonResponse(200, asset({ id: 31 })), jsonResponse(200, []));
+    render(<AssetLibrary initial={[]} />);
+
+    chooseFile();
+    fireEvent.change(screen.getByLabelText("label"), { target: { value: "Pixii wordmark" } });
+    fireEvent.change(screen.getByLabelText("tags"), { target: { value: " brand, orange " } });
+    fireEvent.click(screen.getByRole("button", { name: "Upload" }));
+
+    await waitFor(() => expect(fetchStub).toHaveBeenCalled());
+    const body = (fetchStub.mock.calls[0] as unknown as [string, RequestInit])[1]
+      .body as FormData;
+    expect((body.get("file") as File).name).toBe("wordmark.png");
+    expect(body.get("kind")).toBe("logo");
+    expect(body.get("label")).toBe("Pixii wordmark");
+    expect(body.getAll("tags")).toEqual(["brand", "orange"]);
+
+    // And the grid is re-read rather than optimistically prepended: the new row may not match
+    // the active filter, and showing it anyway would misdescribe what the filter says.
+    await waitFor(() => expect(fetchStub).toHaveBeenCalledTimes(2));
+    const [url, init] = fetchStub.mock.calls[1] as unknown as [string, RequestInit | undefined];
+    expect(String(url)).toBe("http://localhost:8000/assets");
+    expect(init?.method).toBeUndefined();
+  });
+
   it("reports a dedupe as a dedupe rather than as a fresh upload", async () => {
     // `POST /assets` answers 200 with the row it already had when the bytes match. Both
     // outcomes look identical in the grid, so the only place the difference can be told is
@@ -155,6 +185,29 @@ describe("a failed read", () => {
     // The previous result is still on screen, and no claim is made about emptiness.
     expect(screen.getByAltText("Pixii wordmark — logo")).toBeInTheDocument();
     expect(screen.queryByText(/No assets/)).not.toBeInTheDocument();
+    // And the failure is on the page, not only in a toast that fades. The toast alone was all
+    // this test held: dropping the `failed` state entirely left it green, taking the card, the
+    // retry and the empty-state suppression with it.
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Could not read the library — the assets below are the previous result.",
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("database is not reachable");
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
+  it("withholds the empty-library claim when the failed read left nothing on screen", async () => {
+    /* The suppression, where it is actually observable. Above, the grid keeps a previous row,
+       so the empty state is absent because there is something to draw — the `!failed` guard is
+       not what is being tested. Here the grid is genuinely empty AND the read failed, which is
+       the only state that tells "we have nothing" from "we could not find out". */
+    stubFetch(jsonResponse(500, { detail: "database is not reachable" }));
+    render(<AssetLibrary initial={[]} />);
+
+    fireEvent.change(screen.getByLabelText("filter by tag"), { target: { value: "cream" } });
+
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    expect(screen.queryByText(/No assets yet/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No assets match that filter/)).not.toBeInTheDocument();
   });
 
   it("still says the filter matched nothing when the request genuinely succeeds empty", async () => {
@@ -201,6 +254,17 @@ describe("a failed read", () => {
     render(<AssetLibrary initial={[]} />);
 
     expect(screen.getByText("No assets yet — upload a logo or a product shot.")).toBeInTheDocument();
+    // The count is the only confirmation a filter took effect, and "0 assets" is the one
+    // reading of it that also has to be right when the plural branch is deleted.
+    expect(screen.getByText("0 assets")).toBeInTheDocument();
+  });
+
+  it("says '1 asset', not '1 assets'", () => {
+    // The singular is the only count that can catch the plural: every other fixture here has
+    // 0 or 2 rows, so dropping the branch entirely read the same.
+    render(<AssetLibrary initial={[asset()]} />);
+
+    expect(screen.getByText("1 asset")).toBeInTheDocument();
   });
 });
 
@@ -252,5 +316,9 @@ describe("deleting", () => {
     const [url, init] = fetchStub.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("http://localhost:8000/assets/1");
     expect(init.method).toBe("DELETE");
+
+    // And the confirmation closes. Left open it offers to delete a row that is already gone,
+    // over a grid that has just been re-read without it.
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 });

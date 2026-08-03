@@ -8,7 +8,7 @@ from sqlmodel import Session, col, select
 from app.api_drafts import DraftOut, _renderer
 from app.config import settings
 from app.db import get_session
-from app.deps import get_html_renderer, get_llm
+from app.deps import get_html_renderer, get_llm, get_zernio
 from app.generation import (
     LESSON_LIMIT,
     NoUsableTemplates,
@@ -25,6 +25,7 @@ from app.main import app
 from app.models.draft import Draft
 from app.models.post import Post, Verdict
 from app.models.template import TemplateKind, TemplateStatus
+from app.publishing import PushFailed
 from app.templates import approve, create_template, edit_template, retire
 from tests.test_rendering import renderer_capturing
 
@@ -707,6 +708,21 @@ def test_the_renderer_is_chosen_from_the_recorded_version_too(session):
     assert _renderer(session, draft, html_renderer, image_renderer) is html_renderer
 
 
+def test_a_draft_recording_no_version_refuses_rather_than_picking_one(session):
+    """The other half of `generated_from`'s guard, and it was uncovered: deleting the
+    `version is None` branch left the suite green, and without it the query becomes
+    `Template.version == None`, which matches nothing and reports "v None no longer exists" —
+    a message about a version the draft never had. The two states are different facts.
+    """
+    _, _, visual = library(session)
+    draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    draft.visual_version = None
+    session.flush()
+
+    with pytest.raises(NoUsableTemplates, match="records no version"):
+        regenerate_visual(session, draft, renderer_capturing({}))
+
+
 def test_a_recorded_version_that_is_gone_refuses_rather_than_redrawing_another(session):
     """The one case a redraw cannot be faithful in. It must not fall back to a sibling
     version — that is exactly the mis-attribution being fixed."""
@@ -975,6 +991,67 @@ def test_a_post_this_app_did_not_generate_has_no_templates_to_inherit(client, se
     assert str(post.id) in response.json()["detail"]
 
 
+def test_pushing_an_unknown_draft_says_which_one(client, session):
+    """`POST /drafts/{id}/push` had no HTTP test at all — renaming the route away left the
+    whole backend suite green. `push_draft` itself is covered in test_publishing.py; the route
+    around it, which is what Studio's one irreversible button calls, was not.
+    """
+    response = client.post("/drafts/987654/push")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "no draft 987654"
+
+
+def test_a_refused_push_is_a_502_carrying_zernios_reason(client, session):
+    """`PushFailed` -> 502, with the reason. A push that failed and answered 200 would leave
+    the draft in Inbox queue 2 while the operator believes it reached Zernio.
+    """
+    library(session)
+    with_fakes()
+    draft = client.post("/drafts", json={"idea": IDEA}).json()
+
+    class Refusing:
+        def create_post(self, *args, **kwargs):
+            raise PushFailed("Zernio returned no post id")
+
+    app.dependency_overrides[get_zernio] = Refusing
+    try:
+        response = client.post(f"/drafts/{draft['id']}/push")
+    finally:
+        app.dependency_overrides.pop(get_zernio, None)
+
+    assert response.status_code == 502
+    assert "no post id" in response.json()["detail"]
+    # And nothing was recorded: an unpushed draft must not carry a Zernio id.
+    assert client.get(f"/drafts/{draft['id']}").json()["zernio_post_id"] is None
+
+
+def test_suggesting_with_nothing_approved_is_a_conflict(client, session):
+    """`POST /drafts/suggest` had no HTTP test either. Studio calls it before every generate,
+    and a 409 is what the empty-library state depends on — `NoUsableTemplates` reaching the
+    client as a 500 would render as "request failed" instead of the reason.
+    """
+    with_fakes()
+
+    response = client.post("/drafts/suggest", json={"idea": IDEA})
+
+    assert response.status_code == 409
+    assert response.json()["detail"] != ""
+
+
+def test_reading_an_unknown_draft_says_which_one(client, session):
+    """`GET /drafts/{id}` had happy-path readers in three files and no 404 test anywhere.
+
+    Studio renders this detail verbatim — `?draft=999` shows "HTTP 404: no draft 999" — so the
+    sentence is a contract, not an implementation detail. The status alone would not do: an
+    unrouted path answers 404 too.
+    """
+    response = client.get("/drafts/987654")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "no draft 987654"
+
+
 def test_the_retopic_endpoint_needs_exactly_one_source(client, session):
     library(session)
 
@@ -983,9 +1060,12 @@ def test_the_retopic_endpoint_needs_exactly_one_source(client, session):
         "/drafts/retopic",
         json={"idea": NEW_IDEA, "source_draft_id": 1, "source_post_id": 1},
     ).status_code == 422
-    assert client.post(
+    unknown = client.post(
         "/drafts/retopic", json={"idea": NEW_IDEA, "source_draft_id": 987654}
-    ).status_code == 404
+    )
+    assert unknown.status_code == 404
+    # The 422s above already prove the route is mounted; this names which id was refused.
+    assert unknown.json()["detail"] == "no draft 987654"
 
 
 def test_a_retopic_from_a_vanished_version_is_a_conflict_not_a_redraw_of_another(
@@ -1218,6 +1298,9 @@ def test_an_unknown_discard_id_deletes_nothing(client, session, monkeypatch):
     )
 
     assert response.status_code == 404
+    # The detail as well as the status: an unrouted path answers 404 and leaves the three rows
+    # untouched too, so both assertions above pass with this route deleted. Measured.
+    assert response.json()["detail"] == "no draft 987654"
     assert len(all_drafts(session)) == 3
 
 

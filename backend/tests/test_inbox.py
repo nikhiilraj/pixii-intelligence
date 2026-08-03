@@ -333,6 +333,21 @@ def test_a_ruled_post_with_no_draft_behind_it_closes_no_circuit(client, session)
     assert queues(client)["closed_circuits"] == 0
 
 
+def test_a_ruled_post_whose_draft_never_went_live_closes_no_circuit(client, session):
+    """The other half of the predicate, and the half nothing covered. A lap needs BOTH
+    `went_live_at` and a verdict; a counter that only checked the verdict would count this
+    post, whose draft was pushed to Zernio and never published. That is the pushed-awaiting-
+    Monte gate — the one gate this app cannot clear itself — being reported as a closed lap.
+    """
+    a_draft(session, zernio_post_id="late-live", pushed_at=days_ago(2), went_live_at=None)
+    a_post(session, late_post_id="late-live", published_at=days_ago(1), verdict=Verdict.WORKED)
+
+    body = queues(client)
+
+    assert body["closed_circuits"] == 0
+    assert ids(body["pushed_awaiting_monte"]) != []
+
+
 def test_a_live_draft_still_awaiting_a_verdict_closes_no_circuit(client, session):
     """The lap is not closed until it is ruled on, which is why the counter and queue 4 are
     complements over the same join rather than the same query: the post below is in the queue
@@ -404,6 +419,19 @@ def test_the_oldest_item_comes_first(client, session):
 
 def test_an_item_younger_than_a_day_reports_zero_rather_than_failing(client, session):
     a_draft(session, created_at=days_ago(0.25))
+
+    assert queues(client)["built_awaiting_push"]["items"][0]["age_days"] == 0
+
+
+def test_a_timestamp_in_the_future_reports_zero_rather_than_a_negative_age(client, session):
+    """The `max(..., 0)` in `_queue`, which nothing exercised: `days_ago(0.25)` above floors to
+    0 with or without it, so the clamp was uncovered and a mutation removing it survived.
+
+    Not hypothetical — the row's `created_at` is written by whichever machine made it and the
+    age is measured against the API host's clock, so a skew of seconds is enough. "waiting -1
+    days" on the one page whose only number is an age is a visible bug.
+    """
+    a_draft(session, created_at=days_ago(-2))
 
     assert queues(client)["built_awaiting_push"]["items"][0]["age_days"] == 0
 

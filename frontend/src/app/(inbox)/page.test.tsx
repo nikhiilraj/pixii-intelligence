@@ -136,6 +136,33 @@ describe("the four queues", () => {
     expect(screen.queryByText(/waiting 0 days/)).not.toBeInTheDocument();
   });
 
+  it("marks a gate stalled at seven days and not at six", async () => {
+    /* The stall threshold had no test at all: raising STALLED_DAYS to 700, and moving `>=` to
+       `>`, both left the suite green. Both ends are asserted because an off-by-one here is the
+       likely mistake, and 7 is exactly where "in progress" stops being a plausible reading.
+
+       This is a colour-only signal — the Badge tints, the words do not change — so what a jsdom
+       test can honestly hold is the variant class the Badge was given. It is NOT a claim about
+       the rendered colour or the contrast; those need a browser. */
+    stubFetch({
+      inbox: jsonResponse(
+        200,
+        inbox({
+          built_awaiting_push: {
+            count: 2,
+            items: [item(1, "Six days", 6), item(2, "Seven days", 7)],
+          },
+        }),
+      ),
+    });
+
+    render(await InboxPage());
+
+    expect(screen.getByText("waiting 6 days")).toHaveClass("bg-surface-2");
+    expect(screen.getByText("waiting 6 days")).not.toHaveClass("bg-warning/15");
+    expect(screen.getByText("waiting 7 days")).toHaveClass("bg-warning/15");
+  });
+
   it("shows each queue's designed empty state when it is genuinely empty", async () => {
     stubFetch({ inbox: jsonResponse(200, inbox()) });
 
@@ -345,6 +372,45 @@ describe("the health footer", () => {
     // are different states and must read differently — the transport-failure sentences belong
     // to the /health-never-arrived path, not to this one.
     expect(screen.queryByText(/Status unavailable/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Backend unreachable/)).not.toBeInTheDocument();
+  });
+
+  it("says the database is down when the backend reports it is", async () => {
+    // Every other fixture in this file has `database: true`, so hardcoding the row to "ok"
+    // survived them all. `status` stays "ok" here for the same reason the API test above sets
+    // everything else green: the only "down" on the page must be the one being asserted.
+    stubFetch({
+      inbox: jsonResponse(200, inbox()),
+      health: jsonResponse(200, {
+        status: "ok",
+        database: false,
+        credentials: { zernio: true },
+        variants_max: 3,
+      }),
+    });
+
+    render(await InboxPage());
+
+    expect(screen.getByText("Database")).toHaveTextContent("down");
+    expect(screen.getByText("API")).toHaveTextContent("ok");
+  });
+
+  it("names the address when /health could not be reached at all", async () => {
+    // The footer's other failure branch, which nothing exercised — the 503 test below covers
+    // only the HTTP half, so collapsing the two into one sentence went unnoticed. A transport
+    // failure has no status to report, and saying "HTTP undefined" is the shape being refused.
+    stubFetch({
+      inbox: jsonResponse(200, inbox()),
+      health: new TypeError("fetch failed"),
+    });
+
+    render(await InboxPage());
+
+    expect(screen.getByText(/Status unavailable/)).toHaveTextContent(
+      "could not reach http://localhost:8000 (fetch failed)",
+    );
+    expect(screen.getByText(/Status unavailable/)).not.toHaveTextContent("HTTP");
+    // Still a footer-sized failure: the queues rendered and nothing claims the app is down.
     expect(screen.queryByText(/Backend unreachable/)).not.toBeInTheDocument();
   });
 
