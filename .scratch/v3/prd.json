@@ -262,7 +262,7 @@
     "id": "US-020",
     "title": "Test integrity - hunt what is green and proves nothing",
     "priority": 20,
-    "passes": false,
+    "passes": true,
     "description": "Three times this run a green suite proved nothing: make check never ran the frontend suite, two Studio assertions queried a detached DocumentFragment, and a surviving mutation revealed chooseVisual had zero coverage because Suggest held a duplicate copy of its two lines. Fourteen loading.tsx/error.tsx twins exist and only route-error.test.tsx covers any of it.",
     "acceptanceCriteria": [
       "every suspect assertion is proven by MUTATING THE SOURCE and confirming the test fails - reading it is not proof",
