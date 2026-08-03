@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Asset, Draft, Template } from "@/lib/api";
@@ -12,20 +12,26 @@ import Studio, {
   defaultAssetValues,
   draftPayload,
   imageSlots,
+  matches,
+  nextIndex,
   noneOf,
   templateId,
 } from "./Studio";
 
-/* What is NOT tested here, deliberately: opening a Select, arrowing through it, typeahead,
- * Escape, and focus return. Those belong to Radix, are tested upstream, and jsdom only
- * approximates focus. They were exercised by hand in Chrome instead; the slice report says
- * exactly what.
+/* What is NOT tested here, deliberately: opening a Select, arrowing through it, typeahead, the
+ * picker Dialog's focus trap, Escape, scroll lock and focus return. Those belong to Radix, are
+ * tested upstream, and jsdom only approximates focus. They were exercised by hand in Chrome
+ * instead; the slice report says exactly what.
+ *
+ * The grid's own arrow-key movement IS ours and is tested — as `nextIndex`, the pure function
+ * the keydown handler feeds, because "which tile is next" is the part that can be wrong.
  *
  * That has a consequence worth naming, because it silently weakens assertions: while a Select
  * is closed Radix renders its items into a detached DocumentFragment, so `SelectContent` is not
  * in `document.body` and `queryByText("… pick an asset")` is `null` whether the picker is on
- * the page or not. Anything checking for the picker's presence anchors on the heading or on the
- * trigger's `aria-label`, never on item text.
+ * the page or not. A closed Dialog is detached the same way. Anything checking for the picker's
+ * presence anchors on the heading or on the slot button's `aria-label`, never on the contents of
+ * something closed.
  *
  * What IS tested is ours, and it is one bug class: the page sending the wrong thing while
  * everything still renders. A slot name the backend ignores, a `""` or a sentinel that shadows
@@ -153,6 +159,87 @@ async function setUp(slots: Record<string, unknown>[], assets: Asset[] | null = 
   await screen.findByText(/stat-hero, because/);
   return fetchStub;
 }
+
+/** Open one slot's picker and hand back the dialog it opened.
+ *
+ *  The slot button is a plain `<button>` carrying `aria-label={slot.name}` — the same anchor the
+ *  Select trigger carried before US-015 — and the Dialog it opens is controlled by this page's
+ *  own state, so a click is all there is to it. Everything the picker offers is queried through
+ *  `within(dialog)`: once a slot is filled, the slot button and the tile in the grid carry the
+ *  same asset label, and an unscoped query would match both. */
+function openPickerElement(slot: string): HTMLElement {
+  fireEvent.click(screen.getByLabelText(slot));
+  return screen.getByRole("dialog");
+}
+
+const openPicker = (slot: string) => within(openPickerElement(slot));
+
+/** A suggest stub that answers with a different visual each time it is called — the one way to
+ *  reach `chooseVisual` twice without driving a Radix listbox. */
+function stubSuggest(...visualIds: number[]) {
+  const queue = [...visualIds];
+  const fetchStub = vi.fn((url: string) => {
+    if (!String(url).endsWith("/drafts/suggest")) return Promise.resolve(jsonResponse(201, DRAFT));
+    const visual = queue.shift() ?? visualIds[visualIds.length - 1];
+    return Promise.resolve(
+      jsonResponse(200, {
+        hook: { id: 1 },
+        structure: { id: 2 },
+        visual: { id: visual },
+        reason: `visual ${visual}, because the idea is a number`,
+      }),
+    );
+  });
+  vi.stubGlobal("fetch", fetchStub);
+  return fetchStub;
+}
+
+/** `POST /assets` answers with whatever this is given; suggest and generate answer as usual. */
+function stubUpload(assetResponse: Response) {
+  const fetchStub = vi.fn((url: string) => {
+    const path = String(url).replace(/^https?:\/\/[^/]+/, "");
+    if (path === "/assets") return Promise.resolve(assetResponse);
+    if (path === "/drafts/suggest")
+      return Promise.resolve(
+        jsonResponse(200, {
+          hook: { id: 1 },
+          structure: { id: 2 },
+          visual: { id: 3 },
+          reason: "stat-hero, because the idea is a number",
+        }),
+      );
+    return Promise.resolve(jsonResponse(201, DRAFT));
+  });
+  vi.stubGlobal("fetch", fetchStub);
+  return fetchStub;
+}
+
+/** Idea typed and a visual chosen — the picker's precondition — against a caller's own stub.
+ *  `setUp` does the same thing but installs `stubApi`; these are the tests that need a stub
+ *  answering `POST /assets` as well. */
+async function withVisual(fetchStub: ReturnType<typeof vi.fn>) {
+  render(<Studio templates={library(statHeroSlots())} assets={LIBRARY} drafts={[]} />);
+  typeIdea();
+  fireEvent.click(screen.getByRole("button", { name: /suggest templates/i }));
+  await screen.findByText(/because the idea is a number/);
+  return fetchStub;
+}
+
+/** The row `POST /assets` hands back — a fresh one, or the one it already had on a dedupe. */
+const UPLOADED = asset({ id: 31, label: "Fresh upload", kind: "brand" });
+
+/** A second visual, for the change-of-visual reset.
+ *
+ *  It deliberately *shares* `left_image_url` with stat-hero and gives it no default, because
+ *  that is the only shape that tells a reset from a merge: `assetPayload` already narrows the
+ *  payload to the chosen visual's slots, so a pick belonging to a slot the new template does not
+ *  declare is dropped either way and a fixture built that way would pass on both. A slot name
+ *  that is valid on both templates is not dropped — a merge would send asset 7 for a slot nobody
+ *  picked one for on this template. */
+const HERO_SLOTS: Record<string, unknown>[] = [
+  { name: "left_image_url", type: "image_url" },
+  { name: "hero_image_url", type: "image_url", default_asset_id: 9 },
+];
 
 /** The raw body of the one `POST /drafts` the click made. `/drafts/suggest` does not match. */
 function sentRaw(fetchStub: ReturnType<typeof vi.fn>): string {
@@ -368,6 +455,262 @@ describe("when there is nothing to pick from", () => {
     expect(screen.getByText(/^Images —/)).toHaveTextContent("2 slots");
     expect(screen.getByLabelText("left_image_url")).toBeInTheDocument();
     expect(screen.getByLabelText("right_image_url")).toBeInTheDocument();
+  });
+});
+
+/* US-015. The dropdown per slot became a dialog with a grid, a search box and an upload.
+ *
+ * Three of the four things asserted here are ours end to end — what the grid offers, what the
+ * search leaves, and what a pick turns into in the request body. The fourth, the arrow keys, is
+ * ours only as an index: moving focus is a `.focus()` call jsdom approximates, so what is tested
+ * is which tile is next, not that the browser went there.
+ *
+ * Note the vacuity trap this slice adds. A closed Radix Dialog's content is in a detached
+ * fragment exactly like a closed `SelectContent`, so `queryByText("Pixii wordmark")` is `null`
+ * whether the picker was never opened or was opened and closed. Every negative assertion below
+ * anchors on the slot button — which is really in the document — or on `queryByRole("dialog")`,
+ * which is a real element when one is open. */
+describe("the picker's search", () => {
+  it("matches on the label, the kind and a tag, and ignores case", () => {
+    const shot = asset({ id: 9, label: "Cooler comparison", kind: "product", tags: ["cream"] });
+    const all = [asset(), shot];
+
+    expect(matches(all, "pixii").map((a) => a.id)).toEqual([7]);
+    expect(matches(all, "PRODUCT").map((a) => a.id)).toEqual([9]);
+    expect(matches(all, "cream").map((a) => a.id)).toEqual([9]);
+  });
+
+  it("offers the whole library for an empty or blank query", () => {
+    // The empty box is not a filter that matches nothing — which is the shape a naive
+    // `includes("")` would get right by accident and a `startsWith` would get wrong.
+    expect(matches(LIBRARY, "")).toHaveLength(2);
+    expect(matches(LIBRARY, "   ")).toHaveLength(2);
+  });
+
+  it("narrows the grid as it is typed", async () => {
+    // The component half. The tiles are real elements while the dialog is open, so this
+    // absence is a real absence.
+    await setUp(statHeroSlots());
+    const dialog = openPicker("left_image_url");
+
+    fireEvent.change(dialog.getByLabelText("search the library"), { target: { value: "wordmark" } });
+
+    expect(dialog.getByRole("button", { name: /Pixii wordmark/ })).toBeInTheDocument();
+    expect(dialog.queryByRole("button", { name: /Product shot/ })).not.toBeInTheDocument();
+  });
+
+  it("says nothing matched rather than looking like an empty library", async () => {
+    // The same failure-versus-empty distinction the rest of this page is built on, one level
+    // down: "nothing matches" and "there is nothing" are different claims about the library.
+    await setUp(statHeroSlots());
+    const dialog = openPicker("left_image_url");
+
+    fireEvent.change(dialog.getByLabelText("search the library"), { target: { value: "zzz" } });
+
+    expect(dialog.getByText(/Nothing in the library matches/)).toBeInTheDocument();
+    expect(dialog.getByText(/2 assets are stored/)).toBeInTheDocument();
+  });
+});
+
+describe("moving through the grid with the arrow keys", () => {
+  it("steps forward and back and clamps at both ends rather than wrapping", () => {
+    expect(nextIndex("ArrowRight", 0, 3)).toBe(1);
+    expect(nextIndex("ArrowDown", 1, 3)).toBe(2);
+    expect(nextIndex("ArrowRight", 2, 3)).toBe(2);
+    expect(nextIndex("ArrowLeft", 1, 3)).toBe(0);
+    expect(nextIndex("ArrowUp", 0, 3)).toBe(0);
+  });
+
+  it("enters the grid from the search field", () => {
+    // `-1` is "focus is not on a tile", which is where every open starts — the search box has
+    // it. A forward key from there has to land on the first tile or the grid is unreachable
+    // without a mouse.
+    expect(nextIndex("ArrowDown", -1, 3)).toBe(0);
+    expect(nextIndex("Home", -1, 3)).toBe(0);
+    expect(nextIndex("End", -1, 3)).toBe(2);
+  });
+
+  it("handles nothing else, so a key it does not own is left to the field it was typed in", () => {
+    expect(nextIndex("a", 0, 3)).toBeNull();
+    expect(nextIndex("Enter", 0, 3)).toBeNull();
+    // An empty grid — a search matching nothing — has no tile to move to.
+    expect(nextIndex("ArrowDown", -1, 0)).toBeNull();
+  });
+});
+
+describe("picking from the grid", () => {
+  it("offers one slot button per image slot, read off the declared type", async () => {
+    // The component-level half of `imageSlots`. `logo` and `hero` are text slots, and a name
+    // heuristic would put a picker on both of them — asking for an asset where the model
+    // writes prose. These absences are real: a slot button is in the document when it exists.
+    await setUp([
+      { name: "logo", type: "text" },
+      { name: "hero", type: "text" },
+      { name: "left_image_url", type: "image_url" },
+    ]);
+
+    expect(screen.getByText(/^Images —/)).toHaveTextContent("1 slot");
+    expect(screen.getByLabelText("left_image_url")).toBeInTheDocument();
+    expect(screen.queryByLabelText("logo")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("hero")).not.toBeInTheDocument();
+  });
+
+  it("sends the picked slot and omits the untouched one", async () => {
+    // The partially-picked body, which is the whole contract with the backend: an absent slot
+    // is "fall back to the template default", and a `""` would be a pick of nothing that
+    // shadows it. Both slots here have no default, so the second one must simply not be there.
+    const fetchStub = await setUp(statHeroSlots());
+
+    fireEvent.click(
+      within(openPickerElement("left_image_url")).getByRole("button", { name: /Pixii wordmark/ }),
+    );
+
+    // The dialog closed on the pick, and the slot button now shows what is in it.
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByLabelText("left_image_url")).toHaveTextContent("Pixii wordmark (logo)");
+
+    fireEvent.click(screen.getByRole("button", { name: /generate draft/i }));
+
+    await waitFor(() => expect(sentBody(fetchStub)).toBeTruthy());
+    expect(sentBody(fetchStub).asset_values).toEqual({ left_image_url: "7" });
+    expect(sentRaw(fetchStub)).not.toContain('"right_image_url"');
+  });
+
+  it("clears a pick back to the template's default by omitting the slot", async () => {
+    // `right_image_url` defaults to asset 9, so the picker starts holding it. Clearing must
+    // produce an absent key — the one value the backend reads as "use the default". A "no
+    // image" option would be a lie here: there is no such state on a defaulted slot.
+    const fetchStub = await setUp(statHeroSlots(9));
+
+    const dialog = openPicker("right_image_url");
+    fireEvent.click(dialog.getByRole("button", { name: /use the template's default/i }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /generate draft/i }));
+
+    await waitFor(() => expect(sentBody(fetchStub)).toBeTruthy());
+    expect(sentBody(fetchStub).asset_values).toEqual({});
+  });
+
+  it("offers no clear on a slot the template has no default for", async () => {
+    // The other direction. Omitting a slot with no default is what `chosen_assets` leaves
+    // absent and `fill()` raises `MissingSlotValue` for, so an option promising it would
+    // promise a render that cannot happen.
+    await setUp(statHeroSlots());
+    const dialog = openPicker("left_image_url");
+
+    expect(dialog.queryByRole("button", { name: /use the template's default/i })).toBeNull();
+    // …and the dialog it is absent from is really open, so the absence is not vacuous.
+    expect(dialog.getByRole("button", { name: /Pixii wordmark/ })).toBeInTheDocument();
+  });
+
+  it("resets to the new template's defaults when the visual changes", async () => {
+    // `chooseVisual` is a handler and not an effect, so this is the assertion that it actually
+    // runs on every path into it. A slot name is only meaningful against the template that
+    // declares it: `left_image_url` surviving a change to a visual that has no such slot would
+    // be a value the backend silently drops.
+    const fetchStub = stubSuggest(3, 4);
+    render(
+      <Studio
+        templates={[
+          ...library(statHeroSlots()),
+          template({ id: 4, kind: "visual", name: "hero-card", slots: HERO_SLOTS }),
+        ]}
+        assets={LIBRARY}
+        drafts={[]}
+      />,
+    );
+    typeIdea();
+
+    fireEvent.click(screen.getByRole("button", { name: /suggest templates/i }));
+    await screen.findByLabelText("left_image_url");
+    fireEvent.click(
+      within(openPickerElement("left_image_url")).getByRole("button", { name: /Pixii wordmark/ }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    // Suggest again, this time answering with the other visual.
+    fireEvent.click(screen.getByRole("button", { name: /suggest templates/i }));
+    await screen.findByLabelText("hero_image_url");
+
+    fireEvent.click(screen.getByRole("button", { name: /generate draft/i }));
+    await waitFor(() => expect(sentBody(fetchStub)).toBeTruthy());
+    // The new template's own default, and not a trace of the pick made against the other one.
+    expect(sentBody(fetchStub).asset_values).toEqual({ hero_image_url: "9" });
+    expect(screen.getByLabelText("left_image_url")).toHaveTextContent("pick an asset");
+  });
+});
+
+describe("uploading without leaving the page", () => {
+  it("posts the file as multipart and fills the slot with what came back", async () => {
+    // The upload is a real write, so it is exercised against a stub here and never against the
+    // live server. `kind` is asserted at its default: the control is a Radix Select and a Radix
+    // listbox cannot be driven in jsdom, so what is provable here is that the field is sent at
+    // all — `POST /assets` requires it and an absent one is a 422.
+    const fetchStub = await withVisual(stubUpload(jsonResponse(200, UPLOADED)));
+
+    const dialog = openPicker("left_image_url");
+    fireEvent.change(dialog.getByLabelText("image file"), {
+      target: { files: [new File(["not really a png"], "wordmark.png", { type: "image/png" })] },
+    });
+    fireEvent.click(dialog.getByRole("button", { name: /upload and use/i }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    const call = fetchStub.mock.calls.find(([url]) => String(url).endsWith("/assets"));
+    const body = (call?.[1] as RequestInit).body as FormData;
+    expect(body).toBeInstanceOf(FormData);
+    expect((body.get("file") as File).name).toBe("wordmark.png");
+    expect(body.get("kind")).toBe("logo");
+    // No hand-set Content-Type: one without a boundary is what FastAPI cannot parse, and it
+    // would fail every upload rather than none.
+    expect((call?.[1] as RequestInit).headers).toBeUndefined();
+
+    // The asset it answered with is in the slot, and it is in the request the page then sends.
+    expect(screen.getByLabelText("left_image_url")).toHaveTextContent("Fresh upload (brand)");
+    fireEvent.click(screen.getByRole("button", { name: /generate draft/i }));
+    await waitFor(() => expect(sentBody(fetchStub)).toBeTruthy());
+    expect(sentBody(fetchStub).asset_values).toEqual({ left_image_url: "31" });
+  });
+
+  it("keeps the dialog open and says why when the upload is refused", async () => {
+    // A refusal that filled the slot anyway would be the silent failure this page keeps
+    // removing: a draft generated against an asset that was never stored.
+    await withVisual(stubUpload(jsonResponse(422, { detail: "not a readable image" })));
+
+    const dialog = openPicker("left_image_url");
+    fireEvent.change(dialog.getByLabelText("image file"), {
+      target: { files: [new File(["nope"], "notes.txt", { type: "image/png" })] },
+    });
+    fireEvent.click(dialog.getByRole("button", { name: /upload and use/i }));
+
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith("Upload failed", {
+        description: "not a readable image",
+      }),
+    );
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByLabelText("left_image_url")).toHaveTextContent("pick an asset");
+  });
+
+  it("offers the upload as the way out of an empty library", async () => {
+    // The empty library keeps its own notice on the page — an empty library really is empty and
+    // saying so is not the bug — but it now names the picker rather than another page.
+    await setUp(statHeroSlots(), []);
+
+    expect(screen.getByText(/nothing in the library yet/i)).toBeInTheDocument();
+    const dialog = openPicker("left_image_url");
+    expect(dialog.getByLabelText("image file")).toBeInTheDocument();
+  });
+
+  it("offers no picker at all when the library could not be read", async () => {
+    // An upload into a library whose contents are unknown would turn a failed request into the
+    // claim that the library holds exactly one thing. Anchored on the slot button, which is a
+    // real element when it exists — not on anything inside a dialog that never opens.
+    await setUp(statHeroSlots(), null);
+
+    expect(screen.getByText(/could not be read/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText("left_image_url")).not.toBeInTheDocument();
   });
 });
 
