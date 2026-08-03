@@ -208,7 +208,7 @@
     "id": "US-016",
     "title": "A real route for the draft behind a post, and a nameable cost",
     "priority": 16,
-    "passes": false,
+    "passes": true,
     "description": "posts/[id]/page.tsx:148 fetches /drafts?limit=500 and joins in the browser. The list is created_at DESC, so what falls off the end is the OLDEST drafts - exactly the ones whose posts have been live longest - and the page then says 'no draft behind this post' while the draft sits in the database. metrics.draft_for_post already does this join and has no HTTP surface. Separately, Studio's variants button cannot say what it will spend because nothing tells the client settings.variants_max; a count control would hardcode 3 and drift.",
     "acceptanceCriteria": [
       "GET /posts/{id}/draft returns the draft for a generated post",
