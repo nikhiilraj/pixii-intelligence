@@ -1,7 +1,17 @@
+import io
+import json
+
 import httpx
 import pytest
+from PIL import Image
 
 from app.llm import AzureChat, LLMResponseError
+
+
+def _one_pixel_png() -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (1, 1), "white").save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def chat_returning(handler) -> AzureChat:
@@ -80,3 +90,45 @@ def test_an_http_error_is_raised_rather_than_swallowed():
 
     with pytest.raises(httpx.HTTPStatusError):
         chat_returning(handler).complete_json("s", "u")
+
+
+def test_images_become_multimodal_parts():
+    """An image is sent as a data URI part alongside the text, sniffed for its real mime."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
+
+    chat = AzureChat(
+        endpoint="https://example.invalid",
+        api_key="k",
+        deployment="d",
+        api_version="v",
+        transport=httpx.MockTransport(handler),
+    )
+    chat.complete_json("sys", "look at this", images=[_one_pixel_png()])
+
+    parts = captured["messages"][1]["content"]
+    assert parts[0] == {"type": "text", "text": "look at this"}
+    assert parts[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_no_images_sends_a_plain_string():
+    """The payload without images is byte-identical to what it was before vision existed."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
+
+    chat = AzureChat(
+        endpoint="https://example.invalid",
+        api_key="k",
+        deployment="d",
+        api_version="v",
+        transport=httpx.MockTransport(handler),
+    )
+    chat.complete_json("sys", "plain")
+
+    assert captured["messages"][1] == {"role": "user", "content": "plain"}
