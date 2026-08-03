@@ -597,6 +597,29 @@ def test_preview_of_an_unsaved_body(session):
     assert "Edited, not saved" in (renderer.html or "")
 
 
+def test_an_unsaved_ai_body_does_not_reach_the_image_service(session):
+    """A textarea must not be able to spend money on a paid image generation."""
+    called = False
+
+    class ExplodingImageRenderer:
+        def generate(self, prompt: str, width: int, height: int) -> bytes:
+            nonlocal called
+            called = True
+            return b""
+
+    app.dependency_overrides[get_image_renderer] = lambda: ExplodingImageRenderer()
+    try:
+        response = TestClient(app).post(
+            "/templates/preview",
+            json={"body": {"renderer": "ai", "prompt": "a picture"}, "slots": [], "values": {}},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 501
+    assert called is False
+
+
 def test_preview_of_an_unsaved_body_names_a_missing_slot(session):
     app.dependency_overrides[get_html_renderer] = lambda: FakeHtmlRenderer()
     try:
@@ -684,7 +707,19 @@ def preview_unsaved(
     An unsaved edit has no id, so this takes the body and slots directly. The row is
     built in memory and never added to the session — previewing must not be able to
     write a template, and a `Template(...)` that is never `session.add`ed cannot.
+
+    **`html` only.** The saved route guards on `kind`, which this route cannot: it
+    constructs the row, so `kind` is whatever it says. Without this check a body reading
+    `{"renderer": "ai", "prompt": "..."}` reaches `AzureImageRenderer` — a paid image
+    generation triggered from a textarea, with no id, no rate limit and nothing saved to
+    show for it. The editor only ever previews markup, so refusing the other renderer
+    costs nothing.
     """
+    if payload.body.get("renderer") != "html":
+        raise HTTPException(
+            status_code=501,
+            detail="unsaved preview renders html only; save the template to preview an ai visual",
+        )
     draft = Template(
         family_id="preview", version=0, kind=TemplateKind.VISUAL,
         name="preview", body=payload.body, slots=payload.slots,
@@ -868,8 +903,10 @@ Expected: FAIL — `propose_visuals` returns `[]`, so every unpack fails.
 
 In `backend/app/extraction.py`, replace the placeholder `_VISUAL_SYSTEM` and add the brand constant. Import `Image` from `PIL`, `io`, and `_SLOT` and the size defaults from `app.rendering`:
 
+First **rename `rendering._SLOT` to `rendering.SLOT`** and update its two uses in that module (`fill`). Ruff selects only `E,F,I,UP,B`, so importing the underscore name across modules would pass lint — but this repo keeps module-private things module-private, and a second module depending on it makes it interface. One rename, no behaviour change.
+
 ```python
-from app.rendering import DEFAULT_HEIGHT, DEFAULT_WIDTH, _SLOT
+from app.rendering import DEFAULT_HEIGHT, DEFAULT_WIDTH, SLOT
 ```
 
 ```python
@@ -948,7 +985,7 @@ def _to_visual(
 
     slots = proposal.get("slots") or []
     declared = {str(slot.get("name")) for slot in slots}
-    used = set(_SLOT.findall(markup))
+    used = set(SLOT.findall(markup))
     if used != declared:
         # Both directions matter and they fail differently. A placeholder with no slot
         # raises MissingSlotValue in Studio, after a human approved it. A slot with no
