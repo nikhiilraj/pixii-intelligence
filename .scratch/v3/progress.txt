@@ -167,10 +167,20 @@ Disclosed by the agents themselves, and my instruction caused them: I told agent
 browser without scoping which controls were safe to click. Later briefs say "do not click anything
 that writes".
 
-- **6 template rows** (54747–54752), inspiration-cohort hooks from a real extraction. Legitimate
-  work — kept. **The review gate is 43, not 37.**
-- **Draft 15580**, `"a nine figure exit"` — test junk in Inbox queue 2, which now reads 5 not 4.
-  Left in place pending Nikhil's word; deleting rows from his database is not mine to decide.
+- **13 template rows, in two separate extractions.** 54747–54752 (six, inspiration cohort, 21:03)
+  and 62640–62646 (seven, voice cohort, 21:56 — a *second* browser test, by a different agent,
+  which I did not notice at the time). **The review gate is 50, not 37.** Two of the thirteen are
+  exact-name duplicates of proposals already in the queue (`ai-or-human-quiz` 62644 vs 3134,
+  `dismissive-objection-examples` 62645 vs 7109); the rest are novel wordings, extraction being
+  non-deterministic over the same corpus. All kept — they are real extractions, not junk.
+- **Draft 15580**, `"a nine figure exit"` — test junk. **Deleted 2026-08-03** at Nikhil's word,
+  after confirming it was never pushed, carried no image, and that no foreign key references
+  `draft`. Queue 2 back to 4.
+
+**I reported "43, not 37" and it was already 50.** I counted once, after the first extraction, and
+then quoted that number twice more without re-reading the Inbox. The second extraction had already
+happened. The number only surfaced because deleting the draft made me look again — which is the
+argument for reading live state rather than trusting a figure you wrote down earlier.
 
 ### Still true, and the only thing that matters
 
