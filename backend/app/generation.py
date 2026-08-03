@@ -181,6 +181,42 @@ def suggest_templates(session: Session, llm: LLM, idea: str) -> Suggestion:
     )
 
 
+def variant_combinations(
+    session: Session, count: int
+) -> list[tuple[Template, Template, Template]]:
+    """Up to `count` distinct approved (hook, structure, visual) combinations to write one idea
+    through — in the order they are produced, which is the only order this slice may have.
+
+    **Rotated, not the cartesian product.** `product(hooks, structures, visuals)[:3]` returns
+    three combinations sharing the first hook and the first structure, so the three drafts would
+    be the same post with three pictures — three billed completions for one comparison. Taking
+    the i-th of each list moves all three axes at once, which is what makes the drafts worth
+    putting side by side at all.
+
+    Deduplicated, so a library offering fewer combinations than asked for returns fewer variants
+    rather than the same combination twice at full price: with one approved template of each kind
+    there is exactly one combination, and three copies of it is three times the spend for one
+    draft. `usable_templates` orders by name, so the rotation is stable across calls.
+
+    ponytail: no diversity metric, no coverage bookkeeping, no memory of what previous batches
+    used. Ceiling: something that picks combinations by what has not been tried lately — which is
+    a different feature and needs a reason to prefer one axis over another.
+    """
+    hooks = _approved(session, TemplateKind.HOOK)
+    structures = _approved(session, TemplateKind.STRUCTURE)
+    visuals = _approved(session, TemplateKind.VISUAL)
+
+    combos: dict[tuple[int | None, ...], tuple[Template, Template, Template]] = {}
+    for index in range(max(count, 0)):
+        combo = (
+            hooks[index % len(hooks)],
+            structures[index % len(structures)],
+            visuals[index % len(visuals)],
+        )
+        combos.setdefault(tuple(t.id for t in combo), combo)
+    return list(combos.values())
+
+
 def _exemplars(session: Session, hook: Template) -> list[Post]:
     """The posts this hook was derived from — the voice the draft should sound like."""
     if not hook.provenance:

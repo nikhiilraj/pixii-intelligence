@@ -15,6 +15,7 @@ from app.generation import (
     regenerate_visual,
     retopic,
     suggest_templates,
+    variant_combinations,
 )
 from app.llm import LLMResponseError
 from app.metrics import draft_for_post
@@ -141,6 +142,16 @@ def _renderer(session: SessionDep, draft: Draft, html_renderer, image_renderer):
     return image_renderer if declared == "ai" else html_renderer
 
 
+def _renderer_for(visual: Template | None, html_renderer, image_renderer):
+    """Which renderer a *chosen* visual declares — the generation-time twin of `_renderer`.
+
+    `_renderer` above resolves the renderer from a draft's recorded `(family, version)`, which
+    is the right question for a redraw and the wrong one here: nothing has been generated yet,
+    so the template row in hand is the one that will be used.
+    """
+    return image_renderer if visual and visual.body.get("renderer") == "ai" else html_renderer
+
+
 @router.get("")
 def list_drafts(session: SessionDep, limit: int = 100) -> list[DraftOut]:
     statement = select(Draft).order_by(desc(col(Draft.created_at))).limit(limit)
@@ -179,9 +190,7 @@ def create_draft(
 ) -> DraftOut:
     """Turn an idea into a reviewable draft. Nothing leaves the building here."""
     visual = session.get(Template, payload.visual_id) if payload.visual_id else None
-    renderer = (
-        image_renderer if visual and visual.body.get("renderer") == "ai" else html_renderer
-    )
+    renderer = _renderer_for(visual, html_renderer, image_renderer)
     try:
         draft = generate_draft(
             session,
@@ -297,6 +306,136 @@ def create_retopic(
     # buys one completion and one render, and a render that failed into `visual_error`
     # bought its call all the same.
     return RetopicOut(**_out(session, draft).model_dump(), **meter.spend())
+
+
+class VariantsIn(BaseModel):
+    """One idea, written N ways. `count` is a request, never a promise — see the route."""
+
+    idea: str
+    count: int | None = None
+
+
+class VariantsOut(BaseModel):
+    """The batch, in generation order, and what the whole batch cost.
+
+    **There is no fourth field, and that is the slice.** No score, no confidence, no
+    recommendation, no ordering but the one the drafts were written in. Engagement spans 12.7x
+    across ~3 samples per template here, so nothing this endpoint could add would mean anything;
+    ranking is a threshold (~300 lineage-tagged posts, currently zero), not a feature.
+    """
+
+    variants: list[DraftOut]
+    llm_calls: int
+    image_calls: int
+
+
+@router.post("/variants", status_code=201)
+def create_variants(
+    session: SessionDep,
+    llm: LLMDep,
+    html_renderer: HtmlRendererDep,
+    image_renderer: ImageRendererDep,
+    payload: VariantsIn,
+) -> VariantsOut:
+    """Write one idea as several drafts, each through a different approved combination.
+
+    The honest form of template comparison while the corpus cannot support ranking: three
+    concrete drafts a human chooses between is judgement, and judgement is available now, where
+    an aggregate over ~3 samples per template is not available at all.
+
+    **`settings.variants_max` is the ceiling, not the default**, clamped with the same
+    `min(requested, ceiling)` as the autonomous route above — and here the stakes are the same
+    arithmetic: every variant is another billed completion and another render inside one
+    synchronous request, so an unclamped `count` is `?cap=500` again with a JSON body instead of
+    a query string.
+
+    Ignores whatever is selected in the picker on purpose: the point is to vary the templates,
+    so pinning one would answer a question nobody asked here — `POST /drafts` is where a chosen
+    combination is written. Assets come from each visual's own `default_asset_id`.
+    """
+    meter = SpendMeter()
+    # ponytail: clamped silently rather than 422'd, matching the autonomous route — the ceiling
+    # is configuration, and "you asked for more than is allowed" has no answer for the caller
+    # beyond the batch it gets. The response says how many arrived.
+    count = (
+        min(payload.count, settings.variants_max)
+        if payload.count is not None
+        else settings.variants_max
+    )
+    try:
+        drafts = [
+            generate_draft(
+                session,
+                meter.watch(llm),
+                meter.watch(_renderer_for(visual, html_renderer, image_renderer)),
+                idea=payload.idea,
+                hook_id=hook.id,
+                structure_id=structure.id,
+                visual_id=visual.id,
+            )
+            for hook, structure, visual in variant_combinations(session, count)
+        ]
+    except NoUsableTemplates as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LLMResponseError as exc:
+        # The drafts written before the raise roll back with the request; the money does not.
+        # Same reading as the autonomous 502 — the spend is reported on the failure path too.
+        raise HTTPException(status_code=502, detail={"error": str(exc), **meter.spend()}) from exc
+
+    session.commit()
+    for draft in drafts:
+        session.refresh(draft)
+    return VariantsOut(variants=[_out(session, d) for d in drafts], **meter.spend())
+
+
+class KeepIn(BaseModel):
+    """Which variant survives, and which rows go. Ids, because the client holds them already.
+
+    No batch column on `Draft` and no `variant_of` foreign key: the batch exists for as long as
+    one screen is open, and a column would be a schema change plus a migration to record
+    something nothing reads afterwards.
+    """
+
+    keep_id: int
+    discard_ids: list[int] = []
+
+
+@router.post("/variants/keep")
+def keep_variant(session: SessionDep, payload: KeepIn) -> DraftOut:
+    """Keep one variant and delete the rest. Discarded means deleted, not left lying around.
+
+    A rejected variant left in the table is not litter, it is a lie: Inbox queue 2 ("built,
+    awaiting push") is a human work queue and one of the four gates the Inbox exists to keep
+    honest, so two drafts nobody chose sitting in it make the queue overstate the work waiting
+    by exactly the amount this route was used.
+
+    **Everything is validated before anything is deleted.** Loading and deleting in one pass
+    would leave the first two rows gone when the third id turns out to be unknown or already
+    pushed — a partial discard inside a request that answered with an error, which is the orphan
+    this route exists to prevent.
+    """
+    if payload.keep_id in payload.discard_ids:
+        raise HTTPException(
+            status_code=422, detail=f"draft {payload.keep_id} is both kept and discarded"
+        )
+    kept = _load(session, payload.keep_id)
+    discards = [_load(session, i) for i in dict.fromkeys(payload.discard_ids)]
+
+    # A draft that reached Zernio has something outside this system pointing back at it, and
+    # deleting the row would leave that post unattributable — which is the lineage record this
+    # whole app is for. Nothing is deleted, not even the ones that could have been.
+    pushed = [str(d.id) for d in discards if d.zernio_post_id]
+    if pushed:
+        raise HTTPException(
+            status_code=409,
+            detail=f"draft(s) {', '.join(pushed)} are in Zernio and cannot be discarded",
+        )
+
+    for draft in discards:
+        session.delete(draft)
+    session.commit()
+    session.refresh(kept)
+    return _out(session, kept)
 
 
 @router.post("/{draft_id}/regenerate-text")

@@ -3,9 +3,9 @@ from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlmodel import Session
+from sqlmodel import Session, col, select
 
-from app.api_drafts import _renderer
+from app.api_drafts import DraftOut, _renderer
 from app.config import settings
 from app.db import get_session
 from app.deps import get_html_renderer, get_llm
@@ -18,9 +18,11 @@ from app.generation import (
     regenerate_visual,
     retopic,
     suggest_templates,
+    variant_combinations,
     writable_slots,
 )
 from app.main import app
+from app.models.draft import Draft
 from app.models.post import Post, Verdict
 from app.models.template import TemplateKind, TemplateStatus
 from app.templates import approve, create_template, edit_template, retire
@@ -1005,3 +1007,230 @@ def test_a_retopic_from_a_vanished_version_is_a_conflict_not_a_redraw_of_another
 
     assert response.status_code == 409
     assert visual.family_id in response.json()["detail"]
+
+
+# --- US-013: one idea, several drafts, keep one -------------------------------------------
+
+
+def variant_library(session):
+    """Nine approved templates — three of each kind — so supply exceeds any ceiling here.
+
+    `library()` above authors exactly one of each, which yields exactly one combination: every
+    clamp assertion below would then pass on template supply rather than on the bound, which
+    is the way the autonomous clamp test was nearly written too ("pinned to 1 so three
+    available topics can prove the bound rather than the topic supply doing it").
+    """
+    library(session)
+    for index in (2, 3):
+        for template in (
+            create_template(
+                session,
+                kind=TemplateKind.HOOK,
+                name=f"hook-{index}",
+                body={"pattern": f"pattern {index}", "tone": "plain"},
+            ),
+            create_template(
+                session,
+                kind=TemplateKind.STRUCTURE,
+                name=f"structure-{index}",
+                body={
+                    "post_type": "deep-research",
+                    "sections": [{"name": "result", "guidance": f"guidance {index}"}],
+                },
+            ),
+            create_template(
+                session,
+                kind=TemplateKind.VISUAL,
+                name=f"visual-{index}",
+                body={"renderer": "html", "html": f"<b>{{big_number}}</b><i>{index}</i>"},
+                slots=[{"name": "big_number", "type": "text"}],
+            ),
+        ):
+            approve(session, template)
+
+
+def all_drafts(session) -> list[Draft]:
+    return list(session.exec(select(Draft).order_by(col(Draft.id))).all())
+
+
+def variants_of(client, count: int | None = None) -> dict:
+    body: dict = {"idea": IDEA}
+    if count is not None:
+        body["count"] = count
+    response = client.post("/drafts/variants", json=body)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def with_fakes():
+    app.dependency_overrides[get_llm] = lambda: FakeLLM(WRITTEN)
+    app.dependency_overrides[get_html_renderer] = FakeRenderer
+
+
+def test_variants_move_all_three_templates_not_only_the_visual(session):
+    """Three drafts of one idea, each from a different combination.
+
+    The rotation is what makes this true of all three axes. Walking the cartesian product
+    instead would hand back three drafts sharing a hook and a structure — three near-identical
+    posts at three times the price, which is the opposite of what a comparison is for.
+    """
+    variant_library(session)
+
+    combos = variant_combinations(session, 3)
+
+    assert len(combos) == 3
+    assert len({(h.id, s.id, v.id) for h, s, v in combos}) == 3
+    assert len({h.id for h, _, _ in combos}) == 3
+    assert len({s.id for _, s, _ in combos}) == 3
+    assert len({v.id for _, _, v in combos}) == 3
+
+
+def test_a_library_offering_one_combination_yields_one_variant(session):
+    """Three copies of the same combination is three times the spend for one draft."""
+    library(session)
+
+    assert len(variant_combinations(session, 3)) == 1
+
+
+def test_an_over_large_variant_request_is_clamped_to_the_ceiling(client, session, monkeypatch):
+    """The ceiling is a bound, not a default — the `?cap=500` lesson, one route over.
+
+    Pinned to 2 against a default of 3 and a library offering 9 combinations, so neither the
+    setting's default nor the template supply can be what makes this pass. Asserted on the
+    rows written and on the meter as well as on the list returned: a route that generated 50
+    drafts and answered with 2 of them would pass a length check on the response alone.
+    """
+    monkeypatch.setattr(settings, "variants_max", 2)
+    variant_library(session)
+    with_fakes()
+
+    body = variants_of(client, count=50)
+
+    assert len(body["variants"]) == settings.variants_max
+    assert len(all_drafts(session)) == settings.variants_max
+    assert body["llm_calls"] == settings.variants_max
+
+
+def test_a_variant_count_below_the_ceiling_is_still_honoured(client, session, monkeypatch):
+    """A ceiling, not a fixed number: asking for less must still mean less."""
+    monkeypatch.setattr(settings, "variants_max", 3)
+    variant_library(session)
+    with_fakes()
+
+    assert len(variants_of(client, count=1)["variants"]) == 1
+    assert len(all_drafts(session)) == 1
+
+
+def test_asking_for_no_count_at_all_generates_the_configured_number(client, session, monkeypatch):
+    monkeypatch.setattr(settings, "variants_max", 2)
+    variant_library(session)
+    with_fakes()
+
+    assert len(variants_of(client)["variants"]) == 2
+
+
+def test_the_variants_endpoint_reports_the_spend_for_the_whole_batch(client, session, monkeypatch):
+    """US-011, for a route that multiplies the bill by N."""
+    monkeypatch.setattr(settings, "variants_max", 3)
+    variant_library(session)
+    with_fakes()
+
+    body = variants_of(client)
+
+    assert (body["llm_calls"], body["image_calls"]) == (3, 3)
+    assert all(v["visual_png"] for v in body["variants"])
+
+
+def test_nothing_in_the_variants_response_ranks_them(client, session, monkeypatch):
+    """Generation order, and no second ordering anywhere in the body.
+
+    Engagement spans 12.7x at ~3 samples per template, so no field this endpoint could add
+    would mean anything — a score, a confidence or a "recommended" flag would all be the
+    optimizer, which is a threshold (~300 lineage-tagged posts, currently zero) and not a
+    feature. Asserted as an exact key set rather than by hunting for names, so adding one
+    later has to be a deliberate act that breaks this test.
+    """
+    monkeypatch.setattr(settings, "variants_max", 3)
+    variant_library(session)
+    with_fakes()
+
+    body = variants_of(client)
+
+    ids = [v["id"] for v in body["variants"]]
+    assert ids == sorted(ids)
+    assert set(body) == {"variants", "llm_calls", "image_calls"}
+    assert set(body["variants"][0]) == set(DraftOut.model_fields)
+
+
+def test_keeping_one_variant_deletes_the_others(client, session, monkeypatch):
+    """Discarded means gone. A rejected variant left behind makes Inbox queue 2 lie.
+
+    "Built, awaiting push" is a human work queue and one of the four gates the Inbox exists
+    to keep honest, so two variants nobody chose sitting in it is not a cosmetic problem.
+    """
+    monkeypatch.setattr(settings, "variants_max", 3)
+    variant_library(session)
+    with_fakes()
+    kept, *rest = variants_of(client)["variants"]
+
+    response = client.post(
+        "/drafts/variants/keep",
+        json={"keep_id": kept["id"], "discard_ids": [v["id"] for v in rest]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == kept["id"]
+    assert [d.id for d in all_drafts(session)] == [kept["id"]]
+    assert client.get("/inbox").json()["built_awaiting_push"]["count"] == 1
+
+
+def test_a_variant_already_in_zernio_is_never_deleted(client, session, monkeypatch):
+    """A draft that left the building has something out there pointing back at it."""
+    monkeypatch.setattr(settings, "variants_max", 3)
+    variant_library(session)
+    with_fakes()
+    kept, pushed, other = variants_of(client)["variants"]
+    session.get(Draft, pushed["id"]).zernio_post_id = "late-abc"
+    session.commit()
+
+    response = client.post(
+        "/drafts/variants/keep",
+        json={"keep_id": kept["id"], "discard_ids": [pushed["id"], other["id"]]},
+    )
+
+    assert response.status_code == 409
+    assert str(pushed["id"]) in response.json()["detail"]
+    # Nothing at all was deleted — including the one that could have been.
+    assert len(all_drafts(session)) == 3
+
+
+def test_an_unknown_discard_id_deletes_nothing(client, session, monkeypatch):
+    """Every id is checked before any row is removed, or a 404 on the third leaves the first
+    two already gone inside the same request."""
+    monkeypatch.setattr(settings, "variants_max", 3)
+    variant_library(session)
+    with_fakes()
+    kept, *rest = variants_of(client)["variants"]
+
+    response = client.post(
+        "/drafts/variants/keep",
+        json={"keep_id": kept["id"], "discard_ids": [rest[0]["id"], 987654]},
+    )
+
+    assert response.status_code == 404
+    assert len(all_drafts(session)) == 3
+
+
+def test_keep_refuses_to_discard_the_draft_it_is_keeping(client, session, monkeypatch):
+    monkeypatch.setattr(settings, "variants_max", 3)
+    variant_library(session)
+    with_fakes()
+    kept, *rest = variants_of(client)["variants"]
+
+    response = client.post(
+        "/drafts/variants/keep",
+        json={"keep_id": kept["id"], "discard_ids": [kept["id"], rest[0]["id"]]},
+    )
+
+    assert response.status_code == 422
+    assert len(all_drafts(session)) == 3
