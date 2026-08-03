@@ -46,7 +46,11 @@ export default function ScoreboardLoading() {
         <section key={kind} className="mt-8">
           <h2 className="text-caption font-medium uppercase tracking-widest text-muted">{kind}</h2>
           <div className="mt-2 overflow-x-auto">
-            <table className="w-full min-w-2xl table-fixed border-collapse text-meta">
+            {/* No `min-w-*`, matching page.tsx: the shared `ScoreboardCols` column sum makes the
+                real floor 752px, so `min-w-2xl` (672px) understated it and was removed there.
+                A skeleton at a different width than its page is a visible layout jump — the class
+                of defect these loading twins exist to remove — so the pair moves together. */}
+            <table className="w-full table-fixed border-collapse text-meta">
               <ScoreboardCols />
               <thead>
                 <tr className="border-b border-border text-left text-muted">

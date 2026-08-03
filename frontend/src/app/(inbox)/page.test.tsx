@@ -30,7 +30,18 @@ function stubFetch(routes: { inbox: Response | Error; health?: Response | Error 
     vi.fn((url: string) => {
       const answer = url.includes("/inbox")
         ? routes.inbox
-        : (routes.health ?? jsonResponse(200, { status: "ok", database: true, credentials: {} }));
+        : (routes.health ??
+          /* `variants_max` is a sibling of `credentials`, not a key inside it: the footer
+             renders `credentials` one health light per key, so a scalar in there would draw a
+             bogus light. Carried in every /health *success* stub so these keep typechecking
+             once `Health` gains the field. The 503 stub below is a failure body and does not
+             get one — an error response carries `detail`, not a Health payload. */
+          jsonResponse(200, {
+            status: "ok",
+            database: true,
+            credentials: {},
+            variants_max: 3,
+          }));
       return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer);
     }),
   );
@@ -161,6 +172,52 @@ describe("the four queues", () => {
    showing that 0 is the entire feature: a counter that hid itself at zero, or that rendered a
    dash, would leave "the loop has never run" and "we have no idea" looking identical — which is
    the state this page already had. */
+/* The proposals queue held 50 items in one ungrouped column and the page stood 2998px tall, so
+ * the gate that most often needs no action owned the fold. Bounded — but the count that is
+ * hidden has to be *stated*, and it has to come from `queue.count` (the backend's own total,
+ * the same number the heading prints) rather than from the length of the list after slicing,
+ * which would always report the cap and never the truth. */
+describe("a queue longer than the page shows", () => {
+  const long = {
+    count: 50,
+    items: Array.from({ length: 50 }, (_, i) => item(i + 1, `Proposal ${i + 1}`, 50 - i)),
+  };
+
+  it("bounds the list and says how many it is holding back", async () => {
+    stubFetch({
+      inbox: jsonResponse(200, inbox({ proposals_awaiting_review: long })),
+    });
+
+    render(await InboxPage());
+
+    // Six drawn, and they are the six the backend put first — oldest-waiting, not a re-sort.
+    expect(screen.getAllByRole("link", { name: /^Proposal / })).toHaveLength(6);
+    // By label text, not accessible name: the name concatenates the age Badge, so a `$`-anchored
+    // name pattern can never match. `getByText` is exact, so "Proposal 1" excludes "Proposal 10".
+    expect(screen.getByText("Proposal 1")).toBeInTheDocument();
+    expect(screen.queryByText("Proposal 7")).not.toBeInTheDocument();
+
+    // The total is the queue's own count, not the number of rows drawn.
+    expect(screen.getByText(/Showing the 6 that have waited longest, of 50/)).toBeInTheDocument();
+  });
+
+  it("says nothing about a bound on a queue short enough to show whole", async () => {
+    stubFetch({
+      inbox: jsonResponse(
+        200,
+        inbox({
+          proposals_awaiting_review: { count: 2, items: [item(1, "One", 1), item(2, "Two", 2)] },
+        }),
+      ),
+    });
+
+    render(await InboxPage());
+
+    expect(screen.getAllByRole("link", { name: /One|Two/ })).toHaveLength(2);
+    expect(screen.queryByText(/Showing the/)).not.toBeInTheDocument();
+  });
+});
+
 describe("the circuit counter", () => {
   it("reads 0 as never-yet, not as an error and not as nothing to show", async () => {
     stubFetch({ inbox: jsonResponse(200, inbox()) });
@@ -250,6 +307,7 @@ describe("the health footer", () => {
         status: "ok",
         database: true,
         credentials: { zernio: true, azure_openai: false },
+        variants_max: 3,
       }),
     });
 
@@ -275,6 +333,7 @@ describe("the health footer", () => {
         status: "degraded",
         database: true,
         credentials: { zernio: true },
+        variants_max: 3,
       }),
     });
 

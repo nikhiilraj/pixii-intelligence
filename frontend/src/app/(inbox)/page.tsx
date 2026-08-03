@@ -53,6 +53,24 @@ function waited(days: number): string {
    emptied and there is a real cadence to compare against. */
 const STALLED_DAYS = 7;
 
+/* How many items a queue shows before it says how many it is holding back.
+ *
+ * The page rendered all 50 proposals in one column and stood 3815px tall (2998 when the finding
+ * was filed, at 37 proposals), so the queue that most often needs no action owned the fold and
+ * the three that do need action sat below it. Six brings it to 1703 and puts all four gates on
+ * one screen at 1440px.
+ *
+ * What is hidden is *stated*, never silently dropped — same rule as everywhere else here: an
+ * absence must not read as a measurement, and a queue that quietly showed six of fifty would
+ * be exactly that. `queue.count` is the backend's own total (`main._queue` sends every row and
+ * sets `count = len(items)`), and it is what the heading already prints, so the two agree.
+ *
+ * ponytail: a slice and a sentence. No paging control and no per-queue link to "the rest" —
+ * every item in a queue links to the page that clears that whole gate, so the hidden items are
+ * one click away through any visible one. Ceiling: a collective destination per queue, if a
+ * queue ever gets one that is not just the page its items already point at. */
+const QUEUE_CAP = 6;
+
 function Item({ item, href }: { item: InboxItem; href: string }) {
   return (
     <li>
@@ -109,10 +127,16 @@ function Queue({
               here: the item that has waited longest is the one worth seeing, and any other
               order on this page would be a ranking. */}
           <ul>
-            {queue.items.map((item) => (
+            {queue.items.slice(0, QUEUE_CAP).map((item) => (
               <Item key={item.id} item={item} href={href(item)} />
             ))}
           </ul>
+          {queue.count > QUEUE_CAP && (
+            <p className="border-t border-border px-2 py-3 text-meta text-muted">
+              Showing the {QUEUE_CAP} that have waited longest, of {queue.count}. Opening any
+              row above reaches the page that clears the rest.
+            </p>
+          )}
         </Card>
       )}
     </section>

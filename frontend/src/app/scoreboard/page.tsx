@@ -32,6 +32,12 @@ const nf = new Intl.NumberFormat("en-US");
    is narrower than that; the `overflow-x-auto` wrapper scrolls it. Above 752 the surplus
    is distributed proportionally — identically for all three, so the edges stay aligned.
 
+   That 752 is why the table carries no `min-w-*` of its own. It used to carry `min-w-2xl`,
+   which is 42rem = 672px — below the floor the colgroup already sets, so it constrained
+   nothing and misstated the floor to anyone reading the class list. Removed and re-measured
+   at 390px: each table still lays out at 752 and the wrapper still scrolls, because a
+   `table-fixed` table is at least the sum of its columns. Deleting it changed no pixel.
+
    ponytail: retyped in loading.tsx rather than shared, same as KINDS is there. Ceiling: a
    `<ScoreboardCols />` in a shared module if a third caller appears. */
 function ScoreboardCols() {
@@ -126,7 +132,7 @@ export default async function ScoreboardPage() {
           <section key={kind} className="mt-8">
             <h2 className="text-caption font-medium uppercase tracking-widest text-muted">{kind}</h2>
             <div className="mt-2 overflow-x-auto">
-              <table className="w-full min-w-2xl table-fixed border-collapse text-meta">
+              <table className="w-full table-fixed border-collapse text-meta">
                 <ScoreboardCols />
                 <thead>
                   <tr className="border-b border-border text-left">

@@ -222,6 +222,113 @@ describe("a failed filter", () => {
   });
 });
 
+/* The 35 scraped rows carry engagement and no impressions data at all, and the table used to
+ * print that absence as `0` / `0.00`. What is keyed on is stated in `Explorer.tsx`: impressions
+ * and engagement_rate are written only by a Zernio analytics read, they are 0 by column
+ * default, and where `engaged_actions > 0` the absence is provable arithmetic rather than a
+ * heuristic. The two columns are keyed *independently*, which is what the third test pins —
+ * nine rows in the corpus carry a real Zernio engagement rate with no impressions figure, and
+ * deriving one dash from the other would erase them. */
+describe("a metric that was never measured", () => {
+  it("shows a dash, not a zero, for a row carrying engagement and no impressions", () => {
+    stubFetchSequence();
+    render(
+      <Explorer
+        initial={[post({ impressions: 0, engagement_rate: 0, engaged_actions: 1240 })]}
+        templates={[]}
+      />,
+    );
+
+    const cells = within(screen.getAllByRole("row")[1]).getAllByRole("cell");
+    // Engaged still prints its real figure — the dash is about the two unread columns only.
+    expect(cells[4]).toHaveTextContent("1,240");
+    expect(cells[5]).toHaveTextContent("—");
+    expect(cells[6]).toHaveTextContent("—");
+    expect(cells[5]).not.toHaveTextContent("0");
+    expect(cells[6]).not.toHaveTextContent("0.00");
+  });
+
+  it("still prints a measured figure, so the dash is not simply always on", () => {
+    stubFetchSequence();
+    render(
+      <Explorer initial={[post({ impressions: 5000, engagement_rate: 3.5 })]} templates={[]} />,
+    );
+
+    const cells = within(screen.getAllByRole("row")[1]).getAllByRole("cell");
+    expect(cells[5]).toHaveTextContent("5,000");
+    expect(cells[6]).toHaveTextContent("3.50");
+  });
+
+  // The nine-row case. If ER's dash were derived from impressions' dash this row would lose a
+  // measurement Zernio actually reported — and it sits outside the default cohort, so no
+  // screenshot of the landing view would show it.
+  it("keeps a reported engagement rate on a row whose impressions were never read", () => {
+    stubFetchSequence();
+    render(
+      <Explorer
+        initial={[post({ impressions: 0, engagement_rate: 11.27, engaged_actions: 8 })]}
+        templates={[]}
+      />,
+    );
+
+    const cells = within(screen.getAllByRole("row")[1]).getAllByRole("cell");
+    expect(cells[5]).toHaveTextContent("—");
+    expect(cells[6]).toHaveTextContent("11.27");
+  });
+
+  it("says on the page what the dash means, rather than leaving it to be guessed", () => {
+    stubFetchSequence();
+    render(<Explorer initial={[post()]} templates={[]} />);
+
+    expect(screen.getByText(/never measured, not that it was zero/)).toBeInTheDocument();
+  });
+});
+
+/* Bounding the table is only honest if the page says what it is holding back and which end of
+ * the sort it cut. The second assertion is the one that matters most: the aria-live row count
+ * is the only confirmation a filter took effect, so it has to keep reading the filtered total
+ * and not the number of rows drawn. */
+describe("the bounded table", () => {
+  const many = Array.from({ length: 30 }, (_, i) =>
+    post({ id: i + 1, content: `post number ${i + 1}` }),
+  );
+
+  it("draws a bounded number of rows and states how many it is holding back", () => {
+    stubFetchSequence();
+    render(<Explorer initial={many} templates={[]} />);
+
+    // 25 rows plus the header.
+    expect(screen.getAllByRole("row")).toHaveLength(26);
+    expect(screen.getByText(/Showing 25 of 30/)).toBeInTheDocument();
+    // Which end was cut. A truncated sort with no stated order is the silent version.
+    expect(screen.getByText(/sorted by engaged actions, highest first/)).toBeInTheDocument();
+  });
+
+  it("keeps the live row count on the filtered total, not on the rows drawn", () => {
+    stubFetchSequence();
+    render(<Explorer initial={many} templates={[]} />);
+
+    expect(screen.getByText("30 posts")).toBeInTheDocument();
+  });
+
+  it("shows the rest on request", () => {
+    stubFetchSequence();
+    render(<Explorer initial={many} templates={[]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Show all 30" }));
+
+    expect(screen.getAllByRole("row")).toHaveLength(31);
+    expect(screen.getByText(/Showing all 30 of 30/)).toBeInTheDocument();
+  });
+
+  it("says nothing about a bound it is not applying", () => {
+    stubFetchSequence();
+    render(<Explorer initial={[post()]} templates={[]} />);
+
+    expect(screen.queryByText(/Showing/)).not.toBeInTheDocument();
+  });
+});
+
 /* The corpus runs 2024-01-25 → 2026-07-17 and one formatter feeds both the chart axis and this
  * column. Asserted through the table only: recharts measures itself, and `ResponsiveContainer`
  * is 0×0 in jsdom, so the axis renders nothing to assert on. The axis is checked in a browser
