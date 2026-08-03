@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Draft, MetricSnapshot, PostRow } from "@/lib/api";
@@ -125,10 +125,18 @@ type Routes = {
  *  `/templates` is answerable here only so that the trap is actually set: the page could ask
  *  for it and get a newer version back. It never does, and the test says so. */
 function stubFetch(routes: Routes) {
-  const fetchMock = vi.fn((url: string) => {
+  // Typed with the init argument even though the dispatch ignores it: the US-014 test reads
+  // the body back off `mock.calls`, and a one-argument signature makes `call[1]` a type error.
+  const fetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>((url) => {
     if (url.includes("/history")) return Promise.resolve(jsonResponse(200, routes.history ?? []));
     if (url.includes("/templates")) {
       return Promise.resolve(jsonResponse(200, routes.templates ?? []));
+    }
+    // Before `/drafts`, which it contains: falling through would answer the mutation with the
+    // drafts *list* and every assertion below would read off an array.
+    if (url.includes("/retopic")) {
+      const made = { ...draft({ id: 42, zernio_post_id: null }), llm_calls: 1, image_calls: 1 };
+      return Promise.resolve(jsonResponse(201, made));
     }
     if (url.includes("/drafts")) {
       const drafts = routes.drafts ?? [];
@@ -198,6 +206,40 @@ describe("a post with a draft behind it", () => {
     expect(screen.getByText(/unchanged across all of them/)).toBeInTheDocument();
   });
 
+  /* US-014. Re-topic is the action lineage makes possible, so it lives with the lineage block
+     and shares its gate: the route answers 409 for a post with no draft behind it, and an
+     affordance that can only fail is worse than none.
+
+     The shape of the request is pinned in RetopicForm.test.tsx; what is pinned *here* is the
+     id this page hands it, which that test cannot see because it passes `postId` by hand. The
+     three candidate numbers on this page are all distinct on purpose — post 95, draft 21, and
+     `late_post_id` — and only one of them is what `source_post_id` means. Draft 21's id would
+     be accepted by the route as a post id and would re-topic post 21, a real and unrelated
+     row; `late_post_id` is the lineage join's key and belongs to a different namespace. */
+  it("offers the re-topic the recorded templates make possible, against this post's own id", async () => {
+    const fetchMock = stubFetch({ drafts: [draft()], history: [] });
+
+    render(await renderPage());
+
+    expect(screen.getByRole("button", { name: /^Write the new draft/ })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/^The new subject/), {
+      target: { value: "why keyword-dense titles stall on Walmart" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Write the new draft/ }));
+
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/drafts/retopic"))).toBe(
+        true,
+      ),
+    );
+    const call = fetchMock.mock.calls.find(([url]) => String(url).includes("/drafts/retopic"))!;
+    expect(JSON.parse(String(call[1]?.body))).toEqual({
+      idea: "why keyword-dense titles stall on Walmart",
+      source_post_id: 95,
+    });
+  });
+
   it("says a curve needs readings when none were ever taken", async () => {
     stubFetch({ drafts: [draft()], history: [] });
 
@@ -219,6 +261,9 @@ describe("a post with no draft behind it", () => {
     expect(screen.queryByText("Generated from")).not.toBeInTheDocument();
     expect(screen.queryByText(/readings/)).not.toBeInTheDocument();
     expect(screen.queryByText("stat-hero")).not.toBeInTheDocument();
+    // And no re-topic: `POST /drafts/retopic` answers 409 for exactly this post, so the button
+    // could only ever fail, and it would spend the user a click to find that out.
+    expect(screen.queryByRole("button", { name: /^Write the new draft/ })).not.toBeInTheDocument();
   });
 
   it("treats a post that was never pushed the same way, without asking for a draft match", async () => {

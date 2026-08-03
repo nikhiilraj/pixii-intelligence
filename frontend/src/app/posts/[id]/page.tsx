@@ -13,6 +13,7 @@ import {
 
 import EngagementCurve from "./EngagementCurve";
 import ExcludeToggle from "./ExcludeToggle";
+import RetopicForm from "./RetopicForm";
 import VerdictForm from "./VerdictForm";
 
 export const dynamic = "force-dynamic";
@@ -231,6 +232,14 @@ export default async function PostDetail({ params }: { params: Promise<{ id: str
             <Lineage label="structure" entry={draft.lineage.structure} />
             <Lineage label="visual" entry={draft.lineage.visual} />
           </div>
+
+          {/* US-014, and it sits inside the lineage branch rather than beside it: re-topic is
+              the action the three versions above make possible, and `POST /drafts/retopic`
+              answers 409 for a post with no draft behind it — 57 of the published posts here.
+              An affordance that can only fail is worse than none, so it shares the gate.
+              `post.id` is this row's own id and goes as `source_post_id`; `late_post_id` is
+              the lineage join's key and `draft.id` is a different table. */}
+          <RetopicForm postId={post.id} />
 
           <h2 className="mt-8 text-xs uppercase tracking-wide opacity-50">Engagement over time</h2>
           {history && !history.ok ? (
