@@ -14,6 +14,12 @@ def _one_pixel_png() -> bytes:
     return buffer.getvalue()
 
 
+def _one_pixel_jpeg() -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (1, 1), "white").save(buffer, format="JPEG")
+    return buffer.getvalue()
+
+
 def chat_returning(handler) -> AzureChat:
     return AzureChat(
         endpoint="https://example.test",
@@ -112,6 +118,27 @@ def test_images_become_multimodal_parts():
     parts = captured["messages"][1]["content"]
     assert parts[0] == {"type": "text", "text": "look at this"}
     assert parts[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_jpeg_mime_is_sniffed():
+    """JPEG images are sent with the correct image/jpeg mime type, not the png fallback."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
+
+    chat = AzureChat(
+        endpoint="https://example.invalid",
+        api_key="k",
+        deployment="d",
+        api_version="v",
+        transport=httpx.MockTransport(handler),
+    )
+    chat.complete_json("sys", "look at this", images=[_one_pixel_jpeg()])
+
+    parts = captured["messages"][1]["content"]
+    assert parts[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
 
 
 def test_no_images_sends_a_plain_string():

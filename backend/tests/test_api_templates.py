@@ -195,7 +195,7 @@ class _FakeLLM:
     def __init__(self, response: dict):
         self.response = response
 
-    def complete_json(self, system: str, user: str) -> dict:
+    def complete_json(self, system: str, user: str, images=()) -> dict:
         return self.response
 
 

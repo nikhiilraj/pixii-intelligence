@@ -169,7 +169,7 @@ class FakeLLM:
     def __init__(self):
         self.user = ""
 
-    def complete_json(self, system: str, user: str) -> dict:
+    def complete_json(self, system: str, user: str, images=()) -> dict:
         self.user = user
         return {"hooks": [{"name": "n", "pattern": "{a}"}]}
 

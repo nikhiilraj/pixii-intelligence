@@ -80,7 +80,7 @@ class FakeLLM:
     def __init__(self, written: dict | None = None):
         self.written = written or WRITTEN
 
-    def complete_json(self, system: str, user: str) -> dict:
+    def complete_json(self, system: str, user: str, images=()) -> dict:
         if "choose which templates" in system.lower():
             return {"hook": "transformation", "structure": "case-loop", "visual": "stat-hero"}
         return self.written

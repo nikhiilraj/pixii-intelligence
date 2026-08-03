@@ -42,7 +42,7 @@ class FakeLLM:
         self.responses = list(responses)
         self.calls: list[tuple[str, str]] = []
 
-    def complete_json(self, system: str, user: str) -> dict:
+    def complete_json(self, system: str, user: str, images=()) -> dict:
         self.calls.append((system, user))
         return self.responses.pop(0) if len(self.responses) > 1 else self.responses[0]
 
