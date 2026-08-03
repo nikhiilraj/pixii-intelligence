@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlmodel import col, select
 
 from app.api_assets import router as assets_router
+from app.api_drafts import DraftOut, _out
 from app.api_drafts import router as drafts_router
 from app.api_templates import router as templates_router
 from app.config import settings
@@ -22,7 +23,7 @@ from app.corpus import (
 )
 from app.db import engine
 from app.deps import SessionDep
-from app.metrics import sync_metrics, template_performance
+from app.metrics import draft_for_post, sync_metrics, template_performance
 from app.models.draft import Draft
 from app.models.metric import MetricSnapshot
 from app.models.post import Post, PostSource, Verdict
@@ -73,10 +74,18 @@ def database_reachable() -> bool:
 
 @app.get("/health")
 def health() -> dict:
-    """Liveness plus what the app can actually reach.
+    """Liveness plus what the app can actually reach, and the ceilings it will enforce.
 
     The frontend status page renders this directly, so an operator can see at a glance
     whether the database is up and which credentials are configured.
+
+    **Presence flags and scalar ceilings, never a value.** `configured()` reports whether a
+    credential is set and nothing about its content; `variants_max` is a public limit the
+    client has to know to say what a variants run will spend — without it a count control
+    hardcodes 3 and drifts the day the setting changes. Anything added here must be a boolean
+    or a scalar of the same kind. `variants_max` is a **sibling** of `credentials`, not a key
+    inside it: the Inbox footer renders `credentials` row-per-key as a health light, so a
+    number in there would render as a junk boolean.
 
     `status` is derived, not the literal `"ok"` it used to be: the status row can render a
     failure (US-007), and a readout structurally incapable of saying anything but "fine" makes
@@ -92,6 +101,7 @@ def health() -> dict:
         "status": "ok" if reachable else "degraded",
         "database": reachable,
         "credentials": settings.configured(),
+        "variants_max": settings.variants_max,
     }
 
 
@@ -239,6 +249,43 @@ def post_history(session: SessionDep, post_id: int) -> list[MetricSnapshot]:
         .order_by(col(MetricSnapshot.captured_at))
     )
     return list(session.exec(statement).all())
+
+
+@app.get("/posts/{post_id}/draft")
+def post_draft(session: SessionDep, post_id: int) -> DraftOut | None:
+    """The draft that produced this post, if this app produced it.
+
+    **Three outcomes, not two.** A draft; `null` for a post with no draft behind it; 404 for
+    no such post. The middle one is the *normal* answer here — 57 published posts carry no
+    lineage and zero generated drafts have ever gone live — so it is a 200 with an empty body,
+    not an error. `POST /drafts/retopic` tells the same two apart and answers 409 for the
+    middle case, correctly: re-topicking a post with no recorded templates cannot proceed,
+    while reading one can. What carries over is the distinction and the 404's wording, not
+    the status code.
+
+    This replaces a `GET /drafts?limit=500` plus a `find` in the browser. That join had a
+    silent ceiling: the list is `created_at DESC`, so what fell off the end was the *oldest*
+    drafts — exactly the ones whose posts have been live longest — and the page then said
+    "no draft behind this post" while the draft sat in the database.
+
+    Returns `_out`'s `DraftOut`, the one mapping. `DraftOut` is hand-mapped, so a second
+    shape built here would drift from it the next time a column is added.
+
+    ponytail: `draft_for_post`'s unordered `.first()`, not newest-wins. The browser's `find`
+    over a `created_at DESC` list picked the newest match, and that divergence *dissolves*
+    rather than needing resolving — the browser-side join goes away with this route. Going
+    through the same function `_source_draft` uses is what matters: the draft this shows and
+    the draft a re-topic inherits from can never be different rows. The ceiling is two drafts
+    sharing one `zernio_post_id`, which needs a forced re-push (`publishing.py:74` returns
+    early once the id is set, and each push mints a fresh Zernio id) and would be a data bug
+    rather than a case to choose between. Sorting here would also mean comparing `created_at`
+    values in Python, which is the naive/aware trap `_utc` exists for.
+    """
+    post = session.get(Post, post_id)
+    if post is None:
+        raise HTTPException(status_code=404, detail=f"no post {post_id}")
+    draft = draft_for_post(session, post)
+    return _out(session, draft) if draft else None
 
 
 @app.get("/posts/{post_id}")

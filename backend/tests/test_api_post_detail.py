@@ -3,6 +3,7 @@ from sqlmodel import Session
 
 from app.db import get_session
 from app.main import app
+from app.models.draft import Draft
 from app.models.post import Post
 
 
@@ -11,8 +12,9 @@ def client_with(session: Session) -> TestClient:
     return TestClient(app)
 
 
-def saved(session: Session) -> Post:
+def saved(session: Session, late_post_id: str | None = None) -> Post:
     post = Post(
+        late_post_id=late_post_id,
         zernio_id="a1",
         platform="linkedin",
         content="The boring $325M acquisition:\n\nMiss Mouth gets snapped up.",
@@ -70,4 +72,80 @@ def test_excluding_an_unknown_post_is_not_found(session):
     response = client_with(session).post("/posts/999999/exclude", json={"excluded": True})
 
     assert response.status_code == 404
+    app.dependency_overrides.clear()
+
+
+def generated(session: Session, late_post_id: str) -> Draft:
+    """A draft that was pushed and went live as the post carrying `late_post_id`."""
+    draft = Draft(
+        idea="what a listing image is actually for",
+        hook_family="hook-a",
+        structure_family="structure-a",
+        hook_text="Your listing image is not decoration.",
+        body_text="It is the only thing a shopper reads.",
+        zernio_post_id=late_post_id,
+    )
+    session.add(draft)
+    session.flush()
+    return draft
+
+
+def test_the_draft_behind_a_generated_post_is_served_by_its_own_route(session):
+    """The join `draft_for_post` already does, given an HTTP surface.
+
+    `lineage` is asserted because it is only present if the route went through `_out` —
+    `DraftOut` is hand-mapped, and a second hand-rolled shape here would drift from it.
+    """
+    post = saved(session, late_post_id="late-1")
+    draft = generated(session, "late-1")
+
+    response = client_with(session).get(f"/posts/{post.id}/draft")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == draft.id
+    assert body["zernio_post_id"] == "late-1"
+    assert body["full_text"].startswith("Your listing image is not decoration.")
+    assert "lineage" in body
+    app.dependency_overrides.clear()
+
+
+def test_a_post_with_no_draft_behind_it_answers_null_rather_than_not_found(session):
+    """The common case, not an error: 57 published posts carry no lineage.
+
+    Both halves are asserted. A body-only check would also pass against a 404, whose
+    `{"detail": ...}` is not `None` but would tell a reader their post does not exist.
+    """
+    post = saved(session, late_post_id="late-2")
+
+    response = client_with(session).get(f"/posts/{post.id}/draft")
+
+    assert response.status_code == 200
+    assert response.json() is None
+    app.dependency_overrides.clear()
+
+
+def test_an_ingested_post_carrying_no_late_post_id_also_answers_null(session):
+    """`draft_for_post`'s early return — a different path from "no matching draft", and the
+    shape of every post ingested from Zernio's history rather than generated here."""
+    post = saved(session)
+
+    response = client_with(session).get(f"/posts/{post.id}/draft")
+
+    assert response.status_code == 200
+    assert response.json() is None
+    app.dependency_overrides.clear()
+
+
+def test_asking_for_the_draft_behind_an_unknown_post_is_not_found(session):
+    """The third outcome, kept distinct from the second: no such post at all.
+
+    The detail is asserted, not just the status. An unrouted path is a 404 too, so a
+    status-only check passes before the route exists and is no evidence that it answered —
+    it did, in this test's first run.
+    """
+    response = client_with(session).get("/posts/999999/draft")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "no post 999999"
     app.dependency_overrides.clear()
