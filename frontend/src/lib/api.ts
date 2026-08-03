@@ -231,6 +231,29 @@ function messageFrom(detail: unknown, status: number): string {
     return parts.join("; ");
   }
 
+  /* And a plain object, which is the third shape a raised `HTTPException` can carry: the batch
+   * routes report what was already spent on the failure path — `POST /drafts/variants` raises
+   * 502 with `{"error": ..., "llm_calls": n, "image_calls": n}` because the drafts roll back
+   * with the request and the money does not. Without this branch that landed as "request failed
+   * (502)": the reason dropped, and the spend the backend went out of its way to report dropped
+   * with it — on the one path where nothing arrived to show for it.
+   *
+   * The message first, then the remaining scalars as `key: value`. Never `String(detail)` or a
+   * bare `JSON.stringify`: `[object Object]` on screen is the bug the branch above exists to
+   * prevent, and this one must not reintroduce it in a different shape. After the array check,
+   * because FastAPI's own 422s are a list of objects and keep their own handling. */
+  if (typeof detail === "object" && detail !== null) {
+    const entries = Object.entries(detail as Record<string, unknown>);
+    const said = entries.find(
+      ([k, v]) => typeof v === "string" && v && ["error", "detail", "message"].includes(k),
+    );
+    const rest = entries
+      .filter(([k, v]) => k !== said?.[0] && (typeof v === "string" || typeof v === "number"))
+      .map(([k, v]) => `${k}: ${v}`);
+    const parts = [said?.[1] as string | undefined, ...rest].filter(Boolean);
+    if (parts.length > 0) return parts.join(", ");
+  }
+
   return `request failed (${status})`;
 }
 
