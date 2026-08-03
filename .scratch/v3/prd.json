@@ -221,7 +221,7 @@
     "id": "US-017",
     "title": "/templates gets tests - the largest single gap in the repo",
     "priority": 17,
-    "passes": false,
+    "passes": true,
     "description": "TemplateManager.tsx has NO test file, and it is the page where 50 proposals get approved or retired. It also holds the extract controls that wrote 13 rows into the live database during this run.",
     "acceptanceCriteria": [
       "approve and retire assert their request URLs, not just that a button exists",
@@ -235,7 +235,7 @@
     "id": "US-018",
     "title": "Corpus and scoreboard polish",
     "priority": 18,
-    "passes": false,
+    "passes": true,
     "description": "The Inbox renders all 37 proposals and /posts all 69 rows, at 2998px and 4030px tall. /posts shows never-measured impressions as 0. AddExternal.tsx:19 is a pre-token holdout beside controls US-003 converted. min-w-2xl on the scoreboard table is inert (672 vs a real floor of 752) and misstates the floor.",
     "acceptanceCriteria": [
       "both lists are bounded, and what is hidden is stated rather than silently truncated",
@@ -249,7 +249,7 @@
     "id": "US-019",
     "title": "Frontend consumes the new backend; Studio names its cost",
     "priority": 19,
-    "passes": false,
+    "passes": true,
     "description": "Wave 2 - depends on US-016. Also hoists the calls(n, unit) formatter and the llm_calls/image_calls pair duplicated between Studio.tsx and RetopicForm.tsx, left that way only because a second agent held lib/api.ts. And Studio's 'No draft yet' card sits on bg-surface-2, which reads as the amber warning used elsewhere, on the state that is correct every visit.",
     "acceptanceCriteria": [
       "the post page no longer requests /drafts?limit=500",
@@ -281,7 +281,9 @@
       "7 routes x 2 themes x 1440 and 390, findings recorded with evidence",
       "the two never-rendered surfaces are seen, via the read-only proxy technique - NOT by writing a specimen row to the database",
       "findings that clear the bar become slices BEFORE merge, not after",
-      "full suite green, merged to main, vault note and memory rewritten"
+      "full suite green, merged to main, vault note and memory rewritten",
+      "Decide with evidence on the GLOBAL long-unbroken-string overflow: US-018 proved it is pre-existing and shell-level (main's prose has no wrap-anywhere), reproducible from ordinary prose on / , /posts and /scoreboard. A global wrap change affects every route, so it needs a look, not a reflex",
+      "Studio.tsx:533's variants summary card still carries bg-surface-2 - the same warm tint US-019 removed from the empty state, on another state that is correct by default"
     ]
   }
 ]
