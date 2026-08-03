@@ -4,8 +4,16 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 
+import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { postBlob, postJson, type Cohort, type Template, type TemplateKind } from "@/lib/api";
 
 const KINDS: TemplateKind[] = ["hook", "structure", "visual"];
@@ -39,6 +47,23 @@ function cohortOf(template: Template): string | null {
   return typeof cohort === "string" ? cohort : null;
 }
 
+/** The path an extract button posts to, cohort and all.
+ *
+ *  A function rather than two inline template strings because `cohort` is the one value on this
+ *  page that reaches a query string, and the Radix trigger that sets it cannot be driven in
+ *  jsdom — so this is the only place the mapping from a chosen cohort to the sent query can be
+ *  asserted for both cohorts. Built with `URLSearchParams` rather than concatenated: one of
+ *  these endpoints already carries a param and the other does not, so `?` vs `&` is not the
+ *  same by hand. Both call sites go through it; leaving one inline would put a second copy
+ *  where a mutation could hide. */
+export function extractPath(what: "hooks" | "structures", cohort: Cohort): string {
+  // Annotated: without it the ternary widens to a union carrying `sample_size?: undefined`,
+  // which `URLSearchParams` does not accept.
+  const params: Record<string, string> =
+    what === "structures" ? { sample_size: "27", cohort } : { cohort };
+  return `/templates/extract/${what}?${new URLSearchParams(params)}`;
+}
+
 const BLANK_BODY: Record<TemplateKind, string> = {
   hook: JSON.stringify({ pattern: "{value} turned into {outcome}", tone: "direct" }, null, 2),
   structure: JSON.stringify(
@@ -49,17 +74,24 @@ const BLANK_BODY: Record<TemplateKind, string> = {
   visual: JSON.stringify({ renderer: "html", component: "stat_hero" }, null, 2),
 };
 
-const STATUS_STYLE: Record<string, string> = {
-  approved: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
-  proposed: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
-  retired: "bg-black/10 opacity-60 dark:bg-white/10",
+/** A template's status, carried by the shared Badge — the fill says the status, the word stays
+ *  on --text.
+ *
+ *  This file used to declare its own `Badge` over a local map of raw palette colours
+ *  (`text-emerald-700`, `text-amber-700`, plus `opacity-60` on retired), which is precisely the
+ *  shape `components/ui/badge.tsx` exists to prevent and its header comment measures. Measured
+ *  on the rendered page, all three light-mode states were under the 4.5 floor as text —
+ *  proposed 4.31:1, retired 4.34:1, approved 4.47:1 — while the shared component's labels sit at
+ *  13:1 or better in both themes because it tints the status behind a `--text` word instead of
+ *  colouring the word. Three near-misses, on the page where 50 proposals are reviewed.
+ *
+ *  An unknown status falls through to the Badge's own `neutral` default rather than to an
+ *  unstyled span; the old map's `?? ""` rendered a bare word with no affordance at all. */
+const STATUS_VARIANT: Record<string, BadgeProps["variant"]> = {
+  approved: "success",
+  proposed: "warning",
+  retired: "neutral",
 };
-
-function Badge({ status }: { status: string }) {
-  return (
-    <span className={`rounded px-1.5 py-0.5 text-xs ${STATUS_STYLE[status] ?? ""}`}>{status}</span>
-  );
-}
 
 /** Whose posts a template was read from.
  *
@@ -69,11 +101,17 @@ function Badge({ status }: { status: string }) {
  * Three states, three renderings. Most of the queue predates the field, and rendering
  * nothing for those would put a blank beside rows explicitly marked as borrowed — which
  * reads as "not borrowed", a claim the row does not carry. Unrecorded is the true one.
+ *
+ * "Unrecorded" is muted with --text-muted, not with `opacity-40`. Opacity was the worst
+ * contrast in the app — 2.51:1 light, 3.40:1 dark, the only element that failed AA in both
+ * themes — and it failed on the one label that tells a reviewer whether a proposal came from
+ * our own posts or was borrowed. A third state that says "we do not know" still has to be
+ * readable to say it; the token mutes to a measured 5.2:1 instead of to an arbitrary alpha.
  */
 function CohortTag({ template }: { template: Template }) {
   const cohort = cohortOf(template);
   if (!cohort) {
-    return <span className="rounded px-1.5 py-0.5 text-xs opacity-40">cohort unrecorded</span>;
+    return <span className="rounded px-1.5 py-0.5 text-xs text-muted">cohort unrecorded</span>;
   }
   return (
     <span className={`rounded px-1.5 py-0.5 text-xs ${COHORT_STYLE[cohort] ?? ""}`}>
@@ -163,50 +201,56 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
     setBody(JSON.stringify(template.body, null, 2));
   }
 
-  const field =
-    "w-full rounded-md border border-black/15 bg-transparent px-3 py-2 text-sm dark:border-white/20";
+  // Dresses the name input and the body textarea, now that the kind select draws its own border
+  // from the same tokens. Retokenised with the select that left it: leaving `border-black/15`
+  // here would put a differently-weighted border on the two controls directly under a
+  // `border-border` trigger, which is the mismatch this slice exists to remove.
+  const field = "w-full rounded-input border border-border bg-transparent px-3 py-2 text-meta";
 
   return (
     <div className="mt-8 grid gap-10 lg:grid-cols-[1fr_20rem]">
-      <section>
+      {/* `min-w-0` is the whole reason this page is not 10384px wide at a 1440px viewport. A grid
+          track carries an implicit `min-width: auto` that resolves to its item's min-content, and
+          this section's min-content is the longest unwrapped line of the `JSON.stringify` dump in
+          the `<pre>` below — so the track grew to fit it and the `overflow-x-auto` already on that
+          `<pre>` was never asked to scroll. The author column then stretched to match. Do not
+          delete this class because it looks inert; the overflow it prevents is data-dependent and
+          only shows up once a template body contains a long line. */}
+      <section className="min-w-0">
         <div className="mb-4 flex flex-wrap items-center gap-3">
-          <select
-            value={cohort}
-            onChange={(e) => setCohort(e.target.value as Cohort)}
-            disabled={busy}
-            className="rounded-md border border-black/15 bg-transparent px-2 py-1.5 text-sm dark:border-white/20"
-            aria-label="extraction cohort"
-          >
-            {COHORTS.map((c) => (
-              <option key={c.value} value={c.value}>
-                {c.label}
-              </option>
-            ))}
-          </select>
+          {/* No sentinel on either Select in this file: both are required choices with a real
+              default ("voice", "hook"), so neither has an unset state and Radix's ban on an
+              empty item value never bites. Worth naming rather than leaving as an absence —
+              `cohort` *does* reach a query string (`/templates/extract/hooks?cohort=`), so the
+              day this grows an "any cohort" option it needs the sentinel and the query test
+              that /posts and /assets carry. */}
+          <Select value={cohort} onValueChange={(v) => setCohort(v as Cohort)} disabled={busy}>
+            <SelectTrigger aria-label="extraction cohort">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {COHORTS.map((c) => (
+                <SelectItem key={c.value} value={c.value}>
+                  {c.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Button
             variant="outline"
-            onClick={() => send(`/templates/extract/hooks?${new URLSearchParams({ cohort })}`)}
+            onClick={() => send(extractPath("hooks", cohort))}
             disabled={busy}
           >
             {busy ? "Working…" : "Extract hooks from top posts"}
           </Button>
           <Button
             variant="outline"
-            onClick={() =>
-              // Query string built rather than concatenated: this endpoint already carries
-              // a param and the other does not, so `?` vs `&` is not the same by hand.
-              send(
-                `/templates/extract/structures?${new URLSearchParams({
-                  sample_size: "27",
-                  cohort,
-                })}`,
-              )
-            }
+            onClick={() => send(extractPath("structures", cohort))}
             disabled={busy}
           >
             Extract structures
           </Button>
-          <span className="text-xs opacity-50">
+          <span className="text-xs text-muted">
             Proposes patterns from the strongest posts in the chosen cohort. Nothing becomes
             usable until you approve it.
           </span>
@@ -234,10 +278,10 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
               >
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-medium">{t.name}</span>
-                  <span className="text-xs opacity-50">
+                  <span className="text-xs text-muted">
                     {t.kind} · v{t.version}
                   </span>
-                  <Badge status={t.status} />
+                  <Badge variant={STATUS_VARIANT[t.status]}>{t.status}</Badge>
                   <CohortTag template={t} />
                   <span className="ml-auto flex gap-3 text-xs">
                     {t.status !== "retired" && (
@@ -279,7 +323,7 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
                   </span>
                 </div>
                 {t.provenance.length > 0 && (
-                  <p className="mt-1 text-xs opacity-50">
+                  <p className="mt-1 text-xs text-muted">
                     from {t.provenance.length} post{t.provenance.length === 1 ? "" : "s"}
                   </p>
                 )}
@@ -301,26 +345,30 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
       </section>
 
       <form onSubmit={submit} className="space-y-3">
-        <h2 className="text-xs font-medium uppercase tracking-widest opacity-50">
+        <h2 className="text-xs font-medium uppercase tracking-widest text-muted">
           {editing ? `Revise "${editing.name}" → v${editing.version + 1}` : "Author a template"}
         </h2>
 
         {!editing && (
-          <select
+          <Select
             value={kind}
-            onChange={(e) => {
-              const next = e.target.value as TemplateKind;
+            onValueChange={(value) => {
+              const next = value as TemplateKind;
               setKind(next);
               setBody(BLANK_BODY[next]);
             }}
-            className={field}
           >
-            {KINDS.map((k) => (
-              <option key={k} value={k}>
-                {k}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger aria-label="template kind" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {KINDS.map((k) => (
+                <SelectItem key={k} value={k}>
+                  {k}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         )}
 
         <input

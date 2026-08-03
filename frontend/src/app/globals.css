@@ -6,6 +6,18 @@
    @theme would bake the light value into every generated utility and dark mode
    would stop resolving. */
 :root {
+  /* Not decoration — this is what makes the browser's OWN chrome follow the theme. The tokens
+     below only reach what our stylesheet paints. `::-webkit-calendar-picker-indicator` inside
+     the date filter's UA shadow root, UA scrollbars and autofill are painted by Chrome, and at
+     `color-scheme: normal` — which is what this file declared for two versions — it paints all
+     of them light on every page regardless of the theme. Measured on /posts: the calendar glyph
+     was black on the #121210 dark field, 1.12:1. The affordance that opens the picker was not
+     merely dim, it was absent, and no test can query a shadow root. With `light dark` declared
+     the same glyph reads 18.75:1 in dark and light is unchanged at 20.08:1. Both keywords, in
+     that order: the theme is driven by prefers-color-scheme, so letting the UA follow the same
+     signal keeps the two in step by construction rather than by a second switch to maintain. */
+  color-scheme: light dark;
+
   /* colour — light */
   --bg: #fafaf7;
   --surface: #ffffff;

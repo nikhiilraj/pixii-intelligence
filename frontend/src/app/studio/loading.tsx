@@ -1,13 +1,15 @@
 import { Skeleton } from "@/components/ui/skeleton";
 
 /* Mirrors studio/page.tsx + Studio: title, lede, then the two-column grid — the idea textarea,
-   the three template selects and the two generate buttons on the left; the draft column on the
-   right. The `22rem` left column is reserved at its real width so the form does not resize once
-   the templates arrive.
+   the three template selects, the two generate buttons and the drafts list on the left; the
+   draft column on the right. The `22rem` left column is reserved at its real width so the form
+   does not resize once the templates arrive.
 
-   The right column is deliberately just a heading-height bar and nothing else. There is no draft
-   on arrival — Studio holds one in session state and starts empty every time — so a skeleton
-   promising a post here would be a promise about the wrong thing entirely. */
+   The right column is deliberately just a heading-height bar and nothing else, and since US-012
+   that is a choice rather than a certainty: `/studio?draft=<id>` does arrive with a draft to
+   show, but `loading.tsx` takes no props and cannot read the search params, so a skeleton shaped
+   like a post would promise one on every visit to bare `/studio`, where there is still nothing.
+   It under-promises on the one route rather than over-promising on the other. */
 export default function StudioLoading() {
   return (
     <main className="mx-auto max-w-6xl px-6 py-16" aria-busy="true">
@@ -28,10 +30,17 @@ export default function StudioLoading() {
           <Skeleton className="h-9 w-full" />
           <Skeleton className="h-9 w-full" />
           <Skeleton className="h-9 w-full" />
+          {/* Suggest, Generate draft, Write variants — then the line under them saying what the
+              third one spends. */}
           <div className="flex flex-wrap gap-2">
             <Skeleton className="h-8 w-36" />
             <Skeleton className="h-8 w-32" />
+            <Skeleton className="h-8 w-28" />
           </div>
+          <Skeleton className="h-8 w-full" />
+          {/* The drafts list. Reserved unconditionally, unlike the right column: there is
+              always a list to show, even when what it will say is that there are none. */}
+          <Skeleton className="h-32 w-full" />
         </section>
 
         <section>

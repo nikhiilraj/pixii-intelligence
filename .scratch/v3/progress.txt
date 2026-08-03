@@ -1,0 +1,189 @@
+# V3 run record
+
+Master session owns: prd.json, this file, browser-pass.md, and every git commit on feat/v3.
+Agents write code only. A concurrent `git commit --amend` destroyed work in the V2 run; that is
+why the rule exists.
+
+Branch: feat/v3 off main @ 7cb37aa.
+Starting state: 412 backend + 73 frontend tests. DB: 37 proposals / 4 built / 2 pushed / 0 awaiting
+verdict, 11 approved templates, 6 drafts (0 ever went live), 57 published posts (0 verdicts).
+
+
+## Codebase Patterns
+
+Carried forward from V1/V2 plus what this run added. Read this before touching anything — every
+line here cost someone an hour.
+
+### Layout and CSS
+
+- **An auto margin on the cross axis disables flex `stretch`.** `<body class="flex flex-col">` plus
+  `<main class="mx-auto max-w-6xl">` meant every page shrink-wrapped its content and `mx-auto`
+  centred the shrunken box. `items-stretch` does NOT override this — auto margins win per spec.
+  Found only by measuring in a browser; the classnames all read correctly.
+- **A CSS Grid `1fr` track has an implicit `min-width: auto` = min-content.** A descendant's
+  `overflow-x-auto` never engages, because the track grows to fit before the element is asked to
+  scroll. This is what made `/templates` 10384px wide. Fix is `min-w-0` on the grid child or
+  `minmax(0,1fr)`. The same shape is present anywhere this repo uses `1fr`.
+- **`/posts/[id]` is deliberately `max-w-3xl` (768px), centred.** A single post is a reading
+  measure, not a table. Do not "fix" it to match the other routes.
+- **Layout cannot be verified in jsdom.** Vitest can assert classnames, which is not the same
+  thing and will pass while the page is broken. Layout claims get browser measurements or they are
+  not claims. Playwright 1.62.1 is available but is NOT in node_modules — run node with
+  `NODE_PATH=/Users/nikhilraj/.npm/_npx/9833c18b2d85bc59/node_modules` and
+  `chromium.launch({channel: 'chrome'})`.
+- **The Chrome MCP extension has never responded** — 6 attempts across two sessions. Playwright is
+  the working path; do not burn time on the extension.
+
+### Data and dates
+
+- **Every datetime column is `timestamp without time zone`.** A value written `datetime.now(UTC)`
+  reads back **naive** once the row round-trips, and whether that has happened depends on when the
+  ORM expired the object — so one query can yield both kinds and comparing them **raises**.
+  Normalise through `main._utc`.
+- **The corpus spans 2024-01-25 → 2026-07-17.** Any date formatter that omits the year is
+  ambiguous here, and `/posts` sorts by engagement, so two rows reading "15 Jun" can be two years
+  apart. This made a correctly-sorted chart look scrambled and sent a reviewer hunting a sorting
+  bug that does not exist.
+- **`Explorer.tsx:200`'s `series` sorts ascending by `published_at` and always did.** Do not
+  "fix" it.
+
+### Backend
+
+- **`DraftOut` is hand-mapped** (`api_drafts.py`). A new `Draft` column is invisible to the
+  frontend until both the model *and* its builder change — migration, query and tests all green
+  meanwhile.
+- **A new model module not imported in `app/models/__init__.py` makes alembic autogenerate emit a
+  DROP.**
+- **Publish detection must not key on the analytics window.** `sync_metrics` reads Zernio's 50-row
+  window; 11 published posts have no analytics row at all. `stamp_published` scans the whole table
+  and keys on `late_post_id` (NOT `zernio_id` — different namespace), predicate
+  `Post.status == "published"`, never row existence.
+- **Lineage resolves through `generated_from(family, version)`, never "latest".** `_current` was
+  deleted for exactly this: its docstring said "the version this draft was generated from" and it
+  returned the newest row, so redrawing a v2 draft after v3 existed credited v2 with v3's work.
+- **`PIL.Image.DecompressionBombError` subclasses `Exception`, not `OSError`/`ValueError`.**
+- **Credentials carry `Field(repr=False)`.** pytest dumps both operands' repr on a failed
+  assertion and CI runs pytest. Tests assert against a fabricated canary, never the real key —
+  comparing against the live value leaks it in the failure output, which is the exact leak the
+  test exists to prevent.
+- **`make check` runs BOTH suites as of this run.** It ran backend pytest only for the whole of V1
+  and V2, so every frontend test written in those runs sat outside the gate — "make check green"
+  was no evidence at all about the frontend. Fixed in the Makefile 2026-07-31. There is still no
+  `build` target; do not run `next build`, it writes to the `.next` the dev server is serving.
+- **Pyright import errors in this repo are spurious** — it resolves against system Python, not
+  `backend/.venv`. `mypy` inside `make check` is the real check.
+
+### Rendering
+
+- **Base64 is load-bearing in `rendering.fill`** (`assets.py:168`). `fill` HTML-escapes slot values
+  because they come from a language model; base64's alphabet happens to dodge all five escaped
+  characters, but a raw `data:image/svg+xml,<svg…>` is mangled to `&lt;svg` and renders broken with
+  **no exception raised**. Never widen `fill(escape=False)` on the markup path — that flag is the
+  injection guard.
+- **`WRITABLE_SLOT_TYPES = {"text", "number"}`.** An absent `type` is unknown and must fail loud;
+  `""` used to be writable, which let the model write prose into an `<img src>`. Name heuristics
+  were considered and rejected: `left_image_url` reads as an asset and `subject`/`logo`/`hero` do
+  not.
+- **`AzureImageRenderer` turns any status ≥400 including 429 into `ImageGenerationError` with no
+  retry.** Cloudflare got backoff (4 attempts, 5/10/20s); Azure did not. Trigger to fix: any batch
+  path generating more than one AI visual per minute.
+- **Cloudflare has no payload ceiling worth worrying about** (a 13.17MB body with a 9.88MB embedded
+  PNG was accepted). The real constraint is request cadence — `429 code 2001`.
+
+### UI
+
+- **Radix `Select` cannot hold an empty-string value**, so "all" options need a sentinel — and if
+  that sentinel reaches the query string, filtering breaks **silently while everything still
+  renders**.
+- **Assert our own logic, never a third-party library's internals.** Radix's keyboard behaviour is
+  upstream-tested and jsdom only approximates focus. Report computed contrast ratios rather than
+  asserting them — there is no browser in CI.
+
+
+## Slice log
+
+14 of 15 landed. Started 412 backend + 73 frontend; now **447 backend + 133 frontend**.
+Every slice was independently re-verified by master before its commit — layout claims by
+re-measuring in Chrome, backend claims by re-running the suite, live claims against the real API.
+
+| slice | what it was |
+|---|---|
+| US-001 | The shell is the shell. `/templates` 10384px → 1440px; three routes stopped floating inboard |
+| US-002 | Dates carry their year on a 2.5-year corpus |
+| US-003 | Form controls onto Radix; zero raw `<select>` left |
+| US-004 | Three scoreboard tables, one column grid |
+| US-005 | Image bombs 422, not 500 |
+| US-006 | A ruling can be cleared — API **and** the page that records it |
+| US-007 | Status row can report failure; `/health` stopped hardcoding `"ok"` |
+| US-008 | `Closed circuits: 0` |
+| US-009 | Post detail shows its curve and what generated it |
+| US-010 | Lessons reach the step that decides *what* to write about |
+| US-011 | A paid run says what it cost |
+| US-012 | Studio opens drafts that already exist — the Inbox stopped pointing at a closed door |
+| US-013 | One idea, several drafts, keep one |
+| US-014 | Re-topic: same templates, new subject |
+| US-015 | Asset picker dialog — **in flight at the pause** |
+
+### Bugs found *while* fixing something else — the highest-yield category this run
+
+None of these were on any list. All were found by an agent doing adjacent work.
+
+1. **`make check` never ran the frontend suite.** Backend pytest only, for the whole of V1 and V2.
+   Every frontend test written in those runs sat outside the gate. Two agents reported the
+   discrepancy unprompted rather than let "make check green" stand in for evidence they lacked.
+2. **`/health` hardcoded `"status": "ok"`**, so US-007's newly-honest status row could never
+   actually go red. A capability with no observable path.
+3. **`messageFrom` dropped object-shaped 502 details.** `POST /drafts/variants` raises one,
+   because the drafts roll back and the spend does not — so the reason *and* the money already
+   spent both vanished into "request failed (502)", on the one path with nothing else to show.
+4. **The re-topic spend report survived a refusal.** Success set it, nothing cleared it: a second
+   press taking a 409 left "it spent 1 chat completion" on screen, claiming money bought a draft
+   that was never written.
+5. **Two Studio assertions were silently vacuous** after the Radix migration — `queryByText` on
+   content inside a closed `SelectContent`, which lives in a detached DocumentFragment, so it is
+   absent whether the picker exists or not.
+
+### Three claims of mine that did not survive contact with the source
+
+Recorded because the pattern is the lesson: **everything I read off a screenshot was wrong, and
+everything I read in source was right.**
+
+1. I attributed the `/posts` and `/scoreboard` mobile overflow to the native date input. It was
+   the shrink-to-fit `<main>` propagating the tables' `min-w` through their already-correct scroll
+   containers. 736+48=784 and 672+48=720, exact.
+2. I wrote that `/posts` rendered four raw `<select>` elements. They were migrated in V2's
+   `a48bc1c` and were already correct, sentinel and all. Only its date input was native.
+3. An agent reported `verdict_lessons` was missing a `status == "published"` predicate. Checked
+   before acting — the same docstring justifies the wider scope fifteen lines below the line it
+   read. Deliberate and documented; left alone.
+
+**Method warning that caused #1 and #2:** a measurement taken in the same tick as a layout
+mutation is stale — `ResizeObserver` has not fired. And a screenshot cannot tell a Radix trigger
+from a native `<select>` at a glance.
+
+### Writes to the live database by agents doing browser verification
+
+Disclosed by the agents themselves, and my instruction caused them: I told agents to verify in a
+browser without scoping which controls were safe to click. Later briefs say "do not click anything
+that writes".
+
+- **13 template rows, in two separate extractions.** 54747–54752 (six, inspiration cohort, 21:03)
+  and 62640–62646 (seven, voice cohort, 21:56 — a *second* browser test, by a different agent,
+  which I did not notice at the time). **The review gate is 50, not 37.** Two of the thirteen are
+  exact-name duplicates of proposals already in the queue (`ai-or-human-quiz` 62644 vs 3134,
+  `dismissive-objection-examples` 62645 vs 7109); the rest are novel wordings, extraction being
+  non-deterministic over the same corpus. All kept — they are real extractions, not junk.
+- **Draft 15580**, `"a nine figure exit"` — test junk. **Deleted 2026-08-03** at Nikhil's word,
+  after confirming it was never pushed, carried no image, and that no foreign key references
+  `draft`. Queue 2 back to 4.
+
+**I reported "43, not 37" and it was already 50.** I counted once, after the first extraction, and
+then quoted that number twice more without re-reading the Inbox. The second extraction had already
+happened. The number only surfaced because deleting the draft made me look again — which is the
+argument for reading live state rather than trusting a figure you wrote down earlier.
+
+### Still true, and the only thing that matters
+
+**`closed_circuits` reads 0.** Every mechanical part of the loop now works and is reachable from
+the UI. It has still completed zero laps, because the remaining step is Monte publishing a draft.
+Software made that cheap; it cannot make it happen.

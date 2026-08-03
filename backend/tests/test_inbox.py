@@ -110,6 +110,12 @@ def queues(client: TestClient) -> dict:
     return client.get("/inbox").json()
 
 
+def queues_only(body: dict) -> dict:
+    """The four queues, without `closed_circuits`. That field is an int, not a queue, so the
+    whole-body sweeps below would read `int["count"]` and raise."""
+    return {name: q for name, q in body.items() if name != "closed_circuits"}
+
+
 def ids(queue: dict) -> list[int]:
     return [item["id"] for item in queue["items"]]
 
@@ -195,8 +201,12 @@ def test_an_empty_inbox_reports_four_empty_queues_not_an_absence(client, session
         "built_awaiting_push",
         "pushed_awaiting_monte",
         "published_awaiting_verdict",
+        # Not a queue: nothing is waiting behind it. It is the count of laps already
+        # finished, and on an empty database that count is 0 rather than absent.
+        "closed_circuits",
     }
-    assert all(q == {"count": 0, "items": []} for q in body.values())
+    assert all(q == {"count": 0, "items": []} for q in queues_only(body).values())
+    assert body["closed_circuits"] == 0
 
 
 # --- the queues do not overlap -------------------------------------------------------------
@@ -277,6 +287,79 @@ def test_the_lineage_join_is_on_late_post_id(client, session):
     assert ids(queue) == [linked.id]
 
 
+# --- closed circuits -------------------------------------------------------------------------
+
+
+def test_a_verdict_on_a_post_with_lineage_closes_a_circuit(client, session):
+    """The one number on this page that is not a queue: laps the circuit has actually
+    completed — generate, push, publish, rule.
+
+    `a_lap` builds the first three, so the verdict is the only thing missing, and it is set
+    through the real route rather than written onto the column: the counter has to move for an
+    operator doing the ordinary thing, not for a test that reaches past the API.
+
+    Retraction is the same predicate read backwards and belongs here rather than in a test of
+    its own — US-006 lets a ruling be cleared, and a lap that stops being ruled on stops being
+    closed. A counter that only ever went up would be a second source of truth about the same
+    column.
+    """
+    _, post = a_lap(session)
+
+    assert queues(client)["closed_circuits"] == 0
+
+    ruled = client.post(f"/posts/{post.id}/verdict", json={"verdict": "worked", "note": "Landed."})
+
+    assert ruled.status_code == 200
+    assert queues(client)["closed_circuits"] == 1
+
+    client.post(f"/posts/{post.id}/verdict", json={"verdict": None, "note": ""})
+
+    assert queues(client)["closed_circuits"] == 0
+
+
+def test_a_ruled_post_with_no_draft_behind_it_closes_no_circuit(client, session):
+    """A verdict is not a lap. Ruling on one of the 57 posts that predate this app records a
+    judgement about writing the circuit never touched — counting it would report a loop that
+    has run zero times as having run once, which is the exact claim this number exists to
+    refuse. Same lineage-only scoping as queue 4, and the same join.
+    """
+    a_post(
+        session,
+        content="Monte wrote this by hand, months ago.",
+        published_at=days_ago(90),
+        verdict=Verdict.WORKED,
+    )
+
+    assert queues(client)["closed_circuits"] == 0
+
+
+def test_a_ruled_post_whose_draft_never_went_live_closes_no_circuit(client, session):
+    """The other half of the predicate, and the half nothing covered. A lap needs BOTH
+    `went_live_at` and a verdict; a counter that only checked the verdict would count this
+    post, whose draft was pushed to Zernio and never published. That is the pushed-awaiting-
+    Monte gate — the one gate this app cannot clear itself — being reported as a closed lap.
+    """
+    a_draft(session, zernio_post_id="late-live", pushed_at=days_ago(2), went_live_at=None)
+    a_post(session, late_post_id="late-live", published_at=days_ago(1), verdict=Verdict.WORKED)
+
+    body = queues(client)
+
+    assert body["closed_circuits"] == 0
+    assert ids(body["pushed_awaiting_monte"]) != []
+
+
+def test_a_live_draft_still_awaiting_a_verdict_closes_no_circuit(client, session):
+    """The lap is not closed until it is ruled on, which is why the counter and queue 4 are
+    complements over the same join rather than the same query: the post below is in the queue
+    *because* it is not in this count."""
+    _, post = a_lap(session)
+
+    body = queues(client)
+
+    assert ids(body["published_awaiting_verdict"]) == [post.id]
+    assert body["closed_circuits"] == 0
+
+
 # --- counts agree with the items -----------------------------------------------------------
 
 
@@ -292,7 +375,7 @@ def test_every_count_equals_the_number_of_items_it_reports(client, session):
 
     body = queues(client)
 
-    counted = [(q["count"], len(q["items"])) for q in body.values()]
+    counted = [(q["count"], len(q["items"])) for q in queues_only(body).values()]
     assert counted == [(3, 3), (2, 2), (1, 1), (1, 1)]
 
 
@@ -336,6 +419,19 @@ def test_the_oldest_item_comes_first(client, session):
 
 def test_an_item_younger_than_a_day_reports_zero_rather_than_failing(client, session):
     a_draft(session, created_at=days_ago(0.25))
+
+    assert queues(client)["built_awaiting_push"]["items"][0]["age_days"] == 0
+
+
+def test_a_timestamp_in_the_future_reports_zero_rather_than_a_negative_age(client, session):
+    """The `max(..., 0)` in `_queue`, which nothing exercised: `days_ago(0.25)` above floors to
+    0 with or without it, so the clamp was uncovered and a mutation removing it survived.
+
+    Not hypothetical — the row's `created_at` is written by whichever machine made it and the
+    age is measured against the API host's clock, so a skew of seconds is enough. "waiting -1
+    days" on the one page whose only number is an age is a visible bug.
+    """
+    a_draft(session, created_at=days_ago(-2))
 
     assert queues(client)["built_awaiting_push"]["items"][0]["age_days"] == 0
 

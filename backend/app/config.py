@@ -74,6 +74,15 @@ class Settings(BaseSettings):
     enable_autonomous: bool = False
     autonomous_max_drafts: int = 2
     autonomous_interval_hours: int = 24
+
+    # How many drafts one idea may be written as at `POST /drafts/variants`. **A ceiling, not a
+    # default**: N variants is N times the paid completions and N renders inside one request, and
+    # `autonomous_max_drafts` was a default that a query parameter could walk straight past —
+    # `?cap=500` bought up to 1001 billed completions. The route clamps to this with the same
+    # `min(requested, ceiling)`, so a large N is impossible rather than discouraged.
+    # 3 because that is what a person can hold side by side and choose between; it is not a
+    # claim that three is the right number of experiments.
+    variants_max: int = 3
     # A webhook URL is a bearer credential in URL clothing — anyone holding it can post.
     teams_webhook_url: str = Field(default="", repr=False)
 

@@ -31,7 +31,7 @@ export default function ExcludeToggle({
 
   return (
     <div className="mt-8 rounded-lg border border-black/10 p-3 dark:border-white/15">
-      <p className="text-xs opacity-60">
+      <p className="text-xs text-muted">
         {excluded
           ? "Held out of extraction — templates are not learned from this post. It stays in the corpus and keeps its metrics."
           : "Teaching the generator from a post that won for reasons that cannot repeat — a launch, a network firing once — teaches a trick that only works once."}

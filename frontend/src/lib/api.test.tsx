@@ -4,7 +4,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import ScoreboardPage from "@/app/scoreboard/page";
-import { getJson, postJson, type ApiFailure } from "@/lib/api";
+import { calls, getJson, postJson, type ApiFailure } from "@/lib/api";
 
 /** A response the way the backend actually answers: a JSON body with `detail`. */
 function jsonResponse(status: number, body: unknown): Response {
@@ -84,6 +84,25 @@ describe("getJson", () => {
     expect((result as ApiFailure).message).not.toContain("object Object");
   });
 
+  it("keeps the spend a failed batch already paid for", async () => {
+    // `POST /drafts/variants` raises 502 with an object detail: the drafts roll back with the
+    // request and the money does not, so the route reports what was spent on the failure path
+    // too. Rendered as "request failed (502)" — which is what happens without an object branch —
+    // the reason and the spend both vanish on the one path with nothing to show for them.
+    stubFetch(
+      jsonResponse(502, {
+        detail: { error: "the model answered with no JSON object", llm_calls: 2, image_calls: 1 },
+      }),
+    );
+
+    const result = await getJson("/drafts/variants");
+
+    expect((result as ApiFailure).message).toBe(
+      "the model answered with no JSON object, llm_calls: 2, image_calls: 1",
+    );
+    expect((result as ApiFailure).message).not.toContain("object Object");
+  });
+
   it("keeps a non-JSON error body an http failure, not a network one", async () => {
     // A proxy answering 502 with HTML. Parsing the error body outside the http branch would
     // let this throw into the network branch and report a live server as unreachable.
@@ -100,6 +119,21 @@ describe("getJson", () => {
       status: 502,
       message: "request failed (502)",
     });
+  });
+});
+
+/* US-019. `calls` was written twice — once in Studio, once in RetopicForm — because a second
+   agent held this file when the second copy was needed. Two surfaces report a spend and both
+   must word it identically; the reason it is tested at all is the plural, which is the only
+   branch in it and the one a reader notices. Never a price: the meter counts calls and nothing
+   in this app knows what a call cost. */
+describe("calls", () => {
+  it("pluralises the unit against the count it was given", () => {
+    expect(calls(1, "chat completion")).toBe("1 chat completion");
+    expect(calls(2, "chat completion")).toBe("2 chat completions");
+    // Zero is a real answer here — `/drafts/retopic` reports `image_calls: 0` when the visual
+    // was not redrawn — and it takes the plural.
+    expect(calls(0, "image render")).toBe("0 image renders");
   });
 });
 
@@ -149,7 +183,11 @@ function row(overrides: Record<string, unknown> = {}) {
     total_impressions: 0,
     mean_engaged_actions: 0,
     sufficient: false,
-    min_sample_size: 5,
+    // Deliberately NOT 5. 5 is `settings.min_sample_size`'s default and the number the page
+    // falls back to when the list is empty, so a fixture on 5 cannot tell "read off the row"
+    // from "hardcoded" — measured: replacing the read with a literal 5 left every assertion
+    // here green.
+    min_sample_size: 6,
     ...overrides,
   };
 }
@@ -209,7 +247,12 @@ describe("a stocked library with no published post", () => {
 
     // The rows survive the empty state. All-zero sample counts say *which* versions are
     // waiting; replacing the table with a notice would be the same lie inverted.
-    expect(screen.getByRole("link", { name: "Contrarian open" })).toBeInTheDocument();
+    // Each name links to the corpus filtered to that family — a bare `/posts` renders the
+    // same words and answers a different question.
+    expect(screen.getByRole("link", { name: "Contrarian open" })).toHaveAttribute(
+      "href",
+      "/posts?template_family=a2bcf8e2",
+    );
     expect(screen.getByRole("link", { name: "Numbers first" })).toBeInTheDocument();
   });
 
@@ -217,7 +260,13 @@ describe("a stocked library with no published post", () => {
     stubFetch(
       jsonResponse(200, [
         row(),
-        row({ version: 2, name: "Numbers first", sample_count: 3, total_engaged_actions: 41 }),
+        row({
+          version: 2,
+          name: "Numbers first",
+          sample_count: 3,
+          total_engaged_actions: 41,
+          mean_engaged_actions: 13.7,
+        }),
       ]),
     );
 
@@ -228,6 +277,12 @@ describe("a stocked library with no published post", () => {
     ).not.toBeInTheDocument();
     // One attributed post is enough to stop the claim — the threshold badge is what reports
     // that three samples are too thin to read, and that is a different statement.
-    expect(screen.getByText(/too thin \(3\/5\)/)).toBeInTheDocument();
+    expect(screen.getByText(/too thin \(3\/6\)/)).toBeInTheDocument();
+    // The lede states the same threshold, and it is a second read of the same field.
+    expect(screen.getByText(/anything under 6 posts is marked insufficient/)).toBeInTheDocument();
+    // A mean over zero samples is not 0.0, it is nothing — the row with evidence prints its
+    // figure and the row without prints the dash.
+    const means = screen.getAllByRole("row").slice(1).map((r) => r.children[4].textContent);
+    expect(means).toEqual(["—", "13.7"]);
   });
 });
