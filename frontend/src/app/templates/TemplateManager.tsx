@@ -46,6 +46,23 @@ function cohortOf(template: Template): string | null {
   return typeof cohort === "string" ? cohort : null;
 }
 
+/** The path an extract button posts to, cohort and all.
+ *
+ *  A function rather than two inline template strings because `cohort` is the one value on this
+ *  page that reaches a query string, and the Radix trigger that sets it cannot be driven in
+ *  jsdom — so this is the only place the mapping from a chosen cohort to the sent query can be
+ *  asserted for both cohorts. Built with `URLSearchParams` rather than concatenated: one of
+ *  these endpoints already carries a param and the other does not, so `?` vs `&` is not the
+ *  same by hand. Both call sites go through it; leaving one inline would put a second copy
+ *  where a mutation could hide. */
+export function extractPath(what: "hooks" | "structures", cohort: Cohort): string {
+  // Annotated: without it the ternary widens to a union carrying `sample_size?: undefined`,
+  // which `URLSearchParams` does not accept.
+  const params: Record<string, string> =
+    what === "structures" ? { sample_size: "27", cohort } : { cohort };
+  return `/templates/extract/${what}?${new URLSearchParams(params)}`;
+}
+
 const BLANK_BODY: Record<TemplateKind, string> = {
   hook: JSON.stringify({ pattern: "{value} turned into {outcome}", tone: "direct" }, null, 2),
   structure: JSON.stringify(
@@ -207,23 +224,14 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
           </Select>
           <Button
             variant="outline"
-            onClick={() => send(`/templates/extract/hooks?${new URLSearchParams({ cohort })}`)}
+            onClick={() => send(extractPath("hooks", cohort))}
             disabled={busy}
           >
             {busy ? "Working…" : "Extract hooks from top posts"}
           </Button>
           <Button
             variant="outline"
-            onClick={() =>
-              // Query string built rather than concatenated: this endpoint already carries
-              // a param and the other does not, so `?` vs `&` is not the same by hand.
-              send(
-                `/templates/extract/structures?${new URLSearchParams({
-                  sample_size: "27",
-                  cohort,
-                })}`,
-              )
-            }
+            onClick={() => send(extractPath("structures", cohort))}
             disabled={busy}
           >
             Extract structures
