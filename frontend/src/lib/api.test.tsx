@@ -84,6 +84,25 @@ describe("getJson", () => {
     expect((result as ApiFailure).message).not.toContain("object Object");
   });
 
+  it("keeps the spend a failed batch already paid for", async () => {
+    // `POST /drafts/variants` raises 502 with an object detail: the drafts roll back with the
+    // request and the money does not, so the route reports what was spent on the failure path
+    // too. Rendered as "request failed (502)" — which is what happens without an object branch —
+    // the reason and the spend both vanish on the one path with nothing to show for them.
+    stubFetch(
+      jsonResponse(502, {
+        detail: { error: "the model answered with no JSON object", llm_calls: 2, image_calls: 1 },
+      }),
+    );
+
+    const result = await getJson("/drafts/variants");
+
+    expect((result as ApiFailure).message).toBe(
+      "the model answered with no JSON object, llm_calls: 2, image_calls: 1",
+    );
+    expect((result as ApiFailure).message).not.toContain("object Object");
+  });
+
   it("keeps a non-JSON error body an http failure, not a network one", async () => {
     // A proxy answering 502 with HTML. Parsing the error body outside the http branch would
     // let this throw into the network branch and report a live server as unreachable.

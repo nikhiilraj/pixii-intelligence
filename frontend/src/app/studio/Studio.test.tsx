@@ -536,6 +536,188 @@ describe("the drafts list", () => {
   });
 });
 
+/* US-013. One idea written N ways, side by side, keep one and delete the rest.
+ *
+ * Two things are being defended here and neither is visible in a screenshot. The first is that
+ * nothing ranks: the variants are rendered in the order the response listed them and in no other
+ * order, so the fixture ids are deliberately NOT ascending — `[13, 11, 12]` fails an accidental
+ * sort by id, where `[11, 12, 13]` would pass one. A negative query for "best" or "recommended"
+ * proves nothing; it passes on any page, including one that ranks.
+ *
+ * The second is what leaves in the request bodies. `POST /drafts/variants` takes the idea alone
+ * and ignores the picker on purpose, but pydantic ignores unknown keys, so sending this page's
+ * `draftPayload` would succeed silently and look identical. And `keep` is exact: the backend
+ * 422s when an id is in both lists and 409s — deleting nothing — when a discard is in Zernio, so
+ * the discard list is asserted whole, from a click on the MIDDLE variant, which is the one a
+ * `slice(1)` gets wrong. */
+function variant(id: number, overrides: Partial<Draft> = {}): Draft {
+  return {
+    ...DRAFT,
+    id,
+    lineage: {
+      hook: { family: "fam-hook", version: 2, name: `hook-${id}` },
+      structure: { family: "fam-struct", version: 1, name: `structure-${id}` },
+      visual: { family: "fam-vis", version: 3, name: `visual-${id}` },
+    },
+    ...overrides,
+  };
+}
+
+/** Generation order, and not id order — see the block comment. */
+const BATCH = {
+  variants: [
+    variant(13, { full_text: "Bundles are the anti-coupon." }),
+    variant(11, { full_text: "Coupons train the habit." }),
+    variant(12, { full_text: "Same margin, no discount." }),
+  ],
+  llm_calls: 3,
+  image_calls: 3,
+};
+
+/** Answers suggest, variants, keep and the plain generate, by exact path. */
+function stubVariants(keepResponse?: Response) {
+  const fetchStub = vi.fn((url: string) => {
+    const path = String(url).replace(/^https?:\/\/[^/]+/, "");
+    if (path === "/drafts/suggest")
+      return Promise.resolve(
+        jsonResponse(200, {
+          hook: { id: 1 },
+          structure: { id: 2 },
+          visual: { id: 3 },
+          reason: "stat-hero, because the idea is a number",
+        }),
+      );
+    if (path === "/drafts/variants") return Promise.resolve(jsonResponse(201, BATCH));
+    if (path === "/drafts/variants/keep")
+      return Promise.resolve(keepResponse ?? jsonResponse(200, BATCH.variants[2]));
+    return Promise.resolve(jsonResponse(201, DRAFT));
+  });
+  vi.stubGlobal("fetch", fetchStub);
+  return fetchStub;
+}
+
+/** The parsed body of the one request to exactly this path. `/drafts/variants` must not match
+ *  `/drafts/variants/keep`, which is why this compares the whole path rather than a suffix. */
+function bodySentTo(fetchStub: ReturnType<typeof vi.fn>, path: string): Record<string, unknown> {
+  const call = fetchStub.mock.calls.find(
+    ([url]) => String(url).replace(/^https?:\/\/[^/]+/, "") === path,
+  );
+  return JSON.parse(String((call?.[1] as RequestInit).body));
+}
+
+/** Idea in, variants on screen. Suggest runs first on purpose: it fills `picked` and the asset
+ *  slots, so anything this page leaks into the variants body leaks here. */
+async function generateVariants(keepResponse?: Response) {
+  const fetchStub = stubVariants(keepResponse);
+  render(<Studio templates={library(statHeroSlots(9))} assets={LIBRARY} drafts={[]} />);
+  typeIdea();
+  fireEvent.click(screen.getByRole("button", { name: /suggest templates/i }));
+  await screen.findByText(/stat-hero, because/);
+
+  fireEvent.click(screen.getByRole("button", { name: /write variants/i }));
+  await screen.findByRole("button", { name: /keep draft 13/i });
+  return fetchStub;
+}
+
+describe("one idea, several drafts", () => {
+  it("asks for the idea alone, even with the picker full", async () => {
+    const fetchStub = await generateVariants();
+
+    // Not `draftPayload`. The route varies the templates itself, so a hook_id riding along would
+    // be ignored server-side — the request succeeds, three variants come back, and the page has
+    // been lying about what it asked for. `count` is absent too: nothing exposes `variants_max`
+    // to the client, so the ceiling is the server's to apply.
+    expect(bodySentTo(fetchStub, "/drafts/variants")).toEqual({ idea: "a nine figure exit" });
+  });
+
+  it("renders them in the order they were written, not in id order", async () => {
+    await generateVariants();
+
+    expect(screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent)).toEqual([
+      "Draft 13",
+      "Draft 11",
+      "Draft 12",
+    ]);
+  });
+
+  it("shows each variant's own lineage, which is the whole point of comparing them", async () => {
+    await generateVariants();
+
+    // Three drafts of one idea differ only in the combination that wrote them; without this the
+    // page is three blocks of text with no way to tell what is being chosen between.
+    expect(screen.getByText("hook-13 v2")).toBeInTheDocument();
+    expect(screen.getByText("structure-11 v1")).toBeInTheDocument();
+    expect(screen.getByText("visual-12 v3")).toBeInTheDocument();
+  });
+
+  it("reports what the batch spent, counted from the response", async () => {
+    await generateVariants();
+
+    // Read off `llm_calls`/`image_calls` and off `variants.length` — never assumed to be three.
+    // The count is clamped server-side, so the number that arrived is the only true one.
+    expect(screen.getByText(/3 chat completions and 3 image renders/)).toBeInTheDocument();
+    expect(screen.getByText(/^3 drafts of one idea/)).toBeInTheDocument();
+  });
+
+  it("keeps the one that was clicked and discards exactly the others", async () => {
+    const fetchStub = await generateVariants();
+
+    fireEvent.click(screen.getByRole("button", { name: /keep draft 11/i }));
+
+    await waitFor(() => expect(bodySentTo(fetchStub, "/drafts/variants/keep")).toBeTruthy());
+    expect(bodySentTo(fetchStub, "/drafts/variants/keep")).toEqual({
+      keep_id: 11,
+      discard_ids: [13, 12],
+    });
+  });
+
+  it("leaves the kept draft on screen, alone, and pushes its own id", async () => {
+    const fetchStub = await generateVariants(jsonResponse(200, variant(11)));
+
+    fireEvent.click(screen.getByRole("button", { name: /keep draft 11/i }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /keep draft 13/i })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText("hook-11 v2")).toBeInTheDocument();
+
+    fireEvent.click(pushButton());
+    await waitFor(() =>
+      expect(fetchStub.mock.calls.map(([url]) => String(url))).toContainEqual(
+        expect.stringMatching(/\/drafts\/11\/push$/),
+      ),
+    );
+  });
+
+  it("keeps every variant on screen when the keep is refused", async () => {
+    // 409: a discard is already in Zernio, and the backend deleted nothing — not even the rows it
+    // could have. Clearing the batch here would strand three drafts nobody can see into Inbox
+    // queue 2, which is the exact orphan the route refuses to create.
+    await generateVariants(
+      jsonResponse(409, { detail: "draft(s) 13 are in Zernio and cannot be discarded" }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /keep draft 11/i }));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    expect(toastError.mock.calls[0][0]).toMatch(/cannot be discarded/);
+    expect(screen.getByRole("button", { name: /keep draft 13/i })).toBeInTheDocument();
+    expect(screen.getByText("Bundles are the anti-coupon.")).toBeInTheDocument();
+  });
+
+  it("replaces the batch with a single draft generated after it", async () => {
+    // Both columns render into the same place, so a batch left standing over a freshly written
+    // draft would hide a row that really exists — a write rendering as though it never happened.
+    const fetchStub = await generateVariants();
+
+    fireEvent.click(screen.getByRole("button", { name: /generate draft/i }));
+
+    await waitFor(() => expect(screen.getByText(/A 9-figure exit/)).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /keep draft 13/i })).not.toBeInTheDocument();
+    expect(bodySentTo(fetchStub, "/drafts")).toMatchObject({ hook_id: 1 });
+  });
+});
+
 /* The page itself, because `?draft=` is read there and the guard that keeps a malformed param
  * from becoming a request lives there too. Rendered the way `posts/[id]/page.test.tsx` renders
  * its detail page: the server component is an async function, so it is awaited and its output

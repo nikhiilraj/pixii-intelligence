@@ -211,6 +211,110 @@ function Lineage({ draft, assets }: { draft: Draft; assets: Asset[] | null }) {
   );
 }
 
+/** `VariantsOut` (api_drafts.py:318) — one idea written several ways, and what the whole batch
+ *  cost. **There is no fourth field and that is the slice**: no score, no confidence, no
+ *  recommendation, and no order but the one the drafts were written in.
+ *
+ *  ponytail: declared here rather than in `lib/api.ts`, for `RetopicResult`'s reason — one
+ *  surface consumes it. Ceiling: a second caller, at which point the spend pair and this shape
+ *  hoist beside `Draft` together. */
+type Batch = { variants: Draft[]; llm_calls: number; image_calls: number };
+
+/** "1 chat completion", "3 image renders" — the observed count, in words, never a price. The
+ *  meter counts calls; nothing in this app knows what a call cost.
+ *
+ *  ponytail: copied from `RetopicForm`, not shared. Four lines against reaching into a file
+ *  another slice is editing this run; hoist the pair when a third surface needs it. */
+function calls(n: number, unit: string): string {
+  return `${n} ${unit}${n === 1 ? "" : "s"}`;
+}
+
+/** The batch, side by side, with a Keep on each.
+ *
+ *  Rendered in the order the response listed them, which is generation order, and sorted by
+ *  nothing. There is no "best", no score, no confidence and no sort control, and that is a
+ *  decision rather than an omission: engagement spans 12.7x across ~3 samples per template here,
+ *  so any aggregate this could show would be noise wearing a number. Ranking is a threshold
+ *  (~300 lineage-tagged posts, currently zero), not a feature. What a human gets instead is the
+ *  three concrete drafts and the lineage each was written through — which is judgement, and
+ *  judgement is available today.
+ *
+ *  ponytail: a plain grid of cards. No diff view, no side-by-side text alignment, no per-variant
+ *  rewrite or redraw, no re-roll of one slot. Ceiling: any of those once someone has used this
+ *  more than a handful of times — all of them are additions to a card, not changes to this shape.
+ */
+function Variants({
+  batch,
+  assets,
+  busy,
+  onKeep,
+}: {
+  batch: Batch;
+  assets: Asset[] | null;
+  busy: string | null;
+  onKeep: (kept: Draft) => void;
+}) {
+  return (
+    <>
+      <Card className="bg-surface-2 text-body">
+        <p className="font-medium">{batch.variants.length} drafts of one idea.</p>
+        <p className="mt-1 text-muted">
+          In the order they were written, and in no other order — nothing here is scored, ranked
+          or recommended, because ~3 posts per template cannot support a ranking. Compare the
+          three and choose. This batch spent {calls(batch.llm_calls, "chat completion")} and{" "}
+          {calls(batch.image_calls, "image render")}. Keeping one <strong>deletes</strong> the
+          rest, so they do not sit in the Inbox as work nobody is waiting on; the kept one is
+          still only a draft, and nothing publishes from here.
+        </p>
+      </Card>
+
+      {/* `min-w-0` on every cell as well as on the section: the outer `[22rem_1fr]` is an
+          arbitrary track and gets no implicit minimum for free, and a variant is the most likely
+          place on this page for a long unbroken string — a URL in the idea — to arrive.
+          `wrap-anywhere` on the text is the other half and is not the same fix: `break-words`
+          does not contribute soft-wrap opportunities to min-content sizing, so it would let a
+          320-character token size the track it is sitting in. Measured in Chrome at 1440 and 390
+          with exactly that string. */}
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {batch.variants.map((v) => (
+          <div
+            key={v.id}
+            className="min-w-0 space-y-3 rounded-lg border border-black/10 p-3 dark:border-white/15"
+          >
+            {/* The draft's own id, not "Variant 1". An ordinal beside three things a human is
+                choosing between reads as a placing, and the id is what the Keep request carries
+                anyway. */}
+            <h3 className="text-sm font-medium">Draft {v.id}</h3>
+
+            <Lineage draft={v} assets={assets} />
+
+            <article className="whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed">
+              {v.full_text}
+            </article>
+
+            {v.visual_png ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={`data:image/png;base64,${v.visual_png}`}
+                alt={`Visual for draft ${v.id}`}
+                className="w-full rounded-md border border-black/10 dark:border-white/15"
+              />
+            ) : (
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                Visual not produced: {v.visual_error ?? "unknown"} — the text is unaffected.
+              </p>
+            )}
+
+            <Button variant="outline" disabled={busy !== null} onClick={() => onKeep(v)}>
+              Keep draft {v.id}
+            </Button>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
 export default function Studio({
   templates,
   // `null` means the library could not be read, which is not the same as an empty library. The
@@ -242,6 +346,11 @@ export default function Studio({
   const [picked, setPicked] = useState<Picked>({ hook: null, structure: null, visual: null });
   const [reason, setReason] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(initialDraft);
+  // The batch of variants being chosen between, or `null`. It and `draft` share the right column
+  // and are kept mutually exclusive by every handler that sets either: a batch left standing over
+  // a draft that was just written would hide a real row, which is this page's recurring bug —
+  // something on screen that is not what happened.
+  const [batch, setBatch] = useState<Batch | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [assetValues, setAssetValues] = useState<Record<string, string>>({});
 
@@ -432,12 +541,44 @@ export default function Studio({
             disabled={!idea.trim() || busy !== null}
             onClick={async () => {
               const d = await call<Draft>("/drafts", payload);
-              if (d) setDraft(d);
+              if (d) {
+                setDraft(d);
+                setBatch(null);
+              }
             }}
           >
             {busy === "/drafts" ? "Writing…" : "Generate draft"}
           </Button>
+          {/* Its own button, and the label says what it does rather than "Generate": one press
+              here is several completions and several renders, so it must be chosen, never
+              arrived at. Disabled without an idea and while anything is in flight, for the
+              reason every spending button on this page is — a double click is a second batch.
+              `{ idea }` alone: the route varies the templates itself and ignores a hook_id
+              silently, so sending `payload` would be this page claiming an influence it does not
+              have. No `count` either — the ceiling is `settings.variants_max`, the server
+              applies it, and nothing exposes it to the client.
+              ponytail: no confirm dialog. Ceiling: one if a batch is ever written by accident. */}
+          <Button
+            variant="outline"
+            disabled={!idea.trim() || busy !== null}
+            onClick={async () => {
+              const b = await call<Batch>("/drafts/variants", { idea });
+              if (b) {
+                setBatch(b);
+                setDraft(null);
+              }
+            }}
+          >
+            {busy === "/drafts/variants" ? "Writing variants…" : "Write variants"}
+          </Button>
         </div>
+
+        <p className="text-xs opacity-60">
+          Write variants writes this idea several times over, each through a different approved
+          hook, structure and visual, then shows them side by side to keep one. It ignores the
+          three selects above on purpose — varying the combination is the point — and it spends a
+          chat completion and a render per variant.
+        </p>
 
         {reason && <p className="text-xs opacity-60">{reason}</p>}
         {approved.length === 0 && (
@@ -469,7 +610,32 @@ export default function Studio({
             writes a real row, and with the alert tested first the column would go on reporting
             a 404 for a draft that now exists on screen. A write that renders as a failure is
             the same conflation as an error that renders as an empty state. */}
-        {draft ? (
+        {batch ? (
+          /* A batch on screen outranks everything below it, including `missing`: it is the most
+             recent thing that happened and it is the one state on this page with an unfinished
+             decision in it. */
+          <Variants
+            batch={batch}
+            assets={assets}
+            busy={busy}
+            onKeep={async (kept) => {
+              const d = await call<Draft>("/drafts/variants/keep", {
+                keep_id: kept.id,
+                // Every other variant, and never the kept one — the backend 422s on an id in
+                // both lists rather than guessing which was meant.
+                discard_ids: batch.variants.filter((v) => v.id !== kept.id).map((v) => v.id),
+              });
+              // Only on success. A 409 means a discard is already in Zernio and the route
+              // deleted nothing — not even the rows it could have — so the batch on screen is
+              // still exactly what is in the database, and clearing it would strand drafts
+              // nobody can see into Inbox queue 2. `call` has already shown the API's own words.
+              if (d) {
+                setDraft(d);
+                setBatch(null);
+              }
+            }}
+          />
+        ) : draft ? (
           <>
             <Lineage draft={draft} assets={assets} />
 

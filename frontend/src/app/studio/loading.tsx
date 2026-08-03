@@ -30,10 +30,14 @@ export default function StudioLoading() {
           <Skeleton className="h-9 w-full" />
           <Skeleton className="h-9 w-full" />
           <Skeleton className="h-9 w-full" />
+          {/* Suggest, Generate draft, Write variants — then the line under them saying what the
+              third one spends. */}
           <div className="flex flex-wrap gap-2">
             <Skeleton className="h-8 w-36" />
             <Skeleton className="h-8 w-32" />
+            <Skeleton className="h-8 w-28" />
           </div>
+          <Skeleton className="h-8 w-full" />
           {/* The drafts list. Reserved unconditionally, unlike the right column: there is
               always a list to show, even when what it will say is that there are none. */}
           <Skeleton className="h-32 w-full" />
