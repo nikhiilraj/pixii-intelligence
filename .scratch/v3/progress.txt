@@ -102,4 +102,78 @@ line here cost someone an hour.
 
 ## Slice log
 
-(appended as each slice lands; master writes this section)
+14 of 15 landed. Started 412 backend + 73 frontend; now **447 backend + 133 frontend**.
+Every slice was independently re-verified by master before its commit — layout claims by
+re-measuring in Chrome, backend claims by re-running the suite, live claims against the real API.
+
+| slice | what it was |
+|---|---|
+| US-001 | The shell is the shell. `/templates` 10384px → 1440px; three routes stopped floating inboard |
+| US-002 | Dates carry their year on a 2.5-year corpus |
+| US-003 | Form controls onto Radix; zero raw `<select>` left |
+| US-004 | Three scoreboard tables, one column grid |
+| US-005 | Image bombs 422, not 500 |
+| US-006 | A ruling can be cleared — API **and** the page that records it |
+| US-007 | Status row can report failure; `/health` stopped hardcoding `"ok"` |
+| US-008 | `Closed circuits: 0` |
+| US-009 | Post detail shows its curve and what generated it |
+| US-010 | Lessons reach the step that decides *what* to write about |
+| US-011 | A paid run says what it cost |
+| US-012 | Studio opens drafts that already exist — the Inbox stopped pointing at a closed door |
+| US-013 | One idea, several drafts, keep one |
+| US-014 | Re-topic: same templates, new subject |
+| US-015 | Asset picker dialog — **in flight at the pause** |
+
+### Bugs found *while* fixing something else — the highest-yield category this run
+
+None of these were on any list. All were found by an agent doing adjacent work.
+
+1. **`make check` never ran the frontend suite.** Backend pytest only, for the whole of V1 and V2.
+   Every frontend test written in those runs sat outside the gate. Two agents reported the
+   discrepancy unprompted rather than let "make check green" stand in for evidence they lacked.
+2. **`/health` hardcoded `"status": "ok"`**, so US-007's newly-honest status row could never
+   actually go red. A capability with no observable path.
+3. **`messageFrom` dropped object-shaped 502 details.** `POST /drafts/variants` raises one,
+   because the drafts roll back and the spend does not — so the reason *and* the money already
+   spent both vanished into "request failed (502)", on the one path with nothing else to show.
+4. **The re-topic spend report survived a refusal.** Success set it, nothing cleared it: a second
+   press taking a 409 left "it spent 1 chat completion" on screen, claiming money bought a draft
+   that was never written.
+5. **Two Studio assertions were silently vacuous** after the Radix migration — `queryByText` on
+   content inside a closed `SelectContent`, which lives in a detached DocumentFragment, so it is
+   absent whether the picker exists or not.
+
+### Three claims of mine that did not survive contact with the source
+
+Recorded because the pattern is the lesson: **everything I read off a screenshot was wrong, and
+everything I read in source was right.**
+
+1. I attributed the `/posts` and `/scoreboard` mobile overflow to the native date input. It was
+   the shrink-to-fit `<main>` propagating the tables' `min-w` through their already-correct scroll
+   containers. 736+48=784 and 672+48=720, exact.
+2. I wrote that `/posts` rendered four raw `<select>` elements. They were migrated in V2's
+   `a48bc1c` and were already correct, sentinel and all. Only its date input was native.
+3. An agent reported `verdict_lessons` was missing a `status == "published"` predicate. Checked
+   before acting — the same docstring justifies the wider scope fifteen lines below the line it
+   read. Deliberate and documented; left alone.
+
+**Method warning that caused #1 and #2:** a measurement taken in the same tick as a layout
+mutation is stale — `ResizeObserver` has not fired. And a screenshot cannot tell a Radix trigger
+from a native `<select>` at a glance.
+
+### Writes to the live database by agents doing browser verification
+
+Disclosed by the agents themselves, and my instruction caused them: I told agents to verify in a
+browser without scoping which controls were safe to click. Later briefs say "do not click anything
+that writes".
+
+- **6 template rows** (54747–54752), inspiration-cohort hooks from a real extraction. Legitimate
+  work — kept. **The review gate is 43, not 37.**
+- **Draft 15580**, `"a nine figure exit"` — test junk in Inbox queue 2, which now reads 5 not 4.
+  Left in place pending Nikhil's word; deleting rows from his database is not mine to decide.
+
+### Still true, and the only thing that matters
+
+**`closed_circuits` reads 0.** Every mechanical part of the loop now works and is reachable from
+the UI. It has still completed zero laps, because the remaining step is Monte publishing a draft.
+Software made that cheap; it cannot make it happen.
