@@ -8,7 +8,7 @@ import {
   type Draft,
   type LineageEntry,
   type MetricSnapshot,
-  type PostRow,
+  type Post,
 } from "@/lib/api";
 
 import EngagementCurve from "./EngagementCurve";
@@ -115,7 +115,7 @@ function Readings({ snapshots }: { snapshots: MetricSnapshot[] }) {
 
 export default async function PostDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const result = await getJson<PostRow>(`/posts/${id}`);
+  const result = await getJson<Post>(`/posts/${id}`);
 
   // Only an actual 404 is a missing post. Every other failure used to arrive here as `null`
   // too, so a 500 or a dead backend rendered "this page could not be found" — a wrong answer
@@ -137,19 +137,19 @@ export default async function PostDetail({ params }: { params: Promise<{ id: str
 
   /* The draft that produced this post, if this app produced it — `metrics.draft_for_post`'s
      join (`Draft.zernio_post_id == Post.late_post_id`, a different namespace from `zernio_id`)
-     done over the drafts list.
-     ponytail: no new `GET /posts/{id}/draft` route. There are 7 drafts in the database and
-     `GET /drafts` already returns `DraftOut` with its lineage resolved, so the scan is one
-     request and no backend change. The ceiling is the limit, and it is a *silent* one: the
-     list is ordered `created_at DESC`, so what falls off the end is the oldest drafts —
-     exactly the ones whose posts have been live longest and are most likely to be read here.
-     A post would then render "no draft behind this" while its draft sits in the database.
-     Hence 500 rather than the route's default 100; add the route before that runs out. */
-  const drafts = await getJson<Draft[]>("/drafts?limit=500");
-  const draft =
-    drafts.ok && post.late_post_id
-      ? (drafts.data.find((d) => d.zernio_post_id === post.late_post_id) ?? null)
-      : null;
+     done in the database.
+     **Three outcomes, not two, and the middle one is normal.** A `DraftOut`; a 200 with a
+     `null` body for a post with no draft behind it, which is the answer for 57 of the 57
+     published posts here; a 404 for no such post, which cannot arrive after the read above
+     succeeded unless the row went away between the two. So `ok: true` with `data === null` is
+     an answer and is rendered as one — treating it as a failure would put an error card on
+     every post in the corpus.
+     This replaced `GET /drafts?limit=500` plus a `find` here. That join had a silent ceiling:
+     the list is `created_at DESC`, so what fell off the end was the *oldest* drafts — exactly
+     the ones whose posts have been live longest and are most likely to be read on this page —
+     and the page then said "no draft behind this post" while the draft sat in the database. */
+  const draftResult = await getJson<Draft | null>(`/posts/${post.id}/draft`);
+  const draft = draftResult.ok ? draftResult.data : null;
   /* Only fetched when there is a draft, because the curve is only shown when there is one:
      the two blocks are one attribution surface, so a post nobody generated gets neither. */
   const history = draft ? await getJson<MetricSnapshot[]>(`/posts/${post.id}/history`) : null;
@@ -219,11 +219,12 @@ export default async function PostDetail({ params }: { params: Promise<{ id: str
 
       {/* What generated this post, and how it did — the two routes that had no reader.
           Both are gated on the draft: with no lineage there is nothing to attribute a curve
-          to, and 57 of the published posts here are in exactly that state. A failed
-          `/drafts` is reported rather than answered as "nothing generated this" — that is a
-          claim, and an absent draft and an unreachable one are not the same fact. */}
-      {!drafts.ok ? (
-        <ApiFailureNotice failure={drafts} className="mt-8" />
+          to, and 57 of the published posts here are in exactly that state. A failed read is
+          reported rather than answered as "nothing generated this" — that is a claim, and an
+          absent draft and an unreachable one are not the same fact. The route says which:
+          `null` is the absence, a non-2xx is the unreachable. */}
+      {!draftResult.ok ? (
+        <ApiFailureNotice failure={draftResult} className="mt-8" />
       ) : draft ? (
         <section className="mt-8">
           <h2 className="text-xs uppercase tracking-wide opacity-50">Generated from</h2>

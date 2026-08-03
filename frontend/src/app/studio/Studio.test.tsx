@@ -968,8 +968,9 @@ describe("one idea, several drafts", () => {
 
     // Not `draftPayload`. The route varies the templates itself, so a hook_id riding along would
     // be ignored server-side — the request succeeds, three variants come back, and the page has
-    // been lying about what it asked for. `count` is absent too: nothing exposes `variants_max`
-    // to the client, so the ceiling is the server's to apply.
+    // been lying about what it asked for. `count` is absent too, and stays absent now that
+    // `/health` reports `variants_max`: the client reads the ceiling to *state* it, and the
+    // server is still the only thing that applies it.
     expect(bodySentTo(fetchStub, "/drafts/variants")).toEqual({ idea: "a nine figure exit" });
   });
 
@@ -1065,18 +1066,34 @@ describe("one idea, several drafts", () => {
  * from becoming a request lives there too. Rendered the way `posts/[id]/page.test.tsx` renders
  * its detail page: the server component is an async function, so it is awaited and its output
  * handed to RTL. */
-function stubPage(drafts: unknown[], draftResponse?: Response) {
+function stubPage(drafts: unknown[], draftResponse?: Response, health?: Response) {
   const fetchStub = vi.fn((url: string) => {
     const path = String(url).replace(/^https?:\/\/[^/]+/, "");
     if (path === "/templates") return Promise.resolve(jsonResponse(200, library([])));
     if (path === "/assets") return Promise.resolve(jsonResponse(200, LIBRARY));
     if (path === "/drafts") return Promise.resolve(jsonResponse(200, drafts));
+    // Its own branch, and it has to sit ABOVE the `draftResponse` fallthrough: that clause
+    // answers anything it has not already matched, so without this line `/health` would be
+    // handed a `DraftOut`, `variants_max` would arrive `undefined`, and the control would
+    // render nonsense while every test here still passed.
+    if (path === "/health") return Promise.resolve(health ?? jsonResponse(200, HEALTH));
     if (draftResponse) return Promise.resolve(draftResponse);
     return Promise.reject(new Error(`unexpected request: ${path}`));
   });
   vi.stubGlobal("fetch", fetchStub);
   return fetchStub;
 }
+
+/** `GET /health`. `variants_max` is deliberately NOT 3 — 3 is the setting's default and the
+ *  number the page used to hardcode, so a fixture on 3 would pass against the very bug this
+ *  slice removes. It is a sibling of `credentials`, never a key inside it: the Inbox footer
+ *  renders that object row-per-key as health lights, and a number in there draws a junk one. */
+const HEALTH = {
+  status: "ok",
+  database: true,
+  credentials: { zernio: true },
+  variants_max: 7,
+};
 
 describe("the ?draft= parameter", () => {
   it("loads the draft the url names", async () => {
@@ -1141,5 +1158,62 @@ describe("the ?draft= parameter", () => {
       "/studio?draft=424",
     );
     expect(container.innerHTML).not.toContain("iVBORw0KGgoAAAANSUhEUg");
+  });
+});
+
+/* US-019. A control that spends money has to say what it will spend *before* the press. The
+   response already reports `llm_calls`/`image_calls` after the fact, and that is a different
+   statement: it is the receipt, not the price.
+ *
+ * The ceiling belongs to the server — `settings.variants_max`, applied in `api_drafts.py` — so
+ * the number is read off `/health` and never written here. These run through `StudioPage`
+ * rather than through `Studio` directly because the wire is the thing being defended: the prop
+ * arrives from a fetch that a component-level render would skip entirely. */
+describe("what a variants run will spend", () => {
+  it("names the server's ceiling, in the same words the receipt uses", async () => {
+    stubPage([]);
+
+    render(await StudioPage({ searchParams: Promise.resolve({}) }));
+
+    // 7, because that is what this server said. A page that hardcodes 3 — which is what it did
+    // before this slice, and what `variants_max` defaults to — fails here.
+    //
+    // The whole sentence, not just the `calls()` half: the count and the two spend figures are
+    // three separate reads of the same prop, and asserting one of them let a mutation that
+    // hardcoded the other two survive. Measured, not assumed — it survived exactly that.
+    expect(
+      screen.getByText(/up to 7 of them — at most 7 chat completions and 7 image renders/),
+    ).toBeInTheDocument();
+  });
+
+  it("says nothing about the count when /health could not be read", async () => {
+    // Never a fallback of 3. A wrong number stated confidently is worse than no number, and 3
+    // is exactly the number this slice exists to stop asserting. The helper text keeps its
+    // per-variant sentence, which is true whatever the ceiling is.
+    stubPage([], undefined, jsonResponse(503, { detail: "database connection refused" }));
+
+    render(await StudioPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByText(/spends a chat completion and a render per variant/)).toBeInTheDocument();
+    expect(screen.queryByText(/at most/)).not.toBeInTheDocument();
+    // And a dead `/health` does not take the page down with it — the queues-vs-footer split the
+    // Inbox already makes. The button is still there and the rest of the page still renders.
+    expect(screen.getByRole("button", { name: /write variants/i })).toBeInTheDocument();
+    expect(screen.getByText("No draft yet.")).toBeInTheDocument();
+  });
+});
+
+describe("the fresh-session empty state", () => {
+  it("is not tinted like a failure", () => {
+    // It is the correct state on every visit to a fresh Studio, and it sat on `bg-surface-2`
+    // — the raised brand cream, the same warm panel the amber notices on this page sit beside.
+    // The three failure messages in this column are the ones that get to look like failures.
+    render(<Studio templates={library([])} assets={LIBRARY} drafts={[]} />);
+
+    const card = screen.getByText("No draft yet.").closest("div");
+    expect(card).not.toHaveClass("bg-surface-2");
+    // The card itself survives — an assertion about a missing class passes trivially on a
+    // deleted element.
+    expect(card).toHaveClass("border-border");
   });
 });

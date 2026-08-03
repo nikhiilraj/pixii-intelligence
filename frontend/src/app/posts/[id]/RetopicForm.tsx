@@ -5,7 +5,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { postJson, type Draft } from "@/lib/api";
+import { calls, postJson, type Draft, type Spend } from "@/lib/api";
 
 /* US-014, the post half, and Nikhil's own words for why it exists: "have the template and hooks
  * and visuals as kind of template so that we can easily recreate them using another topic."
@@ -19,22 +19,14 @@ import { postJson, type Draft } from "@/lib/api";
  * published posts here, so an ungated button would fail on almost every post it appeared on.
  *
  * No `router.refresh()` on success, unlike both siblings on this page: the new draft carries
- * `zernio_post_id: null`, so nothing on this page changes, and refreshing would re-fetch
- * `/drafts?limit=500` to render exactly what is already on screen. The link out is the thing
- * the user needs, and it is rendered instead. */
+ * `zernio_post_id: null`, so it is not the draft behind *this* post and nothing on this page
+ * changes — a refresh would re-read `GET /posts/{id}/draft` and render exactly what is already
+ * on screen. The link out is the thing the user needs, and it is rendered instead. */
 
-/** `RetopicOut` (api_drafts.py:219) — `DraftOut` plus what producing it cost.
- *
- *  ponytail: declared here rather than in `lib/api.ts`, following `PostRow`'s reasoning — one
- *  surface consumes it today. The ceiling is a second caller: when the draft-side re-topic
- *  lands in Studio, hoist this beside `Draft` instead of copying it. */
-type RetopicResult = Draft & { llm_calls: number; image_calls: number };
-
-/** "1 chat completion", "2 chat completions", "0 image renders" — the observed count, in words,
- *  never a price. The meter counts calls; nothing in this app knows what a call cost. */
-function calls(n: number, unit: string): string {
-  return `${n} ${unit}${n === 1 ? "" : "s"}`;
-}
+/** `RetopicOut` (api_drafts.py:219) — `DraftOut` plus what producing it cost. The pair itself
+ *  is `Spend` in `lib/api`, shared with Studio's batch: the ceiling named here when it was
+ *  copied was "a second caller", and US-019 is it. */
+type RetopicResult = Draft & Spend;
 
 export default function RetopicForm({ postId }: { postId: number }) {
   const [idea, setIdea] = useState("");

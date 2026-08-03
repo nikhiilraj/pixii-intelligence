@@ -1,5 +1,12 @@
 import { ApiFailureNotice } from "@/components/api-failure";
-import { API_BASE, getJson, type Asset, type Draft, type Template } from "@/lib/api";
+import {
+  API_BASE,
+  getJson,
+  type Asset,
+  type Draft,
+  type Health,
+  type Template,
+} from "@/lib/api";
 
 import Studio, { type DraftSummary } from "./Studio";
 
@@ -24,11 +31,17 @@ export default async function StudioPage({
   // as `null` rather than as `[]`: only the templates are load-bearing enough to replace the
   // whole page, and "the library is empty" is a claim a failed request cannot support. The
   // same holds for the drafts list, where it matters more — see `Drafts`.
-  const [templates, assets, drafts, requested] = await Promise.all([
+  // `/health` for `variants_max` alone — the ceiling `POST /drafts/variants` clamps to, which
+  // the variants control needs in order to say what a press will spend. In the `Promise.all`
+  // rather than awaited after it: it is on the page's critical path and depends on nothing
+  // here. A failed read is handed on as `null` and the control then says nothing about the
+  // count; it never takes the page down, and it never falls back to 3.
+  const [templates, assets, drafts, requested, health] = await Promise.all([
     getJson<Template[]>("/templates"),
     getJson<Asset[]>("/assets"),
     getJson<Draft[]>("/drafts"),
     id === null ? Promise.resolve(null) : getJson<Draft>(`/drafts/${id}`),
+    getJson<Health>("/health"),
   ]);
 
   /* Why the requested draft is not on screen, in words, or `null` when none was asked for.
@@ -75,6 +88,7 @@ export default async function StudioPage({
           drafts={summaries}
           initialDraft={requested?.ok ? requested.data : null}
           missing={missing}
+          variantsMax={health.ok ? health.data.variants_max : null}
         />
       ) : (
         <ApiFailureNotice failure={templates} className="mt-8" />
