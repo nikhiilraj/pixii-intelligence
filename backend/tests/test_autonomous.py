@@ -28,7 +28,7 @@ class FakeLLM:
         }
         self.calls: list[str] = []
 
-    def complete_json(self, system: str, user: str) -> dict:
+    def complete_json(self, system: str, user: str, images=()) -> dict:
         self.calls.append(user)
         if "topics" in system.lower() and "propose" in system.lower():
             return self.topics
@@ -240,7 +240,7 @@ def test_a_run_with_no_topics_is_reported_not_silently_empty(session):
 
 def test_a_failing_run_notifies_rather_than_failing_silently(session):
     class BrokenLLM:
-        def complete_json(self, system: str, user: str) -> dict:
+        def complete_json(self, system: str, user: str, images=()) -> dict:
             raise RuntimeError("model unavailable")
 
     library(session)
@@ -258,12 +258,12 @@ def test_one_bad_topic_does_not_abandon_the_rest_of_the_run(session):
     calls = {"n": 0}
 
     class FlakyLLM(FakeLLM):
-        def complete_json(self, system: str, user: str) -> dict:
+        def complete_json(self, system: str, user: str, images=()) -> dict:
             if "choose which templates" not in system.lower() and "propose" not in system.lower():
                 calls["n"] += 1
                 if calls["n"] == 1:
                     raise RuntimeError("transient")
-            return super().complete_json(system, user)
+            return super().complete_json(system, user, images)
 
     library(session)
     add_post(session, "p1")
@@ -459,12 +459,12 @@ def test_the_count_follows_the_calls_made_and_not_the_drafts_produced(client, se
     calls = {"n": 0}
 
     class FlakyLLM(FakeLLM):
-        def complete_json(self, system: str, user: str) -> dict:
+        def complete_json(self, system: str, user: str, images=()) -> dict:
             if "choose which templates" not in system.lower() and "propose" not in system.lower():
                 calls["n"] += 1
                 if calls["n"] == 1:
                     raise RuntimeError("transient")
-            return super().complete_json(system, user)
+            return super().complete_json(system, user, images)
 
     library(session)
     add_post(session, "p1")
@@ -532,7 +532,7 @@ def test_a_run_that_could_not_start_still_reports_what_it_spent(client, session)
     """
 
     class BrokenLLM(FakeLLM):
-        def complete_json(self, system: str, user: str) -> dict:
+        def complete_json(self, system: str, user: str, images=()) -> dict:
             raise RuntimeError("model unavailable")
 
     library(session)

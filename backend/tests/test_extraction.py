@@ -17,7 +17,7 @@ class FakeLLM:
         self.system: str | None = None
         self.user: str | None = None
 
-    def complete_json(self, system: str, user: str) -> dict:
+    def complete_json(self, system: str, user: str, images=()) -> dict:
         self.system, self.user = system, user
         return self.response
 
