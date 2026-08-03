@@ -114,9 +114,14 @@ for: a proposal is a layout by definition in this slice.
 
 **Dimensions are read off the source image, not asked for.** The corpus is not one size — the
 sample read for this design contained both 1080×1350 portrait and 1080×1080 square — and a model
-asked to state a size will state a plausible one rather than the true one. `_to_visual` takes
-`width` and `height` from the image the proposal names in `source_post_ids`, falling back to
-`rendering.DEFAULT_WIDTH` / `DEFAULT_HEIGHT` when a proposal cites more than one source or none.
+asked to state a size will state a plausible one rather than the true one.
+
+The sample step therefore returns `(Post, bytes)` pairs and keeps them, and `_to_visual` is handed
+that mapping. `width` and `height` come from the image already in memory, keyed by post.
+**Not re-resolved from `provenance`** — that column is `list[str]` of Zernio ids, so recovering a
+file from it means a `Post` lookup by `zernio_id` and then `local_media_path`, for bytes the
+caller is already holding. Falls back to `rendering.DEFAULT_WIDTH` / `DEFAULT_HEIGHT` when a
+proposal cites more than one source, or none.
 
 ### 2 · Three validations, before a proposal is ever offered
 
@@ -129,10 +134,16 @@ declared, and every declared slot must appear in the markup. An undeclared place
 `MissingSlotValue` at render time — after approval, in Studio, to whoever is trying to write a
 post. Caught here instead.
 
-**b. It renders.** Each surviving proposal is rendered once through the existing preview path
-using its own slot examples. A layout that does not render is not a proposal. This costs one
-Cloudflare call per proposal; `CloudflareRenderer` already absorbs the per-minute 429 with
-backoff, and the count is 3–5, so the cost is bounded and paid once.
+**b. It renders.** Each surviving proposal is rendered once through the preview path using its
+own slot examples. A layout that does not render is not a proposal.
+
+> **This route is slow, and that is expected rather than a hang.** Extraction is already one
+> LLM call; this adds one Cloudflare render per proposal, and `CloudflareRenderer` absorbs a
+> per-minute 429 with 5 + 10 + 20 = 35s of backoff across 4 attempts. A rate-limited run of five
+> proposals can therefore sit for minutes where `extract_hooks` returns in seconds. Proposals are
+> capped at **5** so the worst case is bounded, and the route documents the wait. Rendering at
+> approval time instead was considered and rejected: it moves the failure to the moment a human
+> has already said yes, which is precisely what this validation exists to prevent.
 
 **c. Provenance is checkable.** Only `source_post_ids` the model was actually shown survive —
 same rule as `_to_template`.
@@ -161,8 +172,22 @@ Setup is one existing call: `POST /assets` with the logo file, then the returned
 
 ### 4 · Edit with live preview
 
-`POST /templates/preview` — the same rendering as `POST /templates/{id}/preview`, taking a body
-and slots directly instead of a template id, because an unsaved edit has no id.
+`POST /templates/preview` — takes a body and slots directly instead of a template id, because an
+unsaved edit has no id.
+
+**Both preview routes must first apply `generation.chosen_assets`, and today neither does.**
+`preview_visual` passes caller-supplied `values` straight into `resolve_asset_values`, which never
+consults a slot's `default_asset_id`. So a logo slot previews from its `example` URL while
+generating from the pinned asset — two different pictures from the same template, with nothing
+raised. That is the same divergence `resolve_asset_values` documents in its own docstring as the
+reason all three render paths go through it: *a slot that resolves when a draft is generated and
+not when it is previewed is worse than one that never resolves, because the failure is invisible
+until someone looks at the picture.*
+
+Preview is now load-bearing twice over — it is validation (b), and it is what the editor shows —
+so this is fixed here rather than noted. `chosen_assets(template, values)` first, then
+`resolve_asset_values`, in both routes. Without it, validation (b) proves the layout renders but
+proves nothing about the logo, and the editor shows a logo that is not the one that ships.
 
 `TemplateManager` grows a preview pane beside the JSON editor for `kind === "visual"`: edit,
 render, look, then save. Saving still writes a new version through the existing `PUT`, so past
@@ -205,6 +230,7 @@ to learn from.
 | `settings.brand_logo_asset_id: int \| None = None` | config field + `.env.example` line |
 | `LLM.complete_json(..., images=())` | protocol widening, existing callers unaffected |
 | `_strongest_posts(..., require_content=True)` | parameter, default preserves behaviour |
+| `preview_visual` applies `chosen_assets` before resolving | **behaviour change to an existing route** — a slot left unset now renders its pinned default instead of failing or showing the example |
 
 `BRAND_LOGO_ASSET_ID` is not a credential — it is an integer row id, so it needs no `repr=False`
 and no `/health` flag. No new secret is introduced by this slice.
@@ -238,6 +264,9 @@ Backend, against fixtures — no live calls in the suite:
 - `role: "logo"` gets `default_asset_id`; a slot merely *named* `logo` without the role does not.
 - `brand_logo_asset_id` unset produces a logo slot with no default and no error.
 - `POST /templates/preview` renders an unsaved body; a body with a missing slot value 4xxs.
+- Both preview routes render a logo slot from its pinned `default_asset_id` when the caller
+  supplies no value for it — the assertion that fails today.
+- A proposal derived from a 1080×1080 source carries 1080×1080, not the 1080×1350 default.
 - `regenerate-visual` moves the old image to `previous_visual` and does not lose it.
 
 Frontend:
