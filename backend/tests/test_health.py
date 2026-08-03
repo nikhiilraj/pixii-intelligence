@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from app.config import settings
 from app.main import app
 
 client = TestClient(app)
@@ -38,3 +39,23 @@ def test_health_never_leaks_credential_values():
 
     for present in body["credentials"].values():
         assert isinstance(present, bool)
+
+
+def test_health_reports_the_variants_ceiling_as_a_sibling_of_the_credential_flags():
+    """Studio's variants control has to be able to say what it will spend.
+
+    Compared against `settings.variants_max`, never the literal 3 — a test hardcoding the
+    number would reproduce inside the suite the exact drift this endpoint exists to remove.
+    A sibling, not a credential: `credentials` is rendered row-per-key by the Inbox footer,
+    so a scalar in there would render as a junk boolean row.
+    """
+    body = client.get("/health").json()
+
+    assert body["variants_max"] == settings.variants_max
+    assert isinstance(body["variants_max"], int)
+    assert set(body["credentials"]) == {
+        "zernio",
+        "azure_chat",
+        "azure_image",
+        "cloudflare_rendering",
+    }
