@@ -850,7 +850,16 @@ export default function Studio({
                 reason: string;
               }>("/drafts/suggest", payload);
               if (s) {
-                setPicked({ hook: s.hook.id, structure: s.structure.id, visual: s.visual.id });
+                // The visual is deliberately NOT set here — `chooseVisual` below owns it.
+                // Writing it in both places is the duplicate that hid a mutation: with this
+                // literal also carrying `visual`, `chooseVisual`'s own `setPicked` had zero
+                // coverage, because the Select is the only other path into it and a Radix
+                // trigger cannot be driven in jsdom. One writer per field.
+                setPicked((current) => ({
+                  ...current,
+                  hook: s.hook.id,
+                  structure: s.structure.id,
+                }));
                 // A suggested visual brings its own image slots, so the picker has to be reset
                 // to that template's defaults exactly as choosing one by hand does — through
                 // `chooseVisual` itself rather than through a second copy of its body. This was

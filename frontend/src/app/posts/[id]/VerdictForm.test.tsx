@@ -157,6 +157,22 @@ describe("an existing verdict", () => {
     });
     await waitFor(() => expect(screen.getByText("Recorded: Mixed")).toBeInTheDocument());
   });
+
+  it("shows the ruling the route stored, not the one that was clicked", async () => {
+    /* The display follows the row the response carried. Every other test here stubs a response
+       that echoes the click, so the two are indistinguishable and `setRecorded(next)` — reading
+       the click instead of the row — survived them all. The two are made to differ here on
+       purpose: what the badge must never do is report a ruling the database does not hold. */
+    stubFetch(jsonResponse(200, postRow({ verdict: "worked", verdict_note: "as stored" })));
+    render(<VerdictForm postId={7} verdict={null} note="" />);
+
+    pick("Mixed");
+    submit();
+
+    await waitFor(() => expect(screen.getByText("Recorded: Worked")).toBeInTheDocument());
+    expect(screen.queryByText("Recorded: Mixed")).not.toBeInTheDocument();
+    expect(noteBox()).toHaveValue("as stored");
+  });
 });
 
 /* Retracting is a third thing, not a fourth verdict: the human is saying they should not have
@@ -225,6 +241,28 @@ describe("retracting a ruling", () => {
     expect(screen.queryByRole("button", { name: /retract/i })).not.toBeInTheDocument();
     expect(noteBox()).toHaveValue("");
     expect(toastSuccess).toHaveBeenCalledWith("Ruling retracted");
+  });
+
+  it("stops claiming a retract the moment a save is started instead", async () => {
+    /* `busy` is shared by both actions, so an armed retract left standing while a save runs
+       renders "Saving…" and "Retracting…" at once — a form claiming an action it is not
+       performing. Nothing exercised it: deleting the disarm left the suite green. */
+    stubFetch(jsonResponse(200, postRow({ verdict: "worked", verdict_note: "" })));
+    render(<VerdictForm postId={7} verdict="mixed" note="" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retract the ruling" }));
+    expect(screen.getByRole("button", { name: "Yes, retract it" })).toBeInTheDocument();
+
+    pick("Worked");
+    submit();
+
+    /* Asserted on the in-flight labels, not on "Yes, retract it" being absent — `busy` renames
+       that button to "Retracting…" while a request is out, so querying for its idle name is
+       null either way. The bug IS the pair of labels: a form saying "Saving…" and "Retracting…"
+       at once is claiming an action it is not performing. */
+    expect(screen.getByRole("button", { name: "Saving…" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retracting…" })).not.toBeInTheDocument();
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("Ruling saved"));
   });
 
   it("keeps the ruling on screen when the retract is refused", async () => {

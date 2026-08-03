@@ -186,6 +186,7 @@ def test_a_verdict_on_an_unknown_post_is_not_found(session):
     )
 
     assert response.status_code == 404
+    assert response.json()["detail"] == "no post 999999"
     app.dependency_overrides.clear()
 
 

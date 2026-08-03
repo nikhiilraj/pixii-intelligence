@@ -452,7 +452,10 @@ describe("when there is nothing to pick from", () => {
     // that never renders a picker at all.
     await setUp(statHeroSlots());
 
-    expect(screen.getByText(/^Images —/)).toHaveTextContent("2 slots");
+    // Anchored, not a substring: `toHaveTextContent("2 slot")` matches "2 slots" and vice
+    // versa, which is how a plural bug survives its own test. Measured — dropping the
+    // singular branch left the old assertion green.
+    expect(screen.getByText(/^Images —/)).toHaveTextContent(/^Images — 2 slots$/);
     expect(screen.getByLabelText("left_image_url")).toBeInTheDocument();
     expect(screen.getByLabelText("right_image_url")).toBeInTheDocument();
   });
@@ -549,7 +552,7 @@ describe("picking from the grid", () => {
       { name: "left_image_url", type: "image_url" },
     ]);
 
-    expect(screen.getByText(/^Images —/)).toHaveTextContent("1 slot");
+    expect(screen.getByText(/^Images —/)).toHaveTextContent(/^Images — 1 slot$/);
     expect(screen.getByLabelText("left_image_url")).toBeInTheDocument();
     expect(screen.queryByLabelText("logo")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("hero")).not.toBeInTheDocument();
@@ -583,6 +586,11 @@ describe("picking from the grid", () => {
     const fetchStub = await setUp(statHeroSlots(9));
 
     const dialog = openPicker("right_image_url");
+    // The dialog says what "the template's default" actually is, by name. Without it the
+    // button offers to fall back to something the reader cannot see.
+    expect(dialog.getByText(/Picking nothing leaves this slot/)).toHaveTextContent(
+      "“Product shot”",
+    );
     fireEvent.click(dialog.getByRole("button", { name: /use the template's default/i }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -638,6 +646,46 @@ describe("picking from the grid", () => {
     // The new template's own default, and not a trace of the pick made against the other one.
     expect(sentBody(fetchStub).asset_values).toEqual({ hero_image_url: "9" });
     expect(screen.getByLabelText("left_image_url")).toHaveTextContent("pick an asset");
+  });
+});
+
+describe("which templates the form offers", () => {
+  it("says nothing is approved when nothing is, and stops saying it when something is", () => {
+    // Generation reads approved templates only, so a page that offered proposals would let
+    // someone build a draft from a shape nobody has reviewed. The Select's own options live in
+    // a detached fragment while it is closed and cannot be queried, so the observable is this
+    // notice — which is derived from the same `approved` filter the options are.
+    render(
+      <Studio
+        templates={library([]).map((t) => ({ ...t, status: "proposed" as const }))}
+        assets={LIBRARY}
+        drafts={[]}
+      />,
+    );
+    expect(screen.getByText(/Nothing approved yet/)).toBeInTheDocument();
+
+    cleanup();
+    render(<Studio templates={library([])} assets={LIBRARY} drafts={[]} />);
+    expect(screen.queryByText(/Nothing approved yet/)).not.toBeInTheDocument();
+  });
+});
+
+describe("which tile the picker shows as chosen", () => {
+  it("marks the asset currently in the slot, and only that one", async () => {
+    // `aria-pressed` is the whole of it: every tile looks the same otherwise, so a grid that
+    // marks nothing gives a returning reader no way to see what is already in the slot.
+    await setUp(statHeroSlots(9));
+
+    const dialog = openPicker("right_image_url");
+
+    expect(dialog.getByRole("button", { name: /Product shot/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(dialog.getByRole("button", { name: /Pixii wordmark/ })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
   });
 });
 
@@ -992,6 +1040,12 @@ describe("one idea, several drafts", () => {
     expect(screen.getByText("hook-13 v2")).toBeInTheDocument();
     expect(screen.getByText("structure-11 v1")).toBeInTheDocument();
     expect(screen.getByText("visual-12 v3")).toBeInTheDocument();
+    // And each card names the assets in its picture, which is the other half of what is being
+    // compared — the PNG is flattened, so this is the only place the logo in it is nameable.
+    // Asserted here because the single-draft Lineage is a different call site: it was passed
+    // the library while this one could have been passed `null` with nothing noticing.
+    expect(screen.getAllByText("Pixii wordmark (#7)")).toHaveLength(3);
+    expect(screen.getAllByText("Product shot (#9)")).toHaveLength(3);
   });
 
   it("reports what the batch spent, counted from the response", async () => {
@@ -1059,6 +1113,32 @@ describe("one idea, several drafts", () => {
     await waitFor(() => expect(screen.getByText(/A 9-figure exit/)).toBeInTheDocument());
     expect(screen.queryByRole("button", { name: /keep draft 13/i })).not.toBeInTheDocument();
     expect(bodySentTo(fetchStub, "/drafts")).toMatchObject({ hook_id: 1 });
+  });
+});
+
+describe("a batch of a different size", () => {
+  it("counts the drafts that arrived rather than the three it expected", async () => {
+    // BATCH is three, and every number on that card is three — so a card hardcoding 3 passes
+    // every assertion above. The count is clamped server-side (`settings.variants_max`) and
+    // `variant_combinations` yields at most one per approved combination, so a batch smaller
+    // than the ceiling is the ordinary case rather than a contrived one.
+    const two = { variants: [variant(21), variant(22)], llm_calls: 2, image_calls: 2 };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        const path = String(url).replace(/^https?:\/\/[^/]+/, "");
+        if (path === "/drafts/variants") return Promise.resolve(jsonResponse(201, two));
+        return Promise.resolve(jsonResponse(201, DRAFT));
+      }),
+    );
+    render(<Studio templates={library(statHeroSlots(9))} assets={LIBRARY} drafts={[]} />);
+    typeIdea();
+
+    fireEvent.click(screen.getByRole("button", { name: /write variants/i }));
+
+    await screen.findByRole("button", { name: /keep draft 21/i });
+    expect(screen.getByText(/^2 drafts of one idea/)).toBeInTheDocument();
+    expect(screen.getByText(/2 chat completions and 2 image renders/)).toBeInTheDocument();
   });
 });
 
@@ -1146,18 +1226,37 @@ describe("the ?draft= parameter", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("lists the drafts without shipping their pictures", async () => {
-    // `GET /drafts` answers with every draft's full `DraftOut`, base64 PNG included — 530KB over
-    // the rows in the database today. The list needs three fields of it.
+  it("lists the drafts it was given", async () => {
     stubPage([{ ...LOADED, visual_png: "iVBORw0KGgoAAAANSUhEUg" }]);
 
-    const { container } = render(await StudioPage({ searchParams: Promise.resolve({}) }));
+    render(await StudioPage({ searchParams: Promise.resolve({}) }));
 
     expect(screen.getByRole("link", { name: /Amazon bundles/ })).toHaveAttribute(
       "href",
       "/studio?draft=424",
     );
-    expect(container.innerHTML).not.toContain("iVBORw0KGgoAAAANSUhEUg");
+    /* The `expect(container.innerHTML).not.toContain(base64)` that used to sit here is gone.
+       It was unfalsifiable: the list renders three fields and never a picture, so the PNG is
+       absent from the DOM whether or not `page.tsx` narrows the row. Replacing the map with
+       `{ ...d }` left it green. What the narrowing actually saves is the RSC payload, which no
+       jsdom render produces — asserted where it is observable, on the props crossing the
+       boundary, in `page.narrowing.test.tsx`. */
+  });
+
+  it("shows the draft the url now names after navigating from another one", async () => {
+    // `Studio` seeds its state from `initialDraft` through `useState`, which never re-seeds
+    // from a changed prop, so a client-side navigation from ?draft=424 to ?draft=555 would
+    // reconcile onto the same instance and go on showing draft 424. The `key` is what makes
+    // it a remount. Two renders of the page in the same tree is what a navigation looks like.
+    stubPage([], jsonResponse(200, LOADED));
+    const { rerender } = render(await StudioPage({ searchParams: Promise.resolve({ draft: "424" }) }));
+    expect(screen.getByText(/Bundles are the anti-coupon/)).toBeInTheDocument();
+
+    stubPage([], jsonResponse(200, { ...LOADED, id: 555, full_text: "A different draft entirely." }));
+    rerender(await StudioPage({ searchParams: Promise.resolve({ draft: "555" }) }));
+
+    expect(screen.getByText("A different draft entirely.")).toBeInTheDocument();
+    expect(screen.queryByText(/Bundles are the anti-coupon/)).not.toBeInTheDocument();
   });
 });
 

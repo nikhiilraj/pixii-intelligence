@@ -311,6 +311,16 @@ describe("the bounded table", () => {
     expect(screen.getByText("30 posts")).toBeInTheDocument();
   });
 
+  it("says '1 post', not '1 posts'", () => {
+    // The only count that can catch the plural: "30 posts" reads the same with the singular
+    // branch deleted, so the assertion above passed on a component that never pluralises.
+    stubFetchSequence();
+    render(<Explorer initial={[post()]} templates={[]} />);
+
+    // `getByText` with a string is an exact match, so "1 posts" does not satisfy it.
+    expect(screen.getByText("1 post")).toBeInTheDocument();
+  });
+
   it("shows the rest on request", () => {
     stubFetchSequence();
     render(<Explorer initial={many} templates={[]} />);
@@ -336,6 +346,32 @@ describe("the bounded table", () => {
  *
  * Timestamps are midday UTC so a machine's local offset cannot roll either date across a year
  * boundary and make the result depend on where the test runs. */
+/* The view opens scoped to our own account, and that is a decision rather than a default:
+   creator reference posts run an order of magnitude above ours (4331 and 1195 engaged actions
+   against our best at 185), so an unscoped landing view ranks somebody else's posts as our top
+   performers. Every fixture above is on our account, so removing the scope changed nothing and
+   the decision was untested — measured. */
+describe("the cohort the corpus opens on", () => {
+  const ours = post({ id: 1, content: "one of ours", engaged_actions: 185 });
+  const theirs = post({
+    id: 2,
+    content: "a creator reference post",
+    account_username: "Creator inspiration",
+    engaged_actions: 4331,
+  });
+
+  it("shows our own posts only, with the creator posts one filter away", () => {
+    stubFetchSequence();
+    render(<Explorer initial={[ours, theirs]} templates={[]} />);
+
+    expect(screen.getByRole("link", { name: /one of ours/ })).toBeInTheDocument();
+    // The row that would otherwise head the table on engaged actions.
+    expect(screen.queryByRole("link", { name: /a creator reference post/ })).not.toBeInTheDocument();
+    // And the count agrees with what is drawn, rather than reporting the whole corpus.
+    expect(screen.getByText("1 post")).toBeInTheDocument();
+  });
+});
+
 describe("the Published column", () => {
   it("tells apart two posts on the same day and month in different years", () => {
     // No responses: any fetch is an unexpected call and fails the test rather than reaching

@@ -183,7 +183,11 @@ function row(overrides: Record<string, unknown> = {}) {
     total_impressions: 0,
     mean_engaged_actions: 0,
     sufficient: false,
-    min_sample_size: 5,
+    // Deliberately NOT 5. 5 is `settings.min_sample_size`'s default and the number the page
+    // falls back to when the list is empty, so a fixture on 5 cannot tell "read off the row"
+    // from "hardcoded" — measured: replacing the read with a literal 5 left every assertion
+    // here green.
+    min_sample_size: 6,
     ...overrides,
   };
 }
@@ -243,7 +247,12 @@ describe("a stocked library with no published post", () => {
 
     // The rows survive the empty state. All-zero sample counts say *which* versions are
     // waiting; replacing the table with a notice would be the same lie inverted.
-    expect(screen.getByRole("link", { name: "Contrarian open" })).toBeInTheDocument();
+    // Each name links to the corpus filtered to that family — a bare `/posts` renders the
+    // same words and answers a different question.
+    expect(screen.getByRole("link", { name: "Contrarian open" })).toHaveAttribute(
+      "href",
+      "/posts?template_family=a2bcf8e2",
+    );
     expect(screen.getByRole("link", { name: "Numbers first" })).toBeInTheDocument();
   });
 
@@ -251,7 +260,13 @@ describe("a stocked library with no published post", () => {
     stubFetch(
       jsonResponse(200, [
         row(),
-        row({ version: 2, name: "Numbers first", sample_count: 3, total_engaged_actions: 41 }),
+        row({
+          version: 2,
+          name: "Numbers first",
+          sample_count: 3,
+          total_engaged_actions: 41,
+          mean_engaged_actions: 13.7,
+        }),
       ]),
     );
 
@@ -262,6 +277,12 @@ describe("a stocked library with no published post", () => {
     ).not.toBeInTheDocument();
     // One attributed post is enough to stop the claim — the threshold badge is what reports
     // that three samples are too thin to read, and that is a different statement.
-    expect(screen.getByText(/too thin \(3\/5\)/)).toBeInTheDocument();
+    expect(screen.getByText(/too thin \(3\/6\)/)).toBeInTheDocument();
+    // The lede states the same threshold, and it is a second read of the same field.
+    expect(screen.getByText(/anything under 6 posts is marked insufficient/)).toBeInTheDocument();
+    // A mean over zero samples is not 0.0, it is nothing — the row with evidence prints its
+    // figure and the row without prints the dash.
+    const means = screen.getAllByRole("row").slice(1).map((r) => r.children[4].textContent);
+    expect(means).toEqual(["—", "13.7"]);
   });
 });

@@ -184,6 +184,39 @@ describe("approving and retiring", () => {
     expect(row("old-hook").queryByRole("button", { name: "retire" })).toBeNull();
     expect(row("old-hook").queryByRole("button", { name: "edit" })).toBeNull();
     expect(within(screen.getByText("old-hook").closest("li")!).getByText("retired")).toBeVisible();
+
+    // Preview renders a template, so it belongs only to the kind that has one to render. The
+    // stub above rejects `/preview` outright, so an offer on a hook is a click away from a
+    // failed request — and it went untested: making the button unconditional stayed green.
+    expect(row("quote-card").getByRole("button", { name: "preview" })).toBeInTheDocument();
+    expect(row("transformation").queryByRole("button", { name: "preview" })).toBeNull();
+    expect(row("case-loop").queryByRole("button", { name: "preview" })).toBeNull();
+  });
+});
+
+/* Whose posts a template was read from, which is the difference a reviewer is judging on: a
+   shape proven in our own writing against one borrowed from a creator. Three states and three
+   renderings — and the third is the one that has to exist, because most of the queue predates
+   the field and a blank beside rows marked "borrowed" reads as "not borrowed", a claim the row
+   does not carry. Nothing asserted this: both dropping the unrecorded branch and stringifying
+   a missing cohort left the suite green. */
+describe("the cohort a template was read from", () => {
+  it("names each of the three states, and never invents one", () => {
+    render(
+      <TemplateManager
+        initial={[
+          template({ id: 10, name: "ours", body: { cohort: "voice" } }),
+          template({ id: 11, name: "borrowed", body: { cohort: "inspiration" } }),
+          template({ id: 12, name: "older-than-the-field", body: { pattern: "x" } }),
+        ]}
+      />,
+    );
+
+    expect(row("ours").getByText("proven in our own posts")).toBeInTheDocument();
+    expect(row("borrowed").getByText("borrowed from a creator")).toBeInTheDocument();
+    expect(row("older-than-the-field").getByText("cohort unrecorded")).toBeInTheDocument();
+    // And the unrecorded row does not quietly borrow either label.
+    expect(row("older-than-the-field").queryByText(/proven|borrowed from/)).toBeNull();
   });
 });
 

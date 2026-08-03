@@ -97,7 +97,11 @@ describe("starting a re-topic from a post", () => {
     const spy = stubFetch(jsonResponse(201, retopicOut()));
     render(<RetopicForm postId={95} />);
 
-    type("why keyword-dense titles stall on Walmart");
+    // Typed with the whitespace a real paste carries. The button's disabled state is already
+    // computed from the trimmed value; what was untested is that the trimmed value is also
+    // what gets *sent* — the subject reaches the prompt, and leading newlines in a prompt are
+    // not free.
+    type("  why keyword-dense titles stall on Walmart  ");
     fireEvent.click(startButton());
 
     await waitFor(() => expect(spy).toHaveBeenCalled());
