@@ -15,7 +15,7 @@ export default async function PostsPage() {
   return (
     <main className="mx-auto max-w-6xl px-6 py-16">
       <h1 className="text-2xl font-semibold tracking-tight">Corpus</h1>
-      <p className="mt-1 text-sm opacity-60">
+      <p className="mt-1 text-sm text-muted">
         Every post, ranked by engaged actions — likes, comments, shares and saves. Reach and
         engagement rate sit alongside as secondary measures.
       </p>

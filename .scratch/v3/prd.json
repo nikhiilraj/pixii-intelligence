@@ -275,7 +275,7 @@
     "id": "US-021",
     "title": "Browser pass over the whole app, then close the version",
     "priority": 21,
-    "passes": false,
+    "passes": true,
     "description": "Nothing has re-walked all seven routes since 15 slices stacked up; each slice verified only its own. This is the check that found both structural defects. Includes the two surfaces never yet seen rendered: the verdict retract control and 'use the template's default'.",
     "acceptanceCriteria": [
       "7 routes x 2 themes x 1440 and 390, findings recorded with evidence",
