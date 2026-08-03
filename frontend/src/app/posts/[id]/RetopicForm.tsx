@@ -79,15 +79,15 @@ export default function RetopicForm({ postId }: { postId: number }) {
 
   return (
     <div className="mt-8 rounded-lg border border-black/10 p-3 dark:border-white/15">
-      <h2 className="text-xs uppercase tracking-wide opacity-50">Re-topic</h2>
-      <p className="mt-2 text-xs opacity-60">
+      <h2 className="text-xs uppercase tracking-wide text-muted">Re-topic</h2>
+      <p className="mt-2 text-xs text-muted">
         A new draft on a new subject, written through these three template versions — the ones
         above, not whatever is newest in each family. This post is read and never changed.
         Writing one costs a chat completion and an image render, so it takes a subject and a
         press.
       </p>
 
-      <label htmlFor="retopic-idea" className="mt-3 block text-xs opacity-60">
+      <label htmlFor="retopic-idea" className="mt-3 block text-xs text-muted">
         The new subject
       </label>
       {/* Stacked above the button rather than beside it: a full-width block cannot overflow its
@@ -110,21 +110,21 @@ export default function RetopicForm({ postId }: { postId: number }) {
       </Button>
 
       {busy && (
-        <p className="mt-2 text-xs opacity-60" aria-live="polite">
+        <p className="mt-2 text-xs text-muted" aria-live="polite">
           Writing — the model is being called and the visual rendered.
         </p>
       )}
 
       {made && (
         <div className="mt-3 border-t border-black/10 pt-3 dark:border-white/15">
-          <p className="text-xs opacity-60">
+          <p className="text-xs text-muted">
             Draft {made.id} written through the same three versions, and it spent{" "}
             {calls(made.llm_calls, "chat completion")} and {calls(made.image_calls, "image render")}.
             It is a draft: nothing has been pushed or published.
           </p>
           <Link
             href={`/studio?draft=${made.id}`}
-            className="mt-2 inline-block text-sm underline opacity-60"
+            className="mt-2 inline-block text-sm text-muted underline"
           >
             Open draft {made.id} in the studio
           </Link>

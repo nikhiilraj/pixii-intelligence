@@ -69,7 +69,7 @@ export default async function StudioPage({
   return (
     <main className="mx-auto max-w-6xl px-6 py-16">
       <h1 className="text-2xl font-semibold tracking-tight">Studio</h1>
-      <p className="mt-1 text-sm opacity-60">
+      <p className="mt-1 text-sm text-muted">
         An idea in, a reviewable draft out — stamped with the templates that produced it, or
         opened again from the list. Nothing publishes from here.
       </p>

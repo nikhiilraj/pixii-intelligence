@@ -56,7 +56,7 @@ export default function AddExternal() {
 
   return (
     <form onSubmit={submit} className="mt-4 max-w-2xl space-y-3">
-      <p className="text-xs opacity-60">
+      <p className="text-xs text-muted">
         For posts Zernio does not carry — a creator post someone sent you, text from a
         screenshot. Extraction treats it as evidence; a Zernio sync never touches it.
       </p>

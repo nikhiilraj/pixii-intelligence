@@ -23,7 +23,7 @@ const nf = new Intl.NumberFormat("en-US");
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-black/10 p-3 dark:border-white/15">
-      <div className="text-xs uppercase tracking-wide opacity-50">{label}</div>
+      <div className="text-xs uppercase tracking-wide text-muted">{label}</div>
       <div className="mt-1 text-lg font-semibold tabular-nums">{value}</div>
     </div>
   );
@@ -58,14 +58,14 @@ function readingLabel(value: string): string {
 function Lineage({ label, entry }: { label: string; entry: LineageEntry }) {
   return (
     <div className="rounded-lg border border-black/10 p-3 dark:border-white/15">
-      <div className="text-xs uppercase tracking-wide opacity-50">{label}</div>
+      <div className="text-xs uppercase tracking-wide text-muted">{label}</div>
       {entry ? (
         <>
           <div className="mt-1 break-words text-sm font-medium">{entry.name}</div>
-          <div className="mt-0.5 text-xs tabular-nums opacity-50">v{entry.version}</div>
+          <div className="mt-0.5 text-xs tabular-nums text-muted">v{entry.version}</div>
         </>
       ) : (
-        <div className="mt-1 text-sm opacity-50">not recorded</div>
+        <div className="mt-1 text-sm text-muted">not recorded</div>
       )}
     </div>
   );
@@ -81,7 +81,7 @@ function Lineage({ label, entry }: { label: string; entry: LineageEntry }) {
 function Readings({ snapshots }: { snapshots: MetricSnapshot[] }) {
   if (snapshots.length === 0) {
     return (
-      <p className="mt-2 text-sm opacity-60">
+      <p className="mt-2 text-sm text-muted">
         No readings have been taken of this post yet, so there is no curve to draw.
       </p>
     );
@@ -91,21 +91,21 @@ function Readings({ snapshots }: { snapshots: MetricSnapshot[] }) {
   const last = readingLabel(snapshots[snapshots.length - 1].captured_at);
 
   if (snapshots.length === 1) {
-    return <p className="mt-2 text-sm opacity-60">One reading, {first}. A curve needs two.</p>;
+    return <p className="mt-2 text-sm text-muted">One reading, {first}. A curve needs two.</p>;
   }
 
   const flat = snapshots.every((s) => s.engaged_actions === snapshots[0].engaged_actions);
 
   return (
     <>
-      <p className="mt-2 text-sm opacity-60">
+      <p className="mt-2 text-sm text-muted">
         {snapshots.length} readings, {first} → {last}.
         {flat ? " Engaged actions unchanged across all of them." : ""}
       </p>
       <EngagementCurve
         data={snapshots.map((s) => ({ at: readingLabel(s.captured_at), engaged: s.engaged_actions }))}
       />
-      <p className="mt-1 text-xs opacity-50">
+      <p className="mt-1 text-xs text-muted">
         Engaged actions only. Impressions sit on the same rows but are 0 wherever they were
         never measured, and a floor is not a reading.
       </p>
@@ -124,7 +124,7 @@ export default async function PostDetail({ params }: { params: Promise<{ id: str
     if (result.kind === "http" && result.status === 404) notFound();
     return (
       <main className="mx-auto max-w-3xl px-6 py-16">
-        <Link href="/posts" className="text-sm opacity-60 hover:underline">
+        <Link href="/posts" className="text-sm text-muted hover:underline">
           ← Corpus
         </Link>
         <ApiFailureNotice failure={result} className="mt-6" />
@@ -156,7 +156,7 @@ export default async function PostDetail({ params }: { params: Promise<{ id: str
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-16">
-      <Link href="/posts" className="text-sm opacity-60 hover:underline">
+      <Link href="/posts" className="text-sm text-muted hover:underline">
         ← Corpus
       </Link>
 
@@ -164,7 +164,7 @@ export default async function PostDetail({ params }: { params: Promise<{ id: str
         <h1 className="text-xl font-semibold tracking-tight">
           {post.account_username ?? post.platform}
         </h1>
-        <span className="text-sm opacity-60">
+        <span className="text-sm text-muted">
           {post.platform}
           {post.published_at
             ? ` · ${new Date(post.published_at).toLocaleDateString("en-GB", {
@@ -180,7 +180,7 @@ export default async function PostDetail({ params }: { params: Promise<{ id: str
             href={post.platform_post_url}
             target="_blank"
             rel="noreferrer"
-            className="text-sm underline opacity-60"
+            className="text-sm text-muted underline"
           >
             view on {post.platform}
           </a>
@@ -227,7 +227,7 @@ export default async function PostDetail({ params }: { params: Promise<{ id: str
         <ApiFailureNotice failure={draftResult} className="mt-8" />
       ) : draft ? (
         <section className="mt-8">
-          <h2 className="text-xs uppercase tracking-wide opacity-50">Generated from</h2>
+          <h2 className="text-xs uppercase tracking-wide text-muted">Generated from</h2>
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
             <Lineage label="hook" entry={draft.lineage.hook} />
             <Lineage label="structure" entry={draft.lineage.structure} />
@@ -242,7 +242,7 @@ export default async function PostDetail({ params }: { params: Promise<{ id: str
               the lineage join's key and `draft.id` is a different table. */}
           <RetopicForm postId={post.id} />
 
-          <h2 className="mt-8 text-xs uppercase tracking-wide opacity-50">Engagement over time</h2>
+          <h2 className="mt-8 text-xs uppercase tracking-wide text-muted">Engagement over time</h2>
           {history && !history.ok ? (
             <ApiFailureNotice failure={history} className="mt-3" />
           ) : (
@@ -250,7 +250,7 @@ export default async function PostDetail({ params }: { params: Promise<{ id: str
           )}
         </section>
       ) : (
-        <p className="mt-8 text-sm opacity-60">
+        <p className="mt-8 text-sm text-muted">
           No draft behind this post — it came from the corpus rather than from anything this app
           generated, so there is no lineage to attribute and no curve is drawn against one.
         </p>

@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 
+import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -73,17 +74,24 @@ const BLANK_BODY: Record<TemplateKind, string> = {
   visual: JSON.stringify({ renderer: "html", component: "stat_hero" }, null, 2),
 };
 
-const STATUS_STYLE: Record<string, string> = {
-  approved: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
-  proposed: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
-  retired: "bg-black/10 opacity-60 dark:bg-white/10",
+/** A template's status, carried by the shared Badge — the fill says the status, the word stays
+ *  on --text.
+ *
+ *  This file used to declare its own `Badge` over a local map of raw palette colours
+ *  (`text-emerald-700`, `text-amber-700`, plus `opacity-60` on retired), which is precisely the
+ *  shape `components/ui/badge.tsx` exists to prevent and its header comment measures. Measured
+ *  on the rendered page, all three light-mode states were under the 4.5 floor as text —
+ *  proposed 4.31:1, retired 4.34:1, approved 4.47:1 — while the shared component's labels sit at
+ *  13:1 or better in both themes because it tints the status behind a `--text` word instead of
+ *  colouring the word. Three near-misses, on the page where 50 proposals are reviewed.
+ *
+ *  An unknown status falls through to the Badge's own `neutral` default rather than to an
+ *  unstyled span; the old map's `?? ""` rendered a bare word with no affordance at all. */
+const STATUS_VARIANT: Record<string, BadgeProps["variant"]> = {
+  approved: "success",
+  proposed: "warning",
+  retired: "neutral",
 };
-
-function Badge({ status }: { status: string }) {
-  return (
-    <span className={`rounded px-1.5 py-0.5 text-xs ${STATUS_STYLE[status] ?? ""}`}>{status}</span>
-  );
-}
 
 /** Whose posts a template was read from.
  *
@@ -93,11 +101,17 @@ function Badge({ status }: { status: string }) {
  * Three states, three renderings. Most of the queue predates the field, and rendering
  * nothing for those would put a blank beside rows explicitly marked as borrowed — which
  * reads as "not borrowed", a claim the row does not carry. Unrecorded is the true one.
+ *
+ * "Unrecorded" is muted with --text-muted, not with `opacity-40`. Opacity was the worst
+ * contrast in the app — 2.51:1 light, 3.40:1 dark, the only element that failed AA in both
+ * themes — and it failed on the one label that tells a reviewer whether a proposal came from
+ * our own posts or was borrowed. A third state that says "we do not know" still has to be
+ * readable to say it; the token mutes to a measured 5.2:1 instead of to an arbitrary alpha.
  */
 function CohortTag({ template }: { template: Template }) {
   const cohort = cohortOf(template);
   if (!cohort) {
-    return <span className="rounded px-1.5 py-0.5 text-xs opacity-40">cohort unrecorded</span>;
+    return <span className="rounded px-1.5 py-0.5 text-xs text-muted">cohort unrecorded</span>;
   }
   return (
     <span className={`rounded px-1.5 py-0.5 text-xs ${COHORT_STYLE[cohort] ?? ""}`}>
@@ -236,7 +250,7 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
           >
             Extract structures
           </Button>
-          <span className="text-xs opacity-50">
+          <span className="text-xs text-muted">
             Proposes patterns from the strongest posts in the chosen cohort. Nothing becomes
             usable until you approve it.
           </span>
@@ -264,10 +278,10 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
               >
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-medium">{t.name}</span>
-                  <span className="text-xs opacity-50">
+                  <span className="text-xs text-muted">
                     {t.kind} · v{t.version}
                   </span>
-                  <Badge status={t.status} />
+                  <Badge variant={STATUS_VARIANT[t.status]}>{t.status}</Badge>
                   <CohortTag template={t} />
                   <span className="ml-auto flex gap-3 text-xs">
                     {t.status !== "retired" && (
@@ -309,7 +323,7 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
                   </span>
                 </div>
                 {t.provenance.length > 0 && (
-                  <p className="mt-1 text-xs opacity-50">
+                  <p className="mt-1 text-xs text-muted">
                     from {t.provenance.length} post{t.provenance.length === 1 ? "" : "s"}
                   </p>
                 )}
@@ -331,7 +345,7 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
       </section>
 
       <form onSubmit={submit} className="space-y-3">
-        <h2 className="text-xs font-medium uppercase tracking-widest opacity-50">
+        <h2 className="text-xs font-medium uppercase tracking-widest text-muted">
           {editing ? `Revise "${editing.name}" → v${editing.version + 1}` : "Author a template"}
         </h2>
 

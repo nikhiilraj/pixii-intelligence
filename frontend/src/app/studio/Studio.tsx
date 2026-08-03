@@ -412,7 +412,7 @@ export type DraftSummary = { id: number; idea: string; zernio_post_id: string | 
 function Drafts({ drafts, current }: { drafts: DraftSummary[] | null; current: number | null }) {
   return (
     <div className="space-y-2 rounded-lg border border-black/10 p-3 dark:border-white/15">
-      <div className="text-xs font-medium uppercase tracking-widest opacity-50">Drafts</div>
+      <div className="text-xs font-medium uppercase tracking-widest text-muted">Drafts</div>
 
       {drafts === null ? (
         <p className="text-sm text-amber-700 dark:text-amber-400">
@@ -467,10 +467,10 @@ function Lineage({ draft, assets }: { draft: Draft; assets: Asset[] | null }) {
 
   return (
     <div className="rounded-lg border border-black/10 p-3 text-xs dark:border-white/15">
-      <div className="mb-2 font-medium uppercase tracking-widest opacity-50">Lineage</div>
+      <div className="mb-2 font-medium uppercase tracking-widest text-muted">Lineage</div>
       {rows.map(([label, entry]) => (
         <div key={label} className="flex justify-between gap-3 py-0.5">
-          <span className="opacity-60">{label}</span>
+          <span className="text-muted">{label}</span>
           <span>{entry ? `${entry.name} v${entry.version}` : "—"}</span>
         </div>
       ))}
@@ -478,7 +478,7 @@ function Lineage({ draft, assets }: { draft: Draft; assets: Asset[] | null }) {
         const asset = assets?.find((a) => String(a.id) === id);
         return (
           <div key={slot} className="flex justify-between gap-3 py-0.5">
-            <span className="opacity-60">{slot}</span>
+            <span className="text-muted">{slot}</span>
             <span>{asset ? `${asset.label || asset.kind} (#${id})` : `asset #${id}`}</span>
           </div>
         );
@@ -744,7 +744,7 @@ export default function Studio({
              ponytail: the button is a button, not a Radix anything. It opens one dialog and
              shows what is currently picked; there is no combobox behaviour to inherit. */
           <div className="space-y-3 rounded-lg border border-black/10 p-3 dark:border-white/15">
-            <div className="text-xs font-medium uppercase tracking-widest opacity-50">
+            <div className="text-xs font-medium uppercase tracking-widest text-muted">
               Images — {slots.length} slot{slots.length === 1 ? "" : "s"}
             </div>
 
@@ -915,7 +915,7 @@ export default function Studio({
             `image_calls` afterwards and still does — that is the receipt, and a receipt is not a
             price. `variantsMax` is the server's own ceiling; with `/health` unread the sentence
             stops at the per-variant rate, which is true at any ceiling. */}
-        <p className="text-xs opacity-60">
+        <p className="text-xs text-muted">
           Write variants writes this idea several times over, each through a different approved
           hook, structure and visual, then shows them side by side to keep one. It ignores the
           three selects above on purpose — varying the combination is the point — and it spends a
@@ -925,7 +925,7 @@ export default function Studio({
             : `, up to ${variantsMax} of them — at most ${calls(variantsMax, "chat completion")} and ${calls(variantsMax, "image render")} for one press.`}
         </p>
 
-        {reason && <p className="text-xs opacity-60">{reason}</p>}
+        {reason && <p className="text-xs text-muted">{reason}</p>}
         {approved.length === 0 && (
           <p className="text-sm text-amber-700 dark:text-amber-400">
             Nothing approved yet. Approve a hook, a structure and a visual first.
@@ -985,7 +985,7 @@ export default function Studio({
             <Lineage draft={draft} assets={library} />
 
             {draft.zernio_post_id && (
-              <p className="text-xs opacity-60">
+              <p className="text-xs text-muted">
                 In Zernio as a draft ({draft.zernio_post_id}). Publishing stays a human act.
               </p>
             )}
