@@ -3,7 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { Draft, MetricSnapshot, PostRow } from "@/lib/api";
+import type { Draft, MetricSnapshot, Post } from "@/lib/api";
 
 import PostDetail from "./page";
 
@@ -41,11 +41,10 @@ function jsonResponse(status: number, body: unknown): Response {
   });
 }
 
-function post(overrides: Partial<PostRow> = {}): PostRow {
+function post(overrides: Partial<Post> = {}): Post {
   return {
     id: 95,
     zernio_id: "6a303ac95f7d1751abc3034b",
-    late_post_id: "6a289584ed8bce87c92f5466",
     platform: "linkedin",
     content: "a published post",
     published_at: "2026-06-15T17:03:39.308000",
@@ -113,8 +112,11 @@ function snapshot(capturedAt: string, engaged: number): MetricSnapshot {
 }
 
 type Routes = {
-  post?: PostRow;
-  drafts?: Draft[] | Response;
+  post?: Post;
+  /** What `GET /posts/95/draft` answers with. `null` — the wire shape of a 200 with an empty
+   *  body — is the *normal* answer, not an error: 57 of 57 published posts have no draft
+   *  behind them. A `Response` is how a test asks for a failure instead. */
+  draft?: Draft | null | Response;
   history?: MetricSnapshot[];
   templates?: unknown[];
 };
@@ -138,9 +140,13 @@ function stubFetch(routes: Routes) {
       const made = { ...draft({ id: 42, zernio_post_id: null }), llm_calls: 1, image_calls: 1 };
       return Promise.resolve(jsonResponse(201, made));
     }
-    if (url.includes("/drafts")) {
-      const drafts = routes.drafts ?? [];
-      return Promise.resolve(drafts instanceof Response ? drafts : jsonResponse(200, drafts));
+    // `/posts/95/draft`, and before the bare-post fallthrough at the bottom, whose path this
+    // one contains. There is no `/drafts` branch any more and that is the slice: nothing on
+    // this page reads the drafts *list*, so a stub that still answered one would let the old
+    // browser-side join come back and pass.
+    if (url.includes("/draft")) {
+      const answer = routes.draft ?? null;
+      return Promise.resolve(answer instanceof Response ? answer : jsonResponse(200, answer));
     }
     return Promise.resolve(jsonResponse(200, routes.post ?? post()));
   });
@@ -159,7 +165,7 @@ afterEach(() => {
 
 describe("a post with a draft behind it", () => {
   it("names the three template versions the draft was generated from", async () => {
-    stubFetch({ drafts: [draft()], history: [snapshot("2026-07-28T21:22:25", 185)] });
+    stubFetch({ draft: draft(), history: [snapshot("2026-07-28T21:22:25", 185)] });
 
     render(await renderPage());
 
@@ -172,7 +178,7 @@ describe("a post with a draft behind it", () => {
 
   it("reads the draft's own version, never the newest of the family", async () => {
     const fetchMock = stubFetch({
-      drafts: [draft()],
+      draft: draft(),
       history: [],
       // The trap, and it is the live one: family a2bcf8e2… holds v1 (retired) and v2
       // (approved) in the database today, `GET /templates` answers with v2 alone, and draft
@@ -194,7 +200,7 @@ describe("a post with a draft behind it", () => {
 
   it("reports the readings behind the curve rather than implying a measurement", async () => {
     stubFetch({
-      drafts: [draft()],
+      draft: draft(),
       history: [snapshot("2026-07-28T21:22:25", 185), snapshot("2026-07-28T21:22:26", 185)],
     });
 
@@ -217,7 +223,7 @@ describe("a post with a draft behind it", () => {
      be accepted by the route as a post id and would re-topic post 21, a real and unrelated
      row; `late_post_id` is the lineage join's key and belongs to a different namespace. */
   it("offers the re-topic the recorded templates make possible, against this post's own id", async () => {
-    const fetchMock = stubFetch({ drafts: [draft()], history: [] });
+    const fetchMock = stubFetch({ draft: draft(), history: [] });
 
     render(await renderPage());
 
@@ -241,7 +247,7 @@ describe("a post with a draft behind it", () => {
   });
 
   it("says a curve needs readings when none were ever taken", async () => {
-    stubFetch({ drafts: [draft()], history: [] });
+    stubFetch({ draft: draft(), history: [] });
 
     render(await renderPage());
 
@@ -251,9 +257,33 @@ describe("a post with a draft behind it", () => {
   });
 });
 
+/* US-019. The join moved to the server, and the reason it had to is a ceiling nothing on
+   screen could have shown: this page asked `GET /drafts?limit=500` and matched in the browser,
+   and that list is `created_at DESC`, so what fell off the end was the *oldest* drafts —
+   exactly the ones whose posts have been live longest and are most likely to be read here. A
+   post would then have rendered "no draft behind this post" while its draft sat in the
+   database. `GET /posts/{id}/draft` answers the same question with no list and no limit. */
+describe("which request answers the lineage question", () => {
+  it("asks the route for this post's draft, and never for the drafts list", async () => {
+    const fetchMock = stubFetch({ draft: draft(), history: [] });
+
+    render(await renderPage());
+
+    const asked = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(asked).toContainEqual(expect.stringMatching(/\/posts\/95\/draft$/));
+    // The negative is the slice. A page that asks for both would render identically.
+    expect(asked.some((url) => url.includes("/drafts?"))).toBe(false);
+    expect(asked.some((url) => url.includes("limit="))).toBe(false);
+  });
+});
+
 describe("a post with no draft behind it", () => {
+  /* The route's normal answer, not its failure: a 200 whose body is `null`, which is what all
+     57 published posts here produce. `ok: true` with `data === null` must read as "nothing
+     generated this", never as a failed request — that conflation, in the other direction, is
+     what the third block below exists to prevent. */
   it("renders neither block and says why, rather than an empty chart", async () => {
-    stubFetch({ drafts: [draft({ zernio_post_id: "some-other-post" })], history: [] });
+    stubFetch({ draft: null, history: [] });
 
     render(await renderPage());
 
@@ -266,21 +296,25 @@ describe("a post with no draft behind it", () => {
     expect(screen.queryByRole("button", { name: /^Write the new draft/ })).not.toBeInTheDocument();
   });
 
-  it("treats a post that was never pushed the same way, without asking for a draft match", async () => {
-    stubFetch({ post: post({ late_post_id: null }), drafts: [draft()], history: [] });
+  it("reads a null body as an answer, not as a failure", async () => {
+    const fetchMock = stubFetch({ draft: null, history: [] });
 
     render(await renderPage());
 
-    expect(screen.getByText(/came from the corpus/)).toBeInTheDocument();
-    expect(screen.queryByText("stat-hero")).not.toBeInTheDocument();
+    // The other half of the same assertion, and it is the one that catches treating `null` as
+    // an error: no failure notice anywhere, and the history route never asked about a post
+    // with nothing to attribute a curve to.
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Request failed/i)).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/history"))).toBe(false);
   });
 });
 
-describe("when the drafts read fails", () => {
-  /* The error-vs-empty class this codebase keeps paying for: a failed `/drafts` is not
-     evidence that no draft exists, and "nothing generated this post" is a claim. */
+describe("when the draft read fails", () => {
+  /* The error-vs-empty class this codebase keeps paying for: a failed read is not evidence
+     that no draft exists, and "nothing generated this post" is a claim. */
   it("reports the failure instead of claiming the post has no lineage", async () => {
-    stubFetch({ drafts: jsonResponse(500, { detail: "drafts table is on fire" }) });
+    stubFetch({ draft: jsonResponse(500, { detail: "drafts table is on fire" }) });
 
     render(await renderPage());
 

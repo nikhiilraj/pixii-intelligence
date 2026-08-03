@@ -21,11 +21,13 @@ import {
 } from "@/components/ui/select";
 import {
   assetSrc,
+  calls,
   postForm,
   postJson,
   type Asset,
   type AssetKind,
   type Draft,
+  type Spend,
   type Template,
 } from "@/lib/api";
 
@@ -489,19 +491,9 @@ function Lineage({ draft, assets }: { draft: Draft; assets: Asset[] | null }) {
  *  cost. **There is no fourth field and that is the slice**: no score, no confidence, no
  *  recommendation, and no order but the one the drafts were written in.
  *
- *  ponytail: declared here rather than in `lib/api.ts`, for `RetopicResult`'s reason — one
- *  surface consumes it. Ceiling: a second caller, at which point the spend pair and this shape
- *  hoist beside `Draft` together. */
-type Batch = { variants: Draft[]; llm_calls: number; image_calls: number };
-
-/** "1 chat completion", "3 image renders" — the observed count, in words, never a price. The
- *  meter counts calls; nothing in this app knows what a call cost.
- *
- *  ponytail: copied from `RetopicForm`, not shared. Four lines against reaching into a file
- *  another slice is editing this run; hoist the pair when a third surface needs it. */
-function calls(n: number, unit: string): string {
-  return `${n} ${unit}${n === 1 ? "" : "s"}`;
-}
+ *  The spend pair is `Spend` in `lib/api`, shared with `RetopicResult`; the list of variants is
+ *  this page's alone and stays here. */
+type Batch = { variants: Draft[] } & Spend;
 
 /** The batch, side by side, with a Keep on each.
  *
@@ -609,12 +601,20 @@ export default function Studio({
   // Why the requested draft is not here. Distinct from `initialDraft === null`, which is a
   // fresh session with nothing asked for.
   missing = null,
+  // `settings.variants_max` off `/health` — the ceiling `POST /drafts/variants` clamps to, and
+  // the only honest source for what one press of Write variants will spend. `null` means
+  // `/health` could not be read, and the text then says nothing about the count: falling back
+  // to 3 would restore the hardcoded number this slice exists to remove, and a wrong number
+  // stated confidently is worse than no number. The client never sends a `count` — reading the
+  // ceiling is to *state* it; applying it stays the server's job.
+  variantsMax = null,
 }: {
   templates: Template[];
   assets: Asset[] | null;
   drafts: DraftSummary[] | null;
   initialDraft?: Draft | null;
   missing?: string | null;
+  variantsMax?: number | null;
 }) {
   const [idea, setIdea] = useState("");
   const [picked, setPicked] = useState<Picked>({ hook: null, structure: null, visual: null });
@@ -883,8 +883,9 @@ export default function Studio({
               reason every spending button on this page is — a double click is a second batch.
               `{ idea }` alone: the route varies the templates itself and ignores a hook_id
               silently, so sending `payload` would be this page claiming an influence it does not
-              have. No `count` either — the ceiling is `settings.variants_max`, the server
-              applies it, and nothing exposes it to the client.
+              have. No `count` either — the ceiling is `settings.variants_max` and the server
+              applies it; `/health` reports it so the text below can say what a press costs,
+              which is a different thing from asking for a number.
               ponytail: no confirm dialog. Ceiling: one if a batch is ever written by accident. */}
           <Button
             variant="outline"
@@ -901,11 +902,18 @@ export default function Studio({
           </Button>
         </div>
 
+        {/* What the press will cost, before it is pressed. The response reports `llm_calls` and
+            `image_calls` afterwards and still does — that is the receipt, and a receipt is not a
+            price. `variantsMax` is the server's own ceiling; with `/health` unread the sentence
+            stops at the per-variant rate, which is true at any ceiling. */}
         <p className="text-xs opacity-60">
           Write variants writes this idea several times over, each through a different approved
           hook, structure and visual, then shows them side by side to keep one. It ignores the
           three selects above on purpose — varying the combination is the point — and it spends a
-          chat completion and a render per variant.
+          chat completion and a render per variant
+          {variantsMax === null
+            ? "."
+            : `, up to ${variantsMax} of them — at most ${calls(variantsMax, "chat completion")} and ${calls(variantsMax, "image render")} for one press.`}
         </p>
 
         {reason && <p className="text-xs opacity-60">{reason}</p>}
@@ -1044,8 +1052,12 @@ export default function Studio({
              `?draft=` and nothing generated yet. It is still not a claim about the database —
              the list on the left is what speaks for the database — so it says what fills this
              column, and repeats the line that is never negotiable here. `opacity-50` before
-             this — which the PRD names as an AA failure — is now --text-muted. */
-          <Card className="bg-surface-2 text-body">
+             this — which the PRD names as an AA failure — is now --text-muted.
+             A plain Card, deliberately: `bg-surface-2` is the raised brand cream and it sat
+             here as a tint on the one state that is correct on every visit to a fresh Studio,
+             beside a column whose other two states are a real failure (the `missing` alert) and
+             a real warning. Neutral is what this is. */
+          <Card className="text-body">
             <p className="font-medium">No draft yet.</p>
             <p className="mt-1 text-muted">
               Write an idea, choose a hook, a structure and a visual — or let Suggest choose them

@@ -44,18 +44,12 @@ export type Post = {
   verdict_at: string | null;
 };
 
-/** What `GET /posts/{id}` answers with — the raw row, including the one field only the detail
- *  page reads.
- *
- *  `late_post_id` is Zernio's *other* identifier for the same post and the only one a draft
- *  carries: `Draft.zernio_post_id == Post.late_post_id` is `metrics.draft_for_post`'s join,
- *  verified 13/13 against the live account. `zernio_id` is a different namespace and matching
- *  on it finds nothing. Null on any post this app never pushed, which is 63 of the 107 here.
- *
- *  It sits beside `Post` rather than inside it because the corpus list has no use for it and
- *  every `Post` literal in the app would have to carry it; fold it in when a second surface
- *  needs the join. Same intersection idiom the detail page already used for its media path. */
-export type PostRow = Post & { late_post_id: string | null };
+/* `PostRow` — `Post & { late_post_id }` — was here, and it is gone with US-019. Its whole
+ * justification was "the one field only the detail page reads": the detail page joined
+ * `Draft.zernio_post_id == Post.late_post_id` in the browser over `GET /drafts?limit=500`.
+ * `GET /posts/{id}/draft` does that join in the database, so no page reads `late_post_id` any
+ * more and a type declaring it would be describing a consumer that no longer exists. The
+ * backend still returns the column; nothing here asks about it. */
 
 export type TemplateKind = "hook" | "structure" | "visual";
 // The body of work a template was read from — `Cohort` in backend/app/extraction.py.
@@ -182,12 +176,37 @@ export type Inbox = {
   closed_circuits: number;
 };
 
-/** `GET /health`. Read by the Inbox footer — the only place it is consumed. */
+/** `GET /health`. Read by the Inbox footer and by the Studio page.
+ *
+ *  `variants_max` is a **sibling** of `credentials`, not a key inside it, and the shape is
+ *  load-bearing: the footer renders `credentials` row-per-key as a health light, so a number
+ *  in there would draw a junk one. It is the ceiling `POST /drafts/variants` clamps to, and
+ *  the client reads it only to *say* what a run will spend — the server is still the only
+ *  thing that applies it. */
 export type Health = {
   status: string;
   database: boolean;
   credentials: Record<string, boolean>;
+  variants_max: number;
 };
+
+/** What a paid route reports it spent, on top of whatever it produced — `RetopicOut` and
+ *  `VariantsOut` both carry exactly this pair, and `POST /drafts/variants`'s 502 detail
+ *  carries it too, because the drafts roll back with the request and the money does not.
+ *
+ *  Hoisted here with `calls` when the second consumer arrived: two surfaces report a spend
+ *  and both have to word it identically. */
+export type Spend = { llm_calls: number; image_calls: number };
+
+/** "1 chat completion", "2 chat completions", "0 image renders" — the observed count, in
+ *  words, never a price. The meter counts calls; nothing in this app knows what a call cost.
+ *
+ *  In `lib/api` rather than in either component that says it: it was written twice, in Studio
+ *  and in `RetopicForm`, only because a second agent held this file at the time. One wording
+ *  of a spend, in one place. */
+export function calls(n: number, unit: string): string {
+  return `${n} ${unit}${n === 1 ? "" : "s"}`;
+}
 
 /* The result of a request, where failing is not the same as having nothing.
  *

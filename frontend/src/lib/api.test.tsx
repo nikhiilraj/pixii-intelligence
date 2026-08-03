@@ -4,7 +4,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import ScoreboardPage from "@/app/scoreboard/page";
-import { getJson, postJson, type ApiFailure } from "@/lib/api";
+import { calls, getJson, postJson, type ApiFailure } from "@/lib/api";
 
 /** A response the way the backend actually answers: a JSON body with `detail`. */
 function jsonResponse(status: number, body: unknown): Response {
@@ -119,6 +119,21 @@ describe("getJson", () => {
       status: 502,
       message: "request failed (502)",
     });
+  });
+});
+
+/* US-019. `calls` was written twice — once in Studio, once in RetopicForm — because a second
+   agent held this file when the second copy was needed. Two surfaces report a spend and both
+   must word it identically; the reason it is tested at all is the plural, which is the only
+   branch in it and the one a reader notices. Never a price: the meter counts calls and nothing
+   in this app knows what a call cost. */
+describe("calls", () => {
+  it("pluralises the unit against the count it was given", () => {
+    expect(calls(1, "chat completion")).toBe("1 chat completion");
+    expect(calls(2, "chat completion")).toBe("2 chat completions");
+    // Zero is a real answer here — `/drafts/retopic` reports `image_calls: 0` when the visual
+    // was not redrawn — and it takes the plural.
+    expect(calls(0, "image render")).toBe("0 image renders");
   });
 });
 
