@@ -174,7 +174,7 @@
       "slice tests green"
     ],
     "priority": 13,
-    "passes": false
+    "passes": true
   },
   {
     "id": "US-014",
@@ -188,7 +188,7 @@
       "UI: a re-topic can be started from a draft or a post (backend landed 33f8102)"
     ],
     "priority": 14,
-    "passes": false
+    "passes": true
   },
   {
     "id": "US-015",
