@@ -28,9 +28,12 @@ import {
   type Asset,
   type AssetKind,
   type Draft,
+  type Publication,
   type Spend,
   type Template,
 } from "@/lib/api";
+
+import PublishPanel from "./PublishPanel";
 
 type Picked = { hook: number | null; structure: number | null; visual: number | null };
 
@@ -609,6 +612,15 @@ export default function Studio({
   // stated confidently is worse than no number. The client never sends a `count` — reading the
   // ceiling is to *state* it; applying it stays the server's job.
   variantsMax = null,
+  // Every command already issued against `initialDraft`, newest first — `null` when the read
+  // failed, which is not an empty history. Read on the server beside the draft itself so the
+  // publication panel is complete on first paint: a Publish button that renders before its
+  // history has arrived is a Publish button shown without the history, for as long as the
+  // request takes.
+  publications = null,
+  // Which LinkedIn account a command would publish to, or `null` when the API does not report
+  // it — which is the case today. See `PublishPanel`'s own prop for why nothing here guesses.
+  publishAccount = null,
 }: {
   templates: Template[];
   assets: Asset[] | null;
@@ -616,6 +628,8 @@ export default function Studio({
   initialDraft?: Draft | null;
   missing?: string | null;
   variantsMax?: number | null;
+  publications?: Publication[] | null;
+  publishAccount?: string | null;
 }) {
   const [idea, setIdea] = useState("");
   const [picked, setPicked] = useState<Picked>({ hook: null, structure: null, visual: null });
@@ -1120,6 +1134,29 @@ export default function Studio({
                 {draft.zernio_post_id ? "In Zernio" : "Push to Zernio as draft"}
               </Button>
             </div>
+
+            {/* Only once there is a post in Zernio to command. Every route behind this panel
+                updates an existing post and none of them creates one, so before a push there
+                is nothing here but a 409 waiting to happen.
+
+                Keyed on the draft id, which is what resets the panel — its history is seeded
+                into state from the prop, so generating a second draft while `?draft=N` is open
+                would otherwise leave the first draft's commands on screen under the second
+                draft's id. The most dangerous possible thing for this panel to show.
+
+                `publications` describes the draft the page was read with. A draft written in
+                this session has no commands against it because it has only just been written,
+                so `[]` is a fact rather than an assumption — and it is only ever reached for a
+                draft whose id is not the one the server fetched history for. */}
+            {draft.zernio_post_id && (
+              <PublishPanel
+                key={draft.id}
+                draft={draft}
+                account={publishAccount}
+                publications={draft.id === initialDraft?.id ? publications : []}
+                onDraft={setDraft}
+              />
+            )}
           </>
         ) : missing ? (
           /* "We looked for that draft and it is not there" — never the empty state below.

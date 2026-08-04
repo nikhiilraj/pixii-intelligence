@@ -115,7 +115,42 @@ export type Draft = {
   visual_png: string | null;
   has_previous_visual: boolean;
   zernio_post_id: string | null;
+  // What a publication command has to be confirmed against — `Draft.revision` counts
+  // human-visible changes only. Required on every schedule/publish/cancel body and given no
+  // default anywhere in this file for the reason `ScheduleIn` gives on the backend: a client
+  // that may omit it can publish words nobody approved.
+  revision: number;
   lineage: { hook: LineageEntry; structure: LineageEntry; visual: LineageEntry };
+};
+
+/** The three things a human can command against a post that already exists in Zernio —
+ *  `ACTIONS` in backend/app/models/publication.py. */
+export type PublicationAction = "schedule" | "publish_now" | "cancel_schedule";
+
+/** `PublicationOut` (api_drafts.py) — one command and what became of it. `GET
+ *  /drafts/{id}/publications` returns these newest first, and that list *is* the audit trail;
+ *  there is no separate audit table.
+ *
+ *  **The three time fields are `null` for `publish_now` and `cancel_schedule`, which name no
+ *  future time.** That is an absence, not a time of midnight, and it renders as `—`.
+ *  `attempts` is the opposite case: a row is committed before the first attempt is counted, so
+ *  `0` there is a measurement and printing it as `—` would hide a command that was written
+ *  down and never sent. */
+export type Publication = {
+  id: number;
+  draft_id: number;
+  draft_revision: number;
+  action: PublicationAction;
+  requested_local_time: string | null;
+  timezone: string | null;
+  scheduled_utc: string | null;
+  // `requested` — written down, not yet sent. `accepted` — Zernio took it. `failed` — Zernio
+  // refused. None of the three claims the post is live; that is `Draft.went_live_at`.
+  state: "requested" | "accepted" | "failed";
+  attempts: number;
+  last_error: string | null;
+  created_at: string;
+  accepted_at: string | null;
 };
 
 /** `MetricSnapshot` in backend/app/models/metric.py, as `GET /posts/{id}/history` returns it —
@@ -227,7 +262,26 @@ export function calls(n: number, unit: string): string {
  * optimistic updates or shared client-side cache — none of which exists yet.
  */
 export type ApiFailure =
-  | { ok: false; kind: "http"; status: number; message: string }
+  | {
+      ok: false;
+      kind: "http";
+      status: number;
+      message: string;
+      /* FastAPI's own `detail`, parsed and unflattened, beside the sentence `messageFrom` made
+       * of it. A fourth fact, added for one consumer that cannot do its job without it: the
+       * publication routes answer 409 two ways — `{error, current_revision}` when the draft
+       * moved under the reviewer, and a plain string when it was never pushed — and only the
+       * first can offer a reload. Both arrive here as status 409, and `messageFrom` renders the
+       * object as "…, current_revision: 5", so the number survives only as text. Telling them
+       * apart off `message` means regexing a sentence, which is the `[object Object]` class of
+       * bug this module's other comments exist to prevent.
+       *
+       * `unknown`, never a typed shape: `detail` is a string, a list of `{loc,msg}` or an
+       * object depending on the endpoint and on whether FastAPI or a handler raised it, and a
+       * type asserting one of those would be a lie the compiler enforces. `null` when the body
+       * was not JSON at all — a proxy answering 502 with HTML. */
+      detail?: unknown;
+    }
   | { ok: false; kind: "network"; message: string };
 
 export type ApiResult<T> = { ok: true; data: T } | ApiFailure;
@@ -304,7 +358,16 @@ async function request<T>(
     // this throw would land in the network branch above and report a live 500 as an
     // unreachable backend, which is the exact conflation this module exists to remove.
     const body = (await res.json().catch(() => null)) as { detail?: unknown } | null;
-    return { ok: false, kind: "http", status: res.status, message: messageFrom(body?.detail, res.status) };
+    return {
+      ok: false,
+      kind: "http",
+      status: res.status,
+      message: messageFrom(body?.detail, res.status),
+      // The same value `messageFrom` was given, kept alongside what it made of it rather than
+      // instead of it — see `ApiFailure`. Every existing call site reads `message` and is
+      // untouched.
+      detail: body?.detail,
+    };
   }
 
   try {

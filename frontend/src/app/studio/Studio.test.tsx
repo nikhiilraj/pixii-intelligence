@@ -135,6 +135,9 @@ const DRAFT: Draft = {
   visual_png: null,
   has_previous_visual: false,
   zernio_post_id: null,
+  // What a publication command is confirmed against. On the wire for every draft, so it is on
+  // the fixture too — `DraftOut.revision` has no default and neither does this.
+  revision: 1,
   lineage: { hook: null, structure: null, visual: null },
 };
 
@@ -897,6 +900,84 @@ describe("opening a draft that already exists", () => {
     expect(pushButton()).toBeDisabled();
     expect(pushButton()).toHaveTextContent("In Zernio");
     expect(screen.getByText(/Publishing stays a human act/)).toBeInTheDocument();
+  });
+
+  it("offers no publication controls until there is a post in Zernio to command", () => {
+    /* Every route behind the panel updates an existing post and none of them creates one, so
+     * before a push the three buttons are three ways to earn a 409. The negative anchors on a
+     * button name that really is in the document once a draft is pushed — see the test below,
+     * which is the same assertion the other way round. */
+    render(<Studio templates={library([])} assets={LIBRARY} drafts={[]} initialDraft={LOADED} />);
+
+    expect(screen.queryByRole("button", { name: /^publish now…$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^schedule…$/i })).not.toBeInTheDocument();
+  });
+
+  it("offers schedule, publish and cancel for a draft that is in Zernio", () => {
+    render(
+      <Studio
+        templates={library([])}
+        assets={LIBRARY}
+        drafts={[]}
+        initialDraft={PUSHED}
+        publications={[]}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /^schedule…$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^publish now…$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^cancel schedule…$/i })).toBeInTheDocument();
+  });
+
+  it("does not lend one draft's command history to another draft", async () => {
+    /* The panel seeds its history into state, and the history is what stops a post being
+     * commanded twice. Generating a second draft while `?draft=555` is open must not leave 555's
+     * commands on screen under the new draft's id — a `key` on the draft id is what prevents it,
+     * and a component reconciled onto the old instance would show the wrong audit trail beside a
+     * live Publish button. */
+    // The second draft is pushed too, deliberately. Answering with an unpushed draft would
+    // unmount the panel outright and the assertion would then pass against a component with no
+    // `key` at all — the mutation would survive and the test would look green.
+    const fetchStub = vi.fn(() =>
+      Promise.resolve(jsonResponse(201, { ...PUSHED, id: 777, zernio_post_id: "b0b0b0b0" })),
+    );
+    vi.stubGlobal("fetch", fetchStub);
+    render(
+      <Studio
+        templates={library([])}
+        assets={LIBRARY}
+        drafts={[]}
+        initialDraft={PUSHED}
+        publications={[
+          {
+            id: 1,
+            draft_id: 555,
+            draft_revision: 1,
+            action: "schedule",
+            requested_local_time: "2026-08-12T09:00:00",
+            timezone: "Asia/Kolkata",
+            scheduled_utc: "2026-08-12T03:30:00",
+            state: "accepted",
+            attempts: 1,
+            last_error: null,
+            created_at: "2026-08-05T10:00:00",
+            accepted_at: "2026-08-05T10:00:01",
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByText(/Asia\/Kolkata/)).toBeInTheDocument();
+
+    typeIdea();
+    fireEvent.click(screen.getByRole("button", { name: "Generate draft" }));
+
+    await waitFor(() => expect(fetchStub).toHaveBeenCalled());
+    // Draft 777 is in Zernio, so the panel is still on screen with its three buttons — and its
+    // history must be draft 777's, which is empty, not draft 555's schedule.
+    await waitFor(() =>
+      expect(screen.getByText(/Nothing has been commanded/i)).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/Asia\/Kolkata/)).not.toBeInTheDocument();
   });
 
   it("says the draft is missing rather than rendering the empty state", () => {

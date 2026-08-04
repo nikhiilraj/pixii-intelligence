@@ -5,6 +5,7 @@ import {
   type Asset,
   type Draft,
   type Health,
+  type Publication,
   type Template,
 } from "@/lib/api";
 
@@ -36,12 +37,18 @@ export default async function StudioPage({
   // rather than awaited after it: it is on the page's critical path and depends on nothing
   // here. A failed read is handed on as `null` and the control then says nothing about the
   // count; it never takes the page down, and it never falls back to 3.
-  const [templates, assets, drafts, requested, health] = await Promise.all([
+  // The requested draft's command history rides alongside the draft itself rather than being
+  // fetched by the panel after it mounts. A Publish button rendered before its history has
+  // arrived is a Publish button rendered without the history, and `GET /publications`' own
+  // docstring names that as how one post gets commanded twice. A failed read is handed on as
+  // `null` and the panel says so — it never renders as "nothing has been commanded".
+  const [templates, assets, drafts, requested, health, publications] = await Promise.all([
     getJson<Template[]>("/templates"),
     getJson<Asset[]>("/assets"),
     getJson<Draft[]>("/drafts"),
     id === null ? Promise.resolve(null) : getJson<Draft>(`/drafts/${id}`),
     getJson<Health>("/health"),
+    id === null ? Promise.resolve(null) : getJson<Publication[]>(`/drafts/${id}/publications`),
   ]);
 
   /* Why the requested draft is not on screen, in words, or `null` when none was asked for.
@@ -90,6 +97,14 @@ export default async function StudioPage({
           initialDraft={requested?.ok ? requested.data : null}
           missing={missing}
           variantsMax={health.ok ? health.data.variants_max : null}
+          publications={publications?.ok ? publications.data : null}
+          /* `null` — no route reports the LinkedIn account a command publishes to.
+             `settings.getlate_linkedin_id` is what `publishing.py` actually sends and is not
+             exposed; `settings.voice_account` is whose writing templates may describe, which
+             is an extraction setting and not a destination. The confirmation prints `—` and
+             names the Zernio post id instead of labelling the destination with a value not
+             derived from it. This line is the whole change the day the field lands. */
+          publishAccount={null}
         />
       ) : (
         <ApiFailureNotice failure={templates} className="mt-8" />

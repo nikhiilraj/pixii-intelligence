@@ -71,10 +71,13 @@ The normal workflow is:
 4. Generate a draft and inspect its text, image, and exact template versions under **Lineage**.
 5. Regenerate individual parts or create variants if the first result is not right.
 6. Push the chosen result to Zernio. Pixii sends a draft.
-7. Schedule or publish it. With `PUBLISHING_ENABLED` off — the default — that happens in
-   Zernio, by hand. The API for doing it here exists and refuses any command confirmed
-   against an older version of the draft; the review screen that fires it is not built yet,
-   which is why the switch stays off.
+7. Schedule or publish it. Studio shows a publication panel for any draft that has reached
+   Zernio. Nothing fires from the button that names it: Schedule, Publish now and Cancel
+   schedule each open a confirmation showing the action, the local time as typed, the
+   timezone, and the UTC instant those two resolve to, alongside every command already issued
+   against the draft. A command is refused if it was confirmed against an older version of the
+   words. With `PUBLISHING_ENABLED` off — still the default — the panel says the capability is
+   switched off rather than pretending to work, and publishing happens in Zernio by hand.
 8. Synchronize metrics after the post has accumulated meaningful engagement.
 9. Record a verdict and explain why it worked, did not work, or produced a mixed result.
 10. Return to **Inbox** and confirm the item moved to the next gate or completed the circuit.

@@ -37,10 +37,20 @@ stale-revision rejection, and a kill switch **together**. All five ship in the s
 - **Confirmation** — every command requires the exact `revision` the reviewer confirmed
   against, as a required field with no default. A caller that may omit it can publish words
   nobody approved.
-  **Not yet built:** the review screen that shows account, action, local time, timezone and
-  resolved UTC before firing. Until it exists the guard is the required field alone, which
-  protects against a *stale* command but not against a *careless* one. `PUBLISHING_ENABLED`
-  stays off until the screen lands.
+  **Built** (`frontend/src/app/studio/PublishPanel.tsx`): Studio shows a publication panel for
+  any draft that has been pushed. None of Schedule, Publish now or Cancel schedule fires from
+  the button that names it — each opens a confirmation showing the action, the local time as
+  typed, the IANA zone, the **resolved UTC instant**, and the revision the command will carry,
+  which is read once when the confirmation opens and not again when it is confirmed. The
+  panel lists every command already issued beside the buttons, because a Publish button shown
+  without that history is how one post gets commanded twice.
+  **One field is still missing: the account.** No route reports which LinkedIn account a
+  command publishes to — `settings.getlate_linkedin_id` is what `publishing.py` actually sends
+  and is not exposed, and `settings.voice_account` is an extraction setting, not a
+  destination — so the confirmation prints `—` there and names the Zernio post id instead of
+  labelling the destination with a value not derived from it. With one operator and one
+  configured account that is a small gap; it is the last thing between this bullet and being
+  unqualified, and turning `PUBLISHING_ENABLED` on is a decision to be taken knowing it.
 - **Audit** — every command is a `publication` row: action, the exact draft revision the
   reviewer confirmed against, all three forms of the time, outcome, and the provider's own
   refusal text. There is no separate `audit_event` table; with one operator, an `actor`
