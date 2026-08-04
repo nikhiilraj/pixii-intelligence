@@ -5,6 +5,7 @@ from typing import Any, TypeVar, cast
 
 from sqlmodel import Session, col, select
 
+from app import prompts
 from app.generation import NoUsableTemplates, generate_draft, lesson_lines, verdict_lessons
 from app.llm import LLM
 from app.models.post import Post
@@ -15,20 +16,9 @@ log = logging.getLogger("pixii.autonomous")
 # How many recent posts the model sees when looking for a fresh angle.
 TOPIC_CONTEXT_POSTS = 15
 
-_TOPIC_SYSTEM = """\
-You propose fresh post topics for a company that already posts regularly.
-
-You will be shown its recent posts. Propose angles it has NOT already covered, that follow
-plausibly from the same expertise and audience. Each topic must be specific enough to write
-from — a claim, a finding, or a question with a stake in it — never a category.
-
-Rules:
-- Do not repeat a subject already covered in the posts shown.
-- Do not invent statistics or outcomes. A topic may point at something worth checking, but
-  it must not assert numbers as fact.
-- Prefer topics the audience would argue about over topics they would nod at.
-
-Return ONLY JSON: {"topics": [{"idea": "one specific angle", "why": "one sentence"}]}"""
+# Pinned to an exact version at import, like `generation`'s two. There is no "latest" to ask
+# for; `prompts.get` says why at length.
+_TOPICS = prompts.get("topics.propose", "1.0.0")
 
 
 class AutonomousRunFailed(RuntimeError):
@@ -165,7 +155,7 @@ def propose_topics(session: Session, llm: LLM, count: int) -> list[dict]:
     parts = [f"Propose {count} topics."]
     parts.extend(lesson_lines(verdict_lessons(session)))
     parts.append(f"\nRecent posts:\n{shown}")
-    result = llm.complete_json(_TOPIC_SYSTEM, "\n".join(parts))
+    result = llm.complete_json(_TOPICS.text, "\n".join(parts))
     topics = result.get("topics")
     return [t for t in topics if t.get("idea")] if isinstance(topics, list) else []
 

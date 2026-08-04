@@ -7,6 +7,7 @@ tables on SQLModel.metadata. An unimported model is invisible to migrations.
 from app.models.asset import Asset, AssetKind
 from app.models.daily_run import DAILY_SLOT, DailyRun
 from app.models.draft import Draft
+from app.models.generation_trace import GenerationTrace
 from app.models.metric import MetricSnapshot
 from app.models.post import Post
 from app.models.publication import Publication
@@ -18,6 +19,7 @@ __all__ = [
     "AssetKind",
     "DailyRun",
     "Draft",
+    "GenerationTrace",
     "MetricSnapshot",
     "Post",
     "Publication",
