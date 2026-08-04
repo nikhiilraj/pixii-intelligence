@@ -1790,10 +1790,18 @@ In `backend/app/api_drafts.py`, in `redraw`, before the redraw call:
 and after it:
 
 ```python
-    # Only when the redraw produced something. `_draw_visual` records a failure by setting
-    # `visual_image = None`, and moving that None across would turn one bad render into
-    # the loss of both pictures.
-    if draft.visual_image is not None:
+    # Two conditions, and they guard different losses.
+    #
+    # The new image must exist, or a failed render would replace a good `previous_visual`
+    # with the `None` `_draw_visual` writes on failure.
+    #
+    # The captured one must exist too, and this is the condition that is easy to miss:
+    # after a failed redraw `visual_image` is already `None`, so the *next successful*
+    # redraw captures that `None` as `previous` and writes it over the image actually
+    # worth keeping. A 200 response that silently destroys the thing `restore-visual`
+    # exists to bring back. Neither break-it-on-purpose mutation below catches it — only a
+    # succeed / fail / succeed sequence test does.
+    if draft.visual_image is not None and previous is not None:
         draft.previous_visual = previous
 ```
 
