@@ -17,6 +17,8 @@ import {
 } from "@/components/ui/select";
 import { postBlob, postJson, type Cohort, type Template, type TemplateKind } from "@/lib/api";
 
+import TemplatePreview from "./TemplatePreview";
+
 const KINDS: TemplateKind[] = ["hook", "structure", "visual"];
 
 // Which body of work extraction reads. A hook or a structure is a borrowable shape, so
@@ -627,6 +629,13 @@ export default function TemplateManager({
           spellCheck={false}
           className={`${field} font-mono text-xs`}
         />
+
+        {/* Only a visual has a renderer for `POST /templates/preview` to run — a hook or a
+            structure has none, and the endpoint's 501 on anything but `html` exists precisely
+            because it cannot check `kind` the way the saved route does (see `preview_unsaved`
+            in api_templates.py). Mounting this for every kind would just move that refusal from
+            "never offered" to "offered and then refused". */}
+        {kind === "visual" && <TemplatePreview body={body} slots={editing?.slots ?? []} />}
 
         <div className="flex gap-3">
           <Button type="submit" disabled={busy}>

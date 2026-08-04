@@ -113,6 +113,11 @@ function row(name: string) {
 const nameField = () => screen.getByPlaceholderText("name");
 /** The one textarea on the page. `getByRole("textbox")` matches the name input too. */
 const bodyField = () => document.querySelector("textarea")!;
+/** The one `<form>` on the page — the authoring/edit form. Needed to scope a `getByRole`
+ *  query below: a visual ROW in the list also renders a "preview" link with the same
+ *  accessible name, so an unscoped query on that name is ambiguous the moment a visual
+ *  is in `LIBRARY`, which every test in this file renders. */
+const formEl = () => document.querySelector("form")!;
 
 afterEach(() => {
   cleanup();
@@ -403,6 +408,27 @@ describe("editing writes a new version", () => {
     expect(bodyField()).toHaveValue(
       JSON.stringify({ renderer: "html", component: "stat_hero" }, null, 2),
     );
+  });
+});
+
+describe("the preview pane in the editor", () => {
+  it("offers a preview for a visual and not for a hook", () => {
+    // The brief for this test reached for `userEvent.selectOptions` on the kind control, but
+    // that control is a Radix `Select`, not a native `<select>` — and this file's own header
+    // comment already states the ceiling: driving a Radix listbox open is not something jsdom
+    // can do, so no query into it can prove the control works. `startEdit` is the one real path
+    // into kind="visual" this file exercises anywhere (see "stays on the edited row's kind..."
+    // below), and it goes through the same `kind` state the Select would set.
+    render(<TemplateManager initial={LIBRARY} />);
+
+    // Scoped to the form: `row("quote-card")` already renders its own "preview" link in the
+    // list (asserted in "offers approve only on a proposal..." above), with the same
+    // accessible name, so an unscoped query is ambiguous the moment a visual is in `LIBRARY`.
+    expect(within(formEl()).queryByRole("button", { name: /^preview$/i })).not.toBeInTheDocument();
+
+    fireEvent.click(row("quote-card").getByRole("button", { name: "edit" }));
+
+    expect(within(formEl()).getByRole("button", { name: /^preview$/i })).toBeInTheDocument();
   });
 });
 
