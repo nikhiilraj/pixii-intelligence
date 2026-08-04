@@ -5,7 +5,7 @@ from sqlmodel import Session
 
 from app.config import settings
 from app.models.draft import Draft
-from app.zernio import ZernioClient, ZernioRefused
+from app.zernio import ZernioClient, ZernioRefused, ZernioResponseError
 
 # Stamped on every post this app creates, so its output is trivially distinguishable from
 # the drafts already in the account and can be found again from either side.
@@ -48,6 +48,25 @@ def lineage_metadata(draft: Draft) -> dict:
     return metadata
 
 
+def _media_items(draft: Draft, client: ZernioClient) -> list[dict[str, str]]:
+    """The draft's rendered visual, uploaded, in the shape a post attaches media in.
+
+    Empty when there is no image — a draft whose visual failed, or a template that produces
+    text alone. The caller omits the key entirely in that case rather than sending `[]`, for
+    the same reason `lineage_metadata` omits an empty `asset_values`: an empty list is a
+    claim that the post has no picture, and this app cannot make that claim about a draft
+    whose render merely failed.
+    """
+    if not draft.visual_image:
+        return []
+
+    # The filename is only a label — the store prefixes its own timestamp and random token,
+    # so this does not make the resulting URL predictable. It names the draft so a human
+    # looking at Zernio's storage can tell where the file came from.
+    url = client.upload_media(draft.visual_image, f"pixii-draft-{draft.id}.png", "image/png")
+    return [{"url": url, "type": "image"}]
+
+
 def _request_id(draft: Draft) -> str:
     """A stable idempotency key for this draft.
 
@@ -65,28 +84,59 @@ def push_draft(
     account_id: str | None = None,
     force: bool = False,
 ) -> Draft:
-    """Create this draft in Zernio as a draft. Never schedules, never publishes.
+    """Create this draft in Zernio as a draft, picture and all. Never schedules, publishes.
 
     Sending no `scheduledFor`, `publishNow` or `queuedFromProfile` is what makes Zernio
     treat the post as a draft; `isDraft` is sent as well so the intent is explicit rather
-    than implied by omission.
+    than implied by omission. Attaching media does not touch that: `mediaItems` is another
+    field on the same create call, not a second request and not a publish trigger.
+
+    **The image is uploaded before the post is created, deliberately.** The other order —
+    create the post, then attach — is what produces the state nobody can reason about: a
+    post sitting in Zernio carrying our text and no picture, with our database recording a
+    successful push. This way a failed upload means nothing was created at all: no post,
+    `zernio_post_id` still NULL, the draft as retryable as it was a second earlier, and the
+    only debris an orphaned object in the store that expires on its own.
+
+    That covers the failure this app can control. The one it cannot: an upload sits in
+    temporary storage for seven days and is copied to permanent storage only when a post
+    using it **publishes** — and publishing here is a human act performed in Zernio at an
+    unbounded later date. A draft left for longer than a week can therefore lose its picture
+    while keeping its text, and no call made here prevents it, because the promoting event
+    is the one this app exists not to perform. What a human sees then is the broken image in
+    Zernio's own editor, where they already are; `pushed_at` says how old the upload was.
+    Our records are not wrong in that state — `zernio_post_id` still names a real post whose
+    text is intact.
+
+    ponytail: there is no repair path for that, only a re-push, and `force=True` re-pushes by
+    creating a *second* post — a fresh upload means a fresh URL, which defeats both the
+    5-minute request-id window and the 24-hour content hash. Repairing the picture in place
+    needs `PUT /posts/{id}`, which this client does not speak.
     """
     if draft.zernio_post_id and not force:
         return draft
 
-    payload = {
-        "content": draft.full_text,
-        "isDraft": True,
-        "platforms": [
-            {"platform": "linkedin", "accountId": account_id or settings.getlate_linkedin_id}
-        ],
-        "tags": [SOURCE_TAG],
-        "metadata": lineage_metadata(draft),
-    }
-
     try:
+        # Inside the try, and before the payload: an upload that fails must fail the push
+        # here, where nothing has been created yet.
+        media_items = _media_items(draft, client)
+
+        payload: dict[str, object] = {
+            "content": draft.full_text,
+            "isDraft": True,
+            "platforms": [
+                {"platform": "linkedin", "accountId": account_id or settings.getlate_linkedin_id}
+            ],
+            "tags": [SOURCE_TAG],
+            "metadata": lineage_metadata(draft),
+        }
+        if media_items:
+            payload["mediaItems"] = media_items
+
         body = client.create_post(payload, request_id=_request_id(draft))
-    except ZernioRefused as exc:
+    except (ZernioRefused, ZernioResponseError) as exc:
+        # `ZernioResponseError` as well as a refusal: a presign that answers 200 without an
+        # upload target is a failed push, not a crash. Both reach the route as a 502.
         raise PushFailed(str(exc)) from exc
     post = body.get("post") if isinstance(body.get("post"), dict) else body
     post_id = post.get("_id") if isinstance(post, dict) else None

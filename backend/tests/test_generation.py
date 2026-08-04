@@ -1011,6 +1011,11 @@ def test_a_refused_push_is_a_502_carrying_zernios_reason(client, session):
     draft = client.post("/drafts", json={"idea": IDEA}).json()
 
     class Refusing:
+        # The draft carries a rendered visual, so the push uploads before it creates. The
+        # upload succeeds here so the refusal under test is still the create's.
+        def upload_media(self, *args, **kwargs):
+            return "https://media.zernio.test/temp/x.png"
+
         def create_post(self, *args, **kwargs):
             raise PushFailed("Zernio returned no post id")
 
