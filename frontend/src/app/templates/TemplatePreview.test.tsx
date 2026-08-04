@@ -44,4 +44,26 @@ describe("TemplatePreview", () => {
     expect(postBlob).not.toHaveBeenCalled();
     expect(screen.getByText(/not valid JSON/i)).toBeInTheDocument();
   });
+
+  it("shows the API's own message when the render is refused, not a blank pane", async () => {
+    // Shape taken from `ApiFailure` in @/lib/api, not guessed: `{ ok: false, kind, message }`.
+    // 501 is the real status `POST /templates/preview` answers for a non-`html` renderer
+    // (api_templates.py's `preview_unsaved`), so this is the failure an editor actually hits,
+    // not a synthetic one.
+    postBlob.mockResolvedValue({
+      ok: false,
+      kind: "http",
+      status: 501,
+      message: "unsaved preview renders html only; save the template to preview an ai visual",
+    });
+    render(<TemplatePreview body={'{"renderer":"ai","prompt":"x"}'} slots={[]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /preview/i }));
+
+    expect(
+      await screen.findByText("unsaved preview renders html only; save the template to preview an ai visual"),
+    ).toBeInTheDocument();
+    // No stale image left behind from a previous successful render.
+    expect(screen.queryByAltText(/preview/i)).not.toBeInTheDocument();
+  });
 });
