@@ -49,9 +49,19 @@ extraction still reads — this changes what is *published*, not what is *availa
 **What it does not achieve, stated plainly:**
 
 - Existing clones and forks retain the objects. A rewrite cannot reach them.
-- GitHub keeps unreferenced blobs accessible by SHA until it garbage-collects. If the
-  material must be genuinely unreachable, open a GitHub Support request to force GC —
-  the force-push alone does not do it.
+- **GitHub still serves the purged files at their old commit SHAs.** Measured immediately
+  after the force-push of 2026-08-05, not assumed: `.scratch/corpus-widening/creator-images/
+  post-01_img-1_image2.png` at pre-rewrite commit `c4c920c` returned 747,768 bytes through
+  the contents API, while every branch returned 404. The force-push unreferences the
+  objects; it does not delete them.
+
+  What limits the exposure is discoverability: the repository's public events API listed no
+  push events, so the old SHAs cannot be enumerated from outside. Reaching the files
+  requires already holding a SHA — from a clone, a fork, or a link that quoted one.
+
+  **Outstanding action:** open a GitHub Support request asking them to garbage-collect
+  unreferenced objects for this repository. Nothing available to a repository owner does
+  this; the force-push alone does not, and neither does any `git` command run locally.
 - Every commit SHA on every branch changed. Anyone with a clone must re-clone or reset;
   merging an old clone would reintroduce the files.
 
