@@ -50,6 +50,11 @@ class Draft(SQLModel, table=True):
         default_factory=dict, sa_column=Column(JSONB, nullable=False)
     )
     visual_image: bytes | None = Field(default=None, sa_column=Column(LargeBinary))
+    # The image the last redraw replaced, so "is this better than what I had" is answerable.
+    #
+    # ponytail: one level of undo, not a history table. Two images answer the question
+    # actually being asked. Add a table when someone wants three.
+    previous_visual: bytes | None = Field(default=None, sa_column=Column(LargeBinary))
     # Why the visual could not be produced. The words survive a failed image.
     visual_error: str | None = None
 
