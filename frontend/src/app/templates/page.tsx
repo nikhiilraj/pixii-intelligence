@@ -12,22 +12,23 @@ export default async function TemplatesPage() {
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-16">
-      <h1 className="text-title font-semibold tracking-tight">Templates</h1>
-      <p className="mt-1 max-w-2xl text-body text-muted">
-        Hooks, structures and visuals. Editing writes a new version, so performance stays
-        attached to the wording that earned it. What each version has actually done is on the{" "}
+      <p className="text-caption font-medium uppercase tracking-[0.18em] text-muted">System memory</p>
+      <h1 className="mt-2 text-display font-semibold tracking-[-0.04em]">Templates</h1>
+      <p className="mt-2 max-w-2xl text-body text-muted">
+        Review proposed hooks, structures and visuals one decision at a time. Editing creates a
+        new version, so evidence stays attached to the wording that earned it. See the{" "}
         {/* US-018: the Scoreboard's only inbound link, now that nav is five destinations. It
             belongs here rather than in the nav — it reads `/metrics/templates`, so it is this
             library's evidence, and `scoreboard/page.tsx` already links back to this page from
             its empty state. Deleting this link orphans that route. */}
         <Link href="/scoreboard" className="underline">
-          Scoreboard
+          evidence scoreboard
         </Link>
         .
       </p>
 
       {templates.ok ? (
-        <TemplateManager initial={templates.data} />
+        <TemplateManager initial={templates.data} defaultMode="review" />
       ) : (
         <ApiFailureNotice failure={templates} className="mt-8" />
       )}

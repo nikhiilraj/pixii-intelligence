@@ -22,9 +22,9 @@ const nf = new Intl.NumberFormat("en-US");
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-black/10 p-3 dark:border-white/15">
-      <div className="text-xs uppercase tracking-wide text-muted">{label}</div>
-      <div className="mt-1 text-lg font-semibold tabular-nums">{value}</div>
+    <div className="border-l border-border pl-3">
+      <div className="text-caption uppercase tracking-widest text-muted">{label}</div>
+      <div className="mt-1 font-mono text-head font-semibold tabular-nums">{value}</div>
     </div>
   );
 }
@@ -57,8 +57,8 @@ function readingLabel(value: string): string {
  *  none. */
 function Lineage({ label, entry }: { label: string; entry: LineageEntry }) {
   return (
-    <div className="rounded-lg border border-black/10 p-3 dark:border-white/15">
-      <div className="text-xs uppercase tracking-wide text-muted">{label}</div>
+    <div className="rounded-card border border-border p-3">
+      <div className="text-caption uppercase tracking-widest text-muted">{label}</div>
       {entry ? (
         <>
           <div className="mt-1 break-words text-sm font-medium">{entry.name}</div>
@@ -123,7 +123,7 @@ export default async function PostDetail({ params }: { params: Promise<{ id: str
   if (!result.ok) {
     if (result.kind === "http" && result.status === 404) notFound();
     return (
-      <main className="mx-auto max-w-3xl px-6 py-16">
+      <main className="mx-auto max-w-6xl px-6 py-16">
         <Link href="/posts" className="text-sm text-muted hover:underline">
           ← Corpus
         </Link>
@@ -155,13 +155,17 @@ export default async function PostDetail({ params }: { params: Promise<{ id: str
   const history = draft ? await getJson<MetricSnapshot[]>(`/posts/${post.id}/history`) : null;
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-16">
+    <main className="mx-auto max-w-6xl px-6 py-16">
       <Link href="/posts" className="text-sm text-muted hover:underline">
         ← Corpus
       </Link>
 
-      <header className="mt-6 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h1 className="text-xl font-semibold tracking-tight">
+      <header className="mt-6 border-b border-border pb-6">
+        <p className="text-caption font-medium uppercase tracking-[0.18em] text-muted">
+          Published evidence
+        </p>
+        <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h1 className="text-display font-semibold tracking-[-0.04em]">
           {post.account_username ?? post.platform}
         </h1>
         <span className="text-sm text-muted">
@@ -185,19 +189,26 @@ export default async function PostDetail({ params }: { params: Promise<{ id: str
             view on {post.platform}
           </a>
         )}
+        </div>
       </header>
 
-      <section className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-3">
+      <section className="mt-6 grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-3 lg:grid-cols-6">
         <Metric label="Engaged actions" value={nf.format(post.engaged_actions)} />
-        <Metric label="Impressions" value={nf.format(post.impressions)} />
+        <Metric label="Impressions" value={post.impressions > 0 ? nf.format(post.impressions) : "—"} />
         <Metric label="Reach" value={nf.format(post.reach)} />
         <Metric label="Likes" value={nf.format(post.likes)} />
         <Metric label="Comments" value={nf.format(post.comments)} />
-        <Metric label="Engagement rate" value={post.engagement_rate.toFixed(2)} />
+        <Metric
+          label="Engagement rate"
+          value={post.impressions > 0 ? post.engagement_rate.toFixed(2) : "—"}
+        />
       </section>
 
+      <div className="mt-10 grid min-w-0 gap-10 lg:grid-cols-[minmax(0,1fr)_25.75rem]">
+      <div className="min-w-0">
+
       {mediaUrl && (
-        <figure className="mt-8">
+        <figure>
           {isVideo(post.local_media_path!) ? (
             <video src={mediaUrl} controls className="w-full rounded-lg" />
           ) : (
@@ -258,9 +269,23 @@ export default async function PostDetail({ params }: { params: Promise<{ id: str
 
       {/* The page the Inbox's fourth queue links to, and therefore the page that has to be able
           to clear it. */}
-      <VerdictForm postId={post.id} verdict={post.verdict} note={post.verdict_note} />
+      </div>
 
-      <ExcludeToggle postId={post.id} excluded={post.excluded_from_extraction} />
+      <aside className="min-w-0 lg:sticky lg:top-6 lg:self-start">
+        <div className="border-t-2 border-ink pt-4">
+          <p className="text-caption font-medium uppercase tracking-[0.18em] text-muted">
+            Human ruling
+          </p>
+          <h2 className="mt-2 text-head font-semibold">Decide what this teaches the system.</h2>
+          <p className="mt-2 text-body text-muted">
+            Performance is evidence, not a verdict. Record the human judgment here; it is the
+            signal that changes what gets learned from this post.
+          </p>
+        </div>
+        <VerdictForm postId={post.id} verdict={post.verdict} note={post.verdict_note} />
+        <ExcludeToggle postId={post.id} excluded={post.excluded_from_extraction} />
+      </aside>
+      </div>
     </main>
   );
 }

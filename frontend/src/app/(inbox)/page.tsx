@@ -14,163 +14,277 @@ import {
 
 export const dynamic = "force-dynamic";
 
-/* The home page is the Inbox, and the Status page it replaces is gone — its rows survive as
-   the footer below, which is information you can reach rather than a destination you visit.
+const STALLED_DAYS = 7;
+const WORKLIST_CAP = 8;
 
-   Why this page exists: the lineage circuit — propose a template, build a draft, push it,
-   publish it, rule on it — has four gates that each need a human, and every one of them was
-   invisible unless somebody remembered to go looking for it. A queue that nobody can see is
-   indistinguishable from a queue that is empty.
+type GateKey =
+  | "proposals_awaiting_review"
+  | "built_awaiting_push"
+  | "pushed_awaiting_monte"
+  | "published_awaiting_verdict";
 
-   These are queues, not scores. No ordering between them means anything, they are not
-   comparable with each other, and nothing here may be read as a template, draft or post having
-   performed well or badly. That constraint is why there is no chart and no sort control, and
-   why the queues carry no total: every one of those would invite a comparison the data cannot
-   support.
+type Gate = {
+  key: GateKey;
+  short: string;
+  label: string;
+  clearsAt: string;
+  href: (item: InboxItem) => string | null;
+};
 
-   The closed-circuit counter is the one number that survives that rule, and it is worth being
-   precise about why. It totals nothing on this page — it is not the queues added up — and it
-   ranks nothing against anything. It answers a question about the machine, not about the work:
-   has a draft ever gone all the way round? Four empty queues cannot answer that. "Nothing has
-   ever been published" and "everything published has been ruled on" render identically, and
-   that is the ambiguity this counter exists to remove. */
+const GATES: Gate[] = [
+  {
+    key: "proposals_awaiting_review",
+    short: "review",
+    label: "awaiting review",
+    clearsAt: "Templates",
+    href: () => "/templates",
+  },
+  {
+    key: "built_awaiting_push",
+    short: "push",
+    label: "awaiting push",
+    clearsAt: "Studio",
+    href: (item) => `/studio?draft=${item.id}`,
+  },
+  {
+    key: "pushed_awaiting_monte",
+    short: "Monte",
+    label: "awaiting Monte",
+    clearsAt: "Zernio",
+    href: (item) => `/studio?draft=${item.id}`,
+  },
+  {
+    key: "published_awaiting_verdict",
+    short: "verdict",
+    label: "awaiting verdict",
+    clearsAt: "Post",
+    href: (item) => `/posts/${item.id}`,
+  },
+];
 
-/** "waiting 6 days" — the sentence the whole page is for.
- *
- *  0 and 1 are spelled out rather than formatted, because "waiting 0 days" and "waiting 1
- *  days" are both visible bugs on a page whose only number is an age. */
 function waited(days: number): string {
   if (days <= 0) return "arrived today";
   if (days === 1) return "waiting 1 day";
   return `waiting ${days} days`;
 }
 
-/* ponytail: one invented threshold, no configuration. Nothing measured 7 days — it is a week,
-   which is the point at which "in progress" stops being a plausible reading of a gate nobody
-   has touched. It marks the GATE as stalled, never the item as bad: the same draft is neither
-   better nor worse for having waited, and a tint that implied otherwise would be the scoring
-   this page is built to avoid. Ceiling: a per-queue threshold, once any queue has ever been
-   emptied and there is a real cadence to compare against. */
-const STALLED_DAYS = 7;
+function compactAge(days: number): string {
+  if (days <= 0) return "today";
+  if (days === 1) return "1 day";
+  return `${days} days`;
+}
 
-/* How many items a queue shows before it says how many it is holding back.
- *
- * The page rendered all 50 proposals in one column and stood 3815px tall (2998 when the finding
- * was filed, at 37 proposals), so the queue that most often needs no action owned the fold and
- * the three that do need action sat below it. Six brings it to 1703 and puts all four gates on
- * one screen at 1440px.
- *
- * What is hidden is *stated*, never silently dropped — same rule as everywhere else here: an
- * absence must not read as a measurement, and a queue that quietly showed six of fifty would
- * be exactly that. `queue.count` is the backend's own total (`main._queue` sends every row and
- * sets `count = len(items)`), and it is what the heading already prints, so the two agree.
- *
- * ponytail: a slice and a sentence. No paging control and no per-queue link to "the rest" —
- * every item in a queue links to the page that clears that whole gate, so the hidden items are
- * one click away through any visible one. Ceiling: a collective destination per queue, if a
- * queue ever gets one that is not just the page its items already point at. */
-const QUEUE_CAP = 6;
+function oldest(queue: InboxQueue): number {
+  return queue.items.reduce((age, item) => Math.max(age, item.age_days), 0);
+}
 
-function Item({ item, href }: { item: InboxItem; href: string }) {
+function Circuit({ inbox }: { inbox: Inbox }) {
+  const queues = GATES.map((gate) => inbox[gate.key]);
+  const furthest = queues.reduce((last, queue, index) => (queue.count > 0 ? index : last), 0);
+  const nodes = [96, 405, 714, 1023];
+  const progressX = nodes[furthest];
+
   return (
-    <li>
-      <Link
-        href={href}
-        className="flex items-baseline justify-between gap-4 border-b border-border px-2 py-3 transition-colors last:border-0 hover:bg-surface-2"
-      >
-        <span className="text-body">{item.label}</span>
-        {/* The age is a Badge, not a footnote: it is the loudest thing in the row after the
-            label. Colour is on the fill, never the words — see badge.tsx. */}
-        <Badge
-          variant={item.age_days >= STALLED_DAYS ? "warning" : "neutral"}
-          className="shrink-0 tabular-nums"
-        >
-          {waited(item.age_days)}
-        </Badge>
-      </Link>
-    </li>
+    <section aria-labelledby="circuit-title" className="border-y border-border bg-surface">
+      <h2 id="circuit-title" className="sr-only">
+        Lineage circuit
+      </h2>
+      <div className="mx-auto max-w-6xl px-6">
+        <div className="grid grid-cols-2 gap-px bg-border md:hidden">
+          {GATES.map((gate, index) => {
+            const queue = inbox[gate.key];
+            return (
+              <div key={gate.key} className="bg-surface px-4 py-4">
+                <div className="flex items-center gap-2">
+                  <span
+                    aria-hidden="true"
+                    className={`size-1.5 ${queue.count > 0 ? "bg-text" : "border border-absent"}`}
+                  />
+                  <span className="font-mono text-head tabular-nums">{queue.count}</span>
+                </div>
+                <p className="mt-1 font-mono text-caption text-muted">
+                  0{index + 1} · {gate.short}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="relative hidden h-[170px] md:block">
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 1104 170"
+            className="absolute inset-0 size-full"
+          >
+            <path d="M96 48 H1023" fill="none" stroke="var(--border)" strokeWidth="1.5" />
+            <path
+              d={`M96 48 H${progressX}`}
+              fill="none"
+              stroke="var(--text)"
+              strokeWidth="1.5"
+            />
+            <path
+              d="M1023 48 C1085 48 1085 140 1023 140 L96 140 C34 140 34 48 96 48"
+              fill="none"
+              stroke={inbox.closed_circuits > 0 ? "var(--text)" : "var(--border)"}
+              strokeWidth="1.5"
+              strokeDasharray={inbox.closed_circuits > 0 ? undefined : "5 5"}
+            />
+            {nodes.map((x, index) => {
+              const queue = queues[index];
+              const stalled = oldest(queue) >= STALLED_DAYS;
+              return (
+                <g key={x}>
+                  {stalled && (
+                    <circle cx={x} cy="48" r="16" fill="none" stroke="var(--accent)" strokeWidth="2" />
+                  )}
+                  <circle
+                    cx={x}
+                    cy="48"
+                    r="6"
+                    fill={queue.count > 0 ? "var(--text)" : "var(--bg)"}
+                    stroke={queue.count > 0 ? "var(--text)" : "var(--absent)"}
+                    strokeWidth="1.5"
+                  />
+                </g>
+              );
+            })}
+          </svg>
+
+          {GATES.map((gate, index) => {
+            const queue = inbox[gate.key];
+            const age = oldest(queue);
+            return (
+              <div
+                key={gate.key}
+                className="absolute top-3 -translate-x-1/2 text-center"
+                style={{ left: `${(nodes[index] / 1104) * 100}%` }}
+              >
+                <p className="font-mono text-[28px] leading-8 tabular-nums">{queue.count}</p>
+                <p className="mt-9 font-mono text-caption text-muted">
+                  0{index + 1} · {gate.label}
+                </p>
+                <p className="font-mono text-caption text-muted">
+                  {queue.count > 0 ? `oldest ${waited(age)}` : "gate clear"}
+                </p>
+              </div>
+            );
+          })}
+
+          <p className="absolute inset-x-0 bottom-4 text-center font-mono text-caption text-muted">
+            {inbox.closed_circuits === 0
+              ? "the return path · 0 laps · nothing has ever travelled it"
+              : `${inbox.closed_circuits} laps · the circuit has run end to end`}
+          </p>
+        </div>
+      </div>
+    </section>
   );
 }
 
-/** One gate: what it holds, how long each thing has held there, and where a human goes next.
- *
- *  `empty` has to be true of every reason the queue can be empty, not just of the day the
- *  circuit has run zero laps — "nothing has ever been published" and "everything published has
- *  been ruled on" are the same empty list. So the copy states the state and what would fill it,
- *  and never claims a history it cannot see. */
-function Queue({
-  title,
-  gate,
-  queue,
-  href,
-  empty,
-}: {
-  title: string;
-  gate: string;
-  queue: InboxQueue;
-  href: (item: InboxItem) => string;
-  empty: string;
-}) {
-  return (
-    <section>
-      <div className="flex items-baseline gap-2">
-        <h2 className="text-head font-medium">{title}</h2>
-        <span className="font-mono text-meta tabular-nums text-muted">{queue.count}</span>
-      </div>
-      <p className="mt-0.5 max-w-2xl text-meta text-muted">{gate}</p>
+type WorkItem = { item: InboxItem; gate: Gate; gateIndex: number };
 
-      {queue.items.length === 0 ? (
-        <Card className="mt-3 bg-surface-2 text-body text-muted">{empty}</Card>
+function Worklist({ inbox }: { inbox: Inbox }) {
+  const items: WorkItem[] = GATES.flatMap((gate, gateIndex) =>
+    inbox[gate.key].items.map((item) => ({ item, gate, gateIndex })),
+  ).sort((a, b) => b.item.age_days - a.item.age_days || a.gateIndex - b.gateIndex);
+  const total = GATES.reduce((sum, gate) => sum + inbox[gate.key].count, 0);
+  const shown = items.slice(0, WORKLIST_CAP);
+
+  return (
+    <section aria-labelledby="worklist-title" className="mt-12">
+      <div className="flex items-end justify-between gap-4 border-b border-text pb-3">
+        <div>
+          <p className="font-mono text-caption uppercase tracking-[0.12em] text-muted">Oldest first</p>
+          <h2 id="worklist-title" className="mt-1 text-head font-medium">
+            Work waiting on a person
+          </h2>
+        </div>
+        <span className="font-mono text-meta tabular-nums text-muted">
+          showing {Math.min(total, WORKLIST_CAP)} of {total}
+        </span>
+      </div>
+
+      {shown.length === 0 ? (
+        <Card className="mt-4 border-dashed bg-surface-2 text-body text-muted">
+          Nothing is waiting. The circuit is clear; the next item will appear here when it reaches a human gate.
+        </Card>
       ) : (
-        <Card className="mt-3 px-2 py-1">
-          {/* Oldest first, exactly as the backend ordered it (`main._queue`). Not re-sorted
-              here: the item that has waited longest is the one worth seeing, and any other
-              order on this page would be a ranking. */}
+        <div className="overflow-hidden rounded-card border border-border bg-surface">
+          <div className="hidden grid-cols-[104px_minmax(0,1fr)_210px_100px] bg-surface-2 px-5 py-3 font-mono text-[10.5px] uppercase tracking-[0.12em] text-muted md:grid">
+            <span>Waited</span>
+            <span>Item</span>
+            <span>Gate</span>
+            <span>Clears at</span>
+          </div>
           <ul>
-            {queue.items.slice(0, QUEUE_CAP).map((item) => (
-              <Item key={item.id} item={item} href={href(item)} />
-            ))}
+            {shown.map(({ item, gate, gateIndex }) => {
+              const href = gate.href(item);
+              return (
+                <li
+                  key={`${gate.key}-${item.id}`}
+                  className="border-t border-border-subtle first:border-t-0 md:first:border-t"
+                >
+                  <div className="grid gap-2 px-5 py-4 hover:bg-surface-2 md:grid-cols-[104px_minmax(0,1fr)_210px_100px] md:items-center md:gap-0">
+                    <span className="flex items-center gap-2 font-mono text-meta tabular-nums">
+                      <span
+                        aria-hidden="true"
+                        className={`size-1.5 shrink-0 ${
+                          item.age_days >= STALLED_DAYS ? "bg-accent" : "bg-transparent"
+                        }`}
+                      />
+                      {compactAge(item.age_days)}
+                    </span>
+                    {href ? (
+                      <Link href={href} className="min-w-0 truncate text-body hover:underline">
+                        {item.label}
+                      </Link>
+                    ) : (
+                      <span className="min-w-0 truncate text-body">{item.label}</span>
+                    )}
+                    <span className="font-mono text-caption text-muted">
+                      0{gateIndex + 1} · {gate.label}
+                    </span>
+                    {href && gateIndex !== 2 ? (
+                      <Link href={href} className="text-meta font-medium text-accent-text hover:underline">
+                        {gate.clearsAt} →
+                      </Link>
+                    ) : (
+                      <span className="text-meta text-muted">{gate.clearsAt}</span>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
           </ul>
-          {queue.count > QUEUE_CAP && (
-            <p className="border-t border-border px-2 py-3 text-meta text-muted">
-              Showing the {QUEUE_CAP} that have waited longest, of {queue.count}. Opening any
-              row above reaches the page that clears the rest.
+          {total > shown.length && (
+            <p className="border-t border-border-subtle px-5 py-3 text-meta text-muted">
+              {total - shown.length} more waiting. Open the gate destination to work through the rest.
             </p>
           )}
-        </Card>
+        </div>
       )}
     </section>
   );
 }
 
-/** "Closed circuits: 0" — whether the loop has ever run, which no queue can say.
- *
- *  Rendered at zero, always. A counter that hid itself when it had nothing to report would
- *  leave the page exactly as ambiguous as it was before it existed, and a dash or an em-rule
- *  would read as "not measured" when the measurement is the flat, certain 0 below. So the
- *  copy carries the same three beats as the queues' empty states: what the number is, that 0
- *  means never-yet rather than nothing-right-now, and what would make it 1.
- *
- *  That third beat names the *publish*, not the verdict. Zero drafts have ever gone live, so
- *  "rule on a live post and this becomes 1" would send a reader looking for a post that does
- *  not exist — the queues' own rule, never claim a history you cannot see. The step actually
- *  missing is Monte's, and it stays the missing step even once a draft is live and unruled.
- *
- *  A Card rather than a bare heading because it is not a fifth gate — nothing waits behind it,
- *  and giving it a queue's shape would put it in a list of things a human is meant to clear. */
 function Circuits({ closed }: { closed: number }) {
   return (
-    <Card className="mt-8 bg-surface-2">
-      <h2 className="text-head font-medium">
-        Closed circuits: <span className="font-mono tabular-nums">{closed}</span>
-      </h2>
-      <p className="mt-1 max-w-2xl text-meta text-muted">
+    <section className="mt-14 grid gap-6 border-t border-text pt-8 md:grid-cols-[240px_1fr] md:items-center">
+      <div className="flex items-end gap-4">
+        <span className="font-mono text-[56px] leading-[0.85] tabular-nums md:text-[84px]">{closed}</span>
+        <div>
+          <p className="font-mono text-caption uppercase tracking-[0.12em] text-muted">closed circuits</p>
+          <p className="mt-1 text-meta text-muted">full laps through the system</p>
+        </div>
+      </div>
+      <p className="max-w-2xl text-body text-muted">
         {closed === 0
           ? "The circuit has never been round: no draft this app generated has been pushed, published and ruled on, not once. A pushed draft that Monte publishes and someone then rules on makes this 1."
           : "Drafts written here that were pushed to Zernio, published by a human, and then ruled on — one full lap each."}{" "}
         A count of laps, not a score: it says the circuit ran, never that a post did well.
       </p>
-    </Card>
+    </section>
   );
 }
 
@@ -184,112 +298,93 @@ function HealthRow({ label, ok }: { label: string; ok: boolean }) {
 }
 
 export default async function InboxPage() {
-  // Two independent reads. The Inbox is the page; the health readout is a footer, so a failure
-  // in one may not speak for the other — a dead /health must not blank the queues, and a
-  // populated footer must not imply the queues loaded.
   const [inbox, health] = await Promise.all([
     getJson<Inbox>("/inbox"),
     getJson<Health>("/health"),
   ]);
 
+  const total = inbox.ok
+    ? GATES.reduce((sum, gate) => sum + inbox.data[gate.key].count, 0)
+    : 0;
+  const bottleneck = inbox.ok
+    ? GATES.reduce((current, gate) =>
+        inbox.data[gate.key].count > inbox.data[current.key].count ? gate : current,
+      )
+    : GATES[0];
+  const bottleneckCount = inbox.ok ? inbox.data[bottleneck.key].count : 0;
+  const bottleneckHref = inbox.ok
+    ? bottleneck.href(inbox.data[bottleneck.key].items[0] ?? { id: 0, label: "", waiting_since: "", age_days: 0 })
+    : null;
+
   return (
-    <main className="mx-auto max-w-6xl px-6 py-16">
-      <h1 className="text-title font-semibold tracking-tight">Inbox</h1>
-      <p className="mt-1 max-w-2xl text-body text-muted">
-        Everything waiting on a human, and for how long — the four gates of the lineage circuit,
-        in the order a post passes through them. These are queues, not scores: no ordering
-        between them means anything, and nothing here says a template, draft or post performed
-        well or badly.
-      </p>
+    <>
+      {inbox.ok && <Circuit inbox={inbox.data} />}
 
-      {inbox.ok ? (
-        <>
-          {/* Inside `inbox.ok`, with the queues: a lap count invented out of a failed read
-              would be the page making its strongest claim about the circuit on no data. */}
-          <Circuits closed={inbox.data.closed_circuits} />
-          <div className="mt-10 flex flex-col gap-10">
-            <Queue
-              title="Proposals awaiting review"
-              gate="Extraction proposes; a human approves or retires. Only an approved template can be generated from."
-              queue={inbox.data.proposals_awaiting_review}
-              href={() => "/templates"}
-              empty="No template is awaiting review. Extraction reads the corpus and proposes hooks, structures and visuals; each proposal waits here until someone approves or retires it."
-            />
-            <Queue
-              title="Built, awaiting push"
-              gate="Drafts written in Studio that have never reached Zernio."
-              queue={inbox.data.built_awaiting_push}
-              /* The item id IS the draft id — `InboxItem` carries the id of whatever the gate
-                 acts on, which for this queue is the row `/drafts/{id}/push` takes. So the link
-                 opens that draft in Studio, where the push button is. It pointed at a bare
-                 `/studio` until US-012, which was a link to a page that was empty on every
-                 visit: Studio had no way to load an existing draft. */
-              href={(item) => `/studio?draft=${item.id}`}
-              empty="No draft is waiting to be pushed. A draft written in Studio waits here until it is pushed to Zernio — nothing in this app ever publishes on its own."
-            />
-            <Queue
-              title="Pushed, awaiting Monte"
-              gate="In Zernio as a draft, not yet live. Publishing is a human act performed there, not here — this app can only notice that it happened."
-              queue={inbox.data.pushed_awaiting_monte}
-              /* Still the one gate with no in-app destination — the clearing act happens in
-                 Zernio's own dashboard, the only Zernio URL in this repo is the API root
-                 (`config.py:71`), and a synthesized dashboard URL would be a guess that looks
-                 like a fact. What US-012 could fix is the near end: the item id is this draft's
-                 id, so the trail now resumes at the exact draft rather than at an empty Studio,
-                 and that page states the `zernio_post_id` it is waiting on. */
-              href={(item) => `/studio?draft=${item.id}`}
-              empty="No draft is waiting on a publish. A draft pushed to Zernio waits here until it goes live."
-            />
-            <Queue
-              title="Published, awaiting verdict"
-              gate="Live posts this app generated, with no ruling recorded. A verdict is one human judgement at n=1 — never a statistic."
-              queue={inbox.data.published_awaiting_verdict}
-              href={(item) => `/posts/${item.id}`}
-              empty="Nothing is waiting on a verdict. A generated post that goes live lands here until someone rules on it."
-            />
+      <main className="mx-auto max-w-6xl px-6 pb-16 pt-12">
+        <header className="grid gap-8 lg:grid-cols-[1fr_auto] lg:items-end">
+          <div>
+            <p className="font-mono text-caption uppercase tracking-[0.12em] text-muted">Today’s work</p>
+            <h1 className="mt-2 max-w-3xl text-display font-semibold tracking-[-0.02em]">
+              {inbox.ok ? `${total} ${total === 1 ? "thing is" : "things are"} waiting on you` : "Inbox"}
+            </h1>
+            <p className="mt-3 max-w-2xl text-body text-muted">
+              The four human gates of the lineage circuit, ordered by wait time. These are queues, not scores: nothing here claims a template, draft or post performed well or badly.
+            </p>
           </div>
-        </>
-      ) : (
-        <ApiFailureNotice failure={inbox} className="mt-10" />
-      )}
 
-      {/* Where the Status page went. It stops being a destination — a health readout is what you
-          check when something is wrong, not a home page — but the information stays reachable,
-          and it stays on the page most likely to be open when the queues look wrong. */}
-      <footer className="mt-16 border-t border-border pt-6">
-        <h2 className="text-caption font-medium uppercase tracking-widest text-muted">
-          System status
-        </h2>
-        {health.ok ? (
-          <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2">
-            {/* Not `health.ok` — inside this branch that is `true` by construction, so the row
-                could only ever say "ok". The backend's own verdict on itself is what the row is
-                for: it answered, and it may have answered that it is unhealthy.
-                ponytail: reused as the existing ok/down badge rather than given a vocabulary of
-                its own. "down" for a backend that plainly answered is blunt, but every other row
-                in this strip is a boolean and one word is what a footer has room for. Ceiling: a
-                real status vocabulary here once /health emits more than the literal "ok" it
-                hardcodes today (backend/app/main.py:82). */}
-            <HealthRow label="API" ok={health.data.status === "ok"} />
-            <HealthRow label="Database" ok={health.data.database} />
-            {Object.entries(health.data.credentials).map(([name, present]) => (
-              <HealthRow key={name} label={name} ok={present} />
-            ))}
-          </div>
+          {inbox.ok && bottleneckCount > 0 && bottleneckHref && (
+            <div className="lg:text-right">
+              <Link
+                href={bottleneckHref}
+                className="inline-flex min-h-10 items-center justify-center rounded-input bg-text px-4 py-2 text-meta font-medium text-bg transition-colors hover:bg-text/90"
+              >
+                {bottleneck.key === "proposals_awaiting_review"
+                  ? `Review ${bottleneckCount} proposals →`
+                  : `Open ${bottleneckCount} at ${bottleneck.short} →`}
+              </Link>
+              <p className="mt-2 font-mono text-caption text-muted">The largest queue sets the next action.</p>
+            </div>
+          )}
+        </header>
+
+        {inbox.ok ? (
+          <>
+            <Worklist inbox={inbox.data} />
+            {inbox.data.published_awaiting_verdict.count === 0 && (
+              <div className="mt-6 flex gap-3 border border-dashed border-border px-4 py-3 text-meta text-muted">
+                <span aria-hidden="true" className="h-5 w-8 shrink-0 pixii-hatch" />
+                <p>
+                  Nothing has ever arrived at gate 04. A generated post appears here only after a human publishes it from Zernio.
+                </p>
+              </div>
+            )}
+            <Circuits closed={inbox.data.closed_circuits} />
+          </>
         ) : (
-          // Deliberately NOT ApiFailureNotice. Its network branch renders "Backend unreachable
-          // — start it with `make api`", which underneath a fully populated Inbox is the same
-          // conflation US-003 removed, inverted: the backend plainly answered. A footer failure
-          // gets a footer-sized sentence that says what failed and nothing more.
-          <p className="mt-2 text-meta text-muted">
-            Status unavailable —{" "}
-            {health.kind === "network"
-              ? `could not reach ${API_BASE} (${health.message})`
-              : `HTTP ${health.status}: ${health.message}`}
-            .
-          </p>
+          <ApiFailureNotice failure={inbox} className="mt-10" />
         )}
-      </footer>
-    </main>
+
+        <footer className="mt-16 border-t border-border pt-6">
+          <h2 className="font-mono text-caption uppercase tracking-[0.12em] text-muted">System status</h2>
+          {health.ok ? (
+            <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2">
+              <HealthRow label="API" ok={health.data.status === "ok"} />
+              <HealthRow label="Database" ok={health.data.database} />
+              {Object.entries(health.data.credentials).map(([name, present]) => (
+                <HealthRow key={name} label={name} ok={present} />
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 text-meta text-muted">
+              Status unavailable —{" "}
+              {health.kind === "network"
+                ? `could not reach ${API_BASE} (${health.message})`
+                : `HTTP ${health.status}: ${health.message}`}
+              .
+            </p>
+          )}
+        </footer>
+      </main>
+    </>
   );
 }

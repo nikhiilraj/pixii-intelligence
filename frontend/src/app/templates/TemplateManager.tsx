@@ -1,7 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { Badge, type BadgeProps } from "@/components/ui/badge";
@@ -120,7 +121,57 @@ function CohortTag({ template }: { template: Template }) {
   );
 }
 
-export default function TemplateManager({ initial }: { initial: Template[] }) {
+function Key({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd className="rounded border border-current/25 px-1.5 py-0.5 font-mono text-[10px] font-normal leading-none">
+      {children}
+    </kbd>
+  );
+}
+
+function producedBy(template: Template): { raw: string; example: string } {
+  if (typeof template.body.pattern === "string") {
+    const raw = template.body.pattern;
+    const examples = Object.fromEntries(
+      template.slots.map((slot) => [String(slot.name), String(slot.example ?? slot.name ?? "")]),
+    );
+    const example = raw.replace(/\{([^}]+)\}/g, (_match, name: string) => {
+      const supplied = examples[name];
+      return supplied || name.replaceAll("_", " ");
+    });
+    return { raw, example };
+  }
+
+  if (Array.isArray(template.body.sections)) {
+    const sections = template.body.sections
+      .filter((section): section is Record<string, unknown> => typeof section === "object" && section !== null)
+      .slice(0, 4);
+    return {
+      raw: sections.map((section) => String(section.name ?? "section")).join(" → "),
+      example: sections
+        .map((section) => String(section.guidance ?? section.name ?? ""))
+        .filter(Boolean)
+        .join("\n"),
+    };
+  }
+
+  const renderer = String(template.body.renderer ?? template.body.component ?? "visual");
+  return {
+    raw: `${renderer} · ${template.slots.length} declared slot${template.slots.length === 1 ? "" : "s"}`,
+    example:
+      template.slots.length > 0
+        ? template.slots.map((slot) => String(slot.example ?? slot.name ?? "slot")).join(" · ")
+        : "A rendered visual. Preview it before approving the shape.",
+  };
+}
+
+export default function TemplateManager({
+  initial,
+  defaultMode = "list",
+}: {
+  initial: Template[];
+  defaultMode?: "review" | "list";
+}) {
   const router = useRouter();
   const [kind, setKind] = useState<TemplateKind>("hook");
   const [cohort, setCohort] = useState<Cohort>("voice");
@@ -129,6 +180,19 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
   const [editing, setEditing] = useState<Template | null>(null);
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<{ id: number; url: string } | null>(null);
+  const [mode, setMode] = useState<"review" | "list">(defaultMode);
+  const [cursor, setCursor] = useState(0);
+  const [deferred, setDeferred] = useState<number[]>([]);
+  const [session, setSession] = useState({ approved: 0, retired: 0 });
+
+  const proposals = initial.filter((template) => template.status === "proposed");
+  const queue = [
+    ...proposals.filter((template) => !deferred.includes(template.id)),
+    ...proposals.filter((template) => deferred.includes(template.id)),
+  ];
+  const current = queue[Math.min(cursor, Math.max(queue.length - 1, 0))];
+  const produced = current ? producedBy(current) : null;
+  const cleared = session.approved + session.retired;
 
   async function renderPreview(template: Template) {
     setBusy(true);
@@ -201,6 +265,49 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
     setBody(JSON.stringify(template.body, null, 2));
   }
 
+  function move(amount: number) {
+    if (queue.length === 0) return;
+    setCursor((at) => Math.min(Math.max(at + amount, 0), queue.length - 1));
+  }
+
+  function decideLater() {
+    if (!current) return;
+    setDeferred((ids) => (ids.includes(current.id) ? ids : [...ids, current.id]));
+    setCursor(0);
+  }
+
+  async function decide(action: "approve" | "retire") {
+    if (!current) return;
+    const ok = await send(`/templates/${current.id}/${action}`);
+    if (!ok) return;
+    setSession((value) => ({ ...value, [action === "approve" ? "approved" : "retired"]: value[action === "approve" ? "approved" : "retired"] + 1 }));
+    setCursor((at) => Math.min(at, Math.max(queue.length - 2, 0)));
+  }
+
+  useEffect(() => {
+    if (mode !== "review" || !current || busy) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      if (target?.matches("input, textarea, select, [contenteditable='true']")) return;
+      const key = event.key.toLowerCase();
+      if (!["a", "r", "e", "s", "j", "k"].includes(key)) return;
+      event.preventDefault();
+      if (key === "a") void decide("approve");
+      if (key === "r") void decide("retire");
+      if (key === "e") {
+        startEdit(current);
+        setMode("list");
+      }
+      if (key === "s") decideLater();
+      if (key === "j") move(1);
+      if (key === "k") move(-1);
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
+
   // Dresses the name input and the body textarea, now that the kind select draws its own border
   // from the same tokens. Retokenised with the select that left it: leaving `border-black/15`
   // here would put a differently-weighted border on the two controls directly under a
@@ -208,7 +315,141 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
   const field = "w-full rounded-input border border-border bg-transparent px-3 py-2 text-meta";
 
   return (
-    <div className="mt-8 grid gap-10 lg:grid-cols-[1fr_20rem]">
+    <div className="mt-8">
+      <div className="-mx-6 flex flex-wrap items-center gap-2 border-y border-border bg-surface px-6 py-3 text-meta">
+        {(["proposed", "approved", "retired"] as const).map((status) => (
+          <span key={status} className={status === "proposed" ? "font-medium text-text" : "text-muted"}>
+            {status[0].toUpperCase() + status.slice(1)}{" "}
+            <span className="font-mono tabular-nums">
+              {initial.filter((template) => template.status === status).length}
+            </span>
+          </span>
+        ))}
+        <span className="ml-auto font-mono text-caption text-muted">
+          {cleared} cleared this session
+        </span>
+        <div className="flex rounded-input border border-border p-0.5" aria-label="Template view">
+          {(["review", "list"] as const).map((view) => (
+            <button
+              key={view}
+              type="button"
+              aria-pressed={mode === view}
+              onClick={() => setMode(view)}
+              className="min-h-8 rounded-[4px] px-3 text-caption font-medium capitalize text-muted aria-pressed:bg-text aria-pressed:text-bg"
+            >
+              {view}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {mode === "review" ? (
+        <div className="mt-10 grid gap-9 lg:grid-cols-[minmax(0,1fr)_20.5rem]">
+          <section className="min-w-0">
+            {!current ? (
+              <Card className="border-dashed bg-surface-2 p-6">
+                <p className="text-head font-medium">The review queue is clear.</p>
+                <p className="mt-2 max-w-2xl text-body text-muted">
+                  Every proposal has been approved, retired or deferred. The library can now do the work it was built for.
+                </p>
+                <Link href="/studio" className="mt-5 inline-block text-meta font-medium text-accent-text hover:underline">
+                  Write something in Studio →
+                </Link>
+              </Card>
+            ) : (
+              <>
+                <div className="flex flex-wrap items-center justify-between gap-3 font-mono text-caption uppercase tracking-[0.12em] text-muted">
+                  <span>
+                    Proposal {Math.min(cursor + 1, queue.length)} of {queue.length} · {current.kind} · v{current.version}
+                  </span>
+                  <span className="normal-case tracking-normal">Use J / K to move</span>
+                </div>
+                <h2 className="mt-4 text-display font-semibold tracking-[-0.02em]">{current.name}</h2>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <Badge variant={STATUS_VARIANT[current.status]}>{current.status}</Badge>
+                  <CohortTag template={current} />
+                  <span className="text-caption text-muted">
+                    read from {current.provenance.length} post{current.provenance.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+
+                <section className="mt-10 border-t border-text pt-5">
+                  <p className="font-mono text-caption uppercase tracking-[0.12em] text-muted">What it produces</p>
+                  <p className="mt-4 overflow-x-auto rounded-input bg-surface-2 px-4 py-3 font-mono text-caption text-muted">
+                    {produced?.raw}
+                  </p>
+                  <p className="mt-5 whitespace-pre-wrap text-[20px] leading-[30px]">{produced?.example}</p>
+                  <p className="mt-3 text-meta text-muted">This is the shape being approved, not a prediction about how it will do.</p>
+                </section>
+
+                <section className="mt-9">
+                  <p className="font-mono text-caption uppercase tracking-[0.12em] text-muted">Read from</p>
+                  <p className="mt-3 text-body">
+                    {current.provenance.length > 0
+                      ? `${current.provenance.length} source post${current.provenance.length === 1 ? "" : "s"} supplied this pattern.`
+                      : "No source post was recorded for this proposal."}
+                  </p>
+                  <p className="mt-1 text-meta text-muted">Provenance says where the pattern came from. It is not evidence that the pattern will travel.</p>
+                </section>
+
+                <details className="mt-8 border-y border-dashed border-border py-3">
+                  <summary className="cursor-pointer font-mono text-caption text-muted">Show body JSON</summary>
+                  <pre className="mt-3 max-h-80 overflow-auto rounded-input bg-surface-2 p-4 font-mono text-caption">
+                    {JSON.stringify(current.body, null, 2)}
+                  </pre>
+                </details>
+
+                {preview?.id === current.id && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={preview.url} alt={`Preview of ${current.name}`} className="mt-6 w-full max-w-sm rounded-card border border-border" />
+                )}
+
+                <div className="mt-8 flex flex-wrap gap-2 border-t border-border pt-5">
+                  <Button onClick={() => void decide("approve")} disabled={busy}>Approve <Key>A</Key></Button>
+                  <Button variant="outline" onClick={() => void decide("retire")} disabled={busy}>Retire <Key>R</Key></Button>
+                  <Button variant="outline" onClick={() => { startEdit(current); setMode("list"); }} disabled={busy}>Edit body <Key>E</Key></Button>
+                  {current.kind === "visual" && <Button variant="outline" onClick={() => void renderPreview(current)} disabled={busy}>Preview</Button>}
+                  <Button variant="outline" onClick={decideLater} disabled={busy}>Decide later <Key>S</Key></Button>
+                </div>
+                <p className="mt-4 max-w-2xl text-meta text-muted">
+                  Approving makes the shape usable; it generates nothing. Retiring keeps the row and its history. Deciding later moves it to the back without resetting its age.
+                </p>
+              </>
+            )}
+          </section>
+
+          <aside className="space-y-5">
+            <Card className="p-5">
+              <div className="flex items-end justify-between gap-3">
+                <p className="font-mono text-display tabular-nums">{cleared}</p>
+                <p className="pb-1 font-mono text-caption text-muted">of {proposals.length} this session</p>
+              </div>
+              <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-surface-2">
+                <div className="h-full bg-accent" style={{ width: `${proposals.length ? (cleared / proposals.length) * 100 : 0}%` }} />
+              </div>
+              <p className="mt-3 text-meta text-muted">{session.approved} approved, {session.retired} retired. Work done, not a score.</p>
+            </Card>
+            <div>
+              <p className="font-mono text-caption uppercase tracking-[0.12em] text-muted">Next in the queue</p>
+              <ol className="mt-2 border-y border-border">
+                {queue.slice(cursor + 1, cursor + 4).map((template) => (
+                  <li key={template.id} className="border-b border-border-subtle py-3 last:border-0">
+                    <p className="truncate text-meta font-medium">{template.name}</p>
+                    <p className="font-mono text-caption text-muted">{template.kind} · v{template.version}</p>
+                  </li>
+                ))}
+              </ol>
+            </div>
+            <Card className="bg-surface-2 p-5">
+              <p className="font-medium">When this queue is empty</p>
+              <p className="mt-2 text-meta text-muted">The approved library is ready to turn an idea into a traceable draft.</p>
+              <Link href="/studio" className="mt-4 inline-block text-meta font-medium text-accent-text hover:underline">Write something in Studio →</Link>
+            </Card>
+            <Link href="/scoreboard" className="block text-meta text-muted hover:text-text">Open the Scoreboard →</Link>
+          </aside>
+        </div>
+      ) : (
+      <div className="mt-8 grid gap-10 lg:grid-cols-[1fr_20rem]">
       {/* `min-w-0` is the whole reason this page is not 10384px wide at a 1440px viewport. A grid
           track carries an implicit `min-width: auto` that resolves to its item's min-content, and
           this section's min-content is the longest unwrapped line of the `JSON.stringify` dump in
@@ -398,6 +639,8 @@ export default function TemplateManager({ initial }: { initial: Template[] }) {
           )}
         </div>
       </form>
+      </div>
+      )}
     </div>
   );
 }

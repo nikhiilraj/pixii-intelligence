@@ -68,10 +68,11 @@ export default async function StudioPage({
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-16">
-      <h1 className="text-2xl font-semibold tracking-tight">Studio</h1>
-      <p className="mt-1 text-sm text-muted">
-        An idea in, a reviewable draft out — stamped with the templates that produced it, or
-        opened again from the list. Nothing publishes from here.
+      <p className="text-caption font-medium uppercase tracking-[0.18em] text-muted">Compose</p>
+      <h1 className="mt-2 text-display font-semibold tracking-[-0.04em]">Studio</h1>
+      <p className="mt-2 max-w-2xl text-body text-muted">
+        Turn one clear point into a reviewable draft, with the exact templates and assets that
+        produced it kept visible. Nothing publishes from here.
       </p>
       {templates.ok ? (
         /* Keyed by the requested id so a link from one draft to another remounts the component.

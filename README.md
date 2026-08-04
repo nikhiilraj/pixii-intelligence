@@ -12,6 +12,36 @@ thing to understand about this app.
 
 ---
 
+## Start here
+
+If the app is already running, open [http://localhost:3000](http://localhost:3000). The Inbox is
+the home screen and the daily starting point: it draws the full circuit, puts the oldest human
+blockers first, and points to the largest queue.
+
+For a first useful session:
+
+1. Open **Templates** and approve at least one hook, one structure, and one visual. Retire the
+   proposals you do not want to reuse; a retired row stays in the record.
+2. Open **Studio**, write an idea, choose or suggest templates, and generate a draft.
+3. Check the exact template versions in **Lineage**, then push the result to Zernio. Pixii sends
+   a draft only; it never publishes.
+4. After a human publishes in Zernio, sync metrics and record a verdict on the post. The reason
+   you write with the verdict is the lesson the next generation receives.
+
+If something looks empty, read the wording before treating it as a failure. `0`, `—`, and an empty
+queue mean different things throughout the product. If the API itself is unavailable, the route
+says so instead of pretending the list is empty.
+
+### Daily operating loop
+
+- Start at **Inbox** and clear the oldest waiting item.
+- Use **Corpus** to inspect source posts; use **Scoreboard** only to inspect evidence attached to
+  template versions, never to rank them.
+- Use **Assets** when a visual template needs a real image rather than a text-only slot.
+- Return to **Inbox** after each action. The item should move to the next human gate.
+
+---
+
 ## The idea in one picture
 
 ```mermaid

@@ -275,14 +275,11 @@ describe("a stocked library with no published post", () => {
     expect(
       screen.queryByText(/No generated post has been published yet/i),
     ).not.toBeInTheDocument();
-    // One attributed post is enough to stop the claim — the threshold badge is what reports
-    // that three samples are too thin to read, and that is a different statement.
-    expect(screen.getByText(/too thin \(3\/6\)/)).toBeInTheDocument();
-    // The lede states the same threshold, and it is a second read of the same field.
-    expect(screen.getByText(/anything under 6 posts is marked insufficient/)).toBeInTheDocument();
-    // A mean over zero samples is not 0.0, it is nothing — the row with evidence prints its
-    // figure and the row without prints the dash.
-    const means = screen.getAllByRole("row").slice(1).map((r) => r.children[4].textContent);
-    expect(means).toEqual(["—", "13.7"]);
+    // One attributed post is enough to stop the empty claim. The evidence-first view exposes
+    // the raw sample count and withholds averages below the reading threshold.
+    expect(screen.getByLabelText("3 published posts")).toBeInTheDocument();
+    expect(screen.getByText(/Nothing here has enough posts behind it to read yet/)).toBeInTheDocument();
+    expect(screen.getByText(/withholds averages/)).toBeInTheDocument();
+    expect(screen.queryByText("13.7")).not.toBeInTheDocument();
   });
 });
