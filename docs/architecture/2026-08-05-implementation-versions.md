@@ -73,15 +73,21 @@ a dead URL and logging nothing, because it swallows every exception by design.
   draft count, visuals-failed warning, and an `Action.OpenUrl` deep link. Keep `notify()`
   for plain operational lines.
 - New setting `pixii_base_url` so the link is `…/studio?draft=<id>` and not a guess.
-- Delivery is deduplicated by `daily_run.notified_at`, so a retry or a second process cannot
-  post the card twice.
-- **Unknown ≠ zero applies here too:** a card must say "visuals: not attempted" rather than
-  "0 failed" when the run died before rendering.
+- Delivery is deduplicated by `daily_run.notified_at`, written only after Teams accepts the
+  card — so a refused delivery is retried on the next tick and a successful one is never
+  repeated. That nullable timestamp is the whole retry mechanism; no delivery table.
+- **Unknown ≠ zero applies here too:** the card prints `—` for a count nobody took, not `0`.
 
-### 3. The card links to something worth opening
+### 3. The card links to the Inbox — not to one draft
 
-Studio already renders a draft with its lineage. v1 adds nothing to it beyond accepting the
-`?draft=` parameter and scrolling to that draft.
+**Changed during implementation.** The plan said Studio would accept `?draft=`. A run
+produces up to `autonomous_max_drafts`, and `RunResult` carries counts rather than the ids,
+so a single-draft deep link would be wrong most days. The card opens the Inbox, which the
+README already calls the daily starting point and which sorts oldest-waiting first.
+
+v1 therefore changes no frontend code at all. A `/studio?draft=N` link when a run makes
+exactly one draft is worth adding the day `RunResult` keeps its ids — the `ponytail:` note
+in `daily.notify_run` says so.
 
 ### Not in v1
 
@@ -90,9 +96,20 @@ that does not already exist.
 
 ### Done when
 
-A run at the configured hour writes a `daily_run` row, generates drafts, posts one card,
-and — with the process killed mid-run and restarted — resumes without generating a second
-batch or posting a second card. Proved by breaking each on purpose.
+A run at the configured hour writes a `daily_run` row, generates drafts, and posts one
+card. A process killed mid-run neither generates a second batch nor loses its card: a
+later tick finds the row still `running`, buries it past `STALE_RUN_HOURS`, and sends the
+failure — because a claim that blocks the retry *and* the notification is a scheduled job
+failing in silence, which is the thing this slice exists to end.
+
+**Status: shipped 2026-08-05.** Nine mutations checked, each fails a test — removing the
+conflict guard, stamping `notified_at` regardless of delivery, keying the slot on the UTC
+date, printing `0` for an uncounted run, never burying a stale row, burying a live one,
+dropping the per-draft detail, restoring the dead connector payload shape, and reporting an
+unconfigured webhook as delivered. 547 backend tests, 243 frontend.
+
+**Not verified:** no card has been delivered to a real Teams channel. That needs the
+Workflow trigger below to exist first.
 
 ---
 

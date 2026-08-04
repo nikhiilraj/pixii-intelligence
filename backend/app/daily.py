@@ -1,5 +1,5 @@
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.dialects.postgresql import insert
@@ -7,6 +7,7 @@ from sqlmodel import Session, col, select
 
 from app.autonomous import run_autonomous
 from app.config import settings
+from app.db import utc
 from app.llm import LLM
 from app.models.daily_run import DAILY_SLOT, DailyRun
 from app.notify import card, deliver
@@ -17,6 +18,18 @@ log = logging.getLogger("pixii.daily")
 # Shown where a count is not yet known, never `0`. A run that died before generating has
 # not created zero drafts — nobody counted. Same rule the corpus and scoreboard follow.
 UNKNOWN = "—"
+
+# How long a row may sit on "running" before a later tick declares it dead.
+#
+# A process killed after it claimed the day leaves `status="running"` and `notified_at`
+# NULL forever: the claim stops a second run (right), and nothing ever sends a card
+# (wrong) — which is a scheduled job failing in silence, the exact thing this slice exists
+# to end. Two hours is well beyond any real run and well inside the day, so the card still
+# arrives while it means something.
+#
+# The row is marked failed but **never re-run**. Whatever drafts it made before dying are
+# real, and a retry would double them.
+STALE_RUN_HOURS = 2
 
 
 def slot_date(now: datetime | None = None) -> date | None:
@@ -35,7 +48,7 @@ def slot_date(now: datetime | None = None) -> date | None:
     return local.date() if local.hour >= settings.daily_slot_hour else None
 
 
-def _claim(session: Session, run_date: date) -> DailyRun | None:
+def _claim(session: Session, run_date: date, *, at: datetime) -> DailyRun | None:
     """Take ownership of this date's run, or return None because someone already has.
 
     `ON CONFLICT DO NOTHING` against `UNIQUE (run_date, slot)` is the entire lock. It is
@@ -49,7 +62,7 @@ def _claim(session: Session, run_date: date) -> DailyRun | None:
     """
     statement = (
         insert(DailyRun)
-        .values(run_date=run_date, slot=DAILY_SLOT, status="running", started_at=datetime.now(UTC))
+        .values(run_date=run_date, slot=DAILY_SLOT, status="running", started_at=at)
         .on_conflict_do_nothing(index_elements=["run_date", "slot"])
         .returning(col(DailyRun.id))
     )
@@ -68,7 +81,26 @@ def _today(session: Session, run_date: date) -> DailyRun | None:
     ).first()
 
 
-def notify_run(session: Session, run: DailyRun) -> bool:
+def _bury_if_stale(session: Session, run: DailyRun, *, at: datetime) -> None:
+    """Declare a long-`running` row dead, so its card can finally be sent.
+
+    The only way a row stays `running` is a process that died between claiming the day and
+    finishing it. Nothing can recover what it was doing — but something has to say so, or
+    the day passes with no run and no message.
+
+    Compared through `db.utc` because `started_at` reads back naive once the row has
+    round-tripped, and subtracting a naive from an aware datetime raises.
+    """
+    if at - utc(run.started_at) < timedelta(hours=STALE_RUN_HOURS):
+        return
+    run.status = "failed"
+    run.error = f"run did not finish; no progress for over {STALE_RUN_HOURS}h"
+    run.finished_at = at
+    session.add(run)
+    session.commit()
+
+
+def notify_run(session: Session, run: DailyRun, *, at: datetime | None = None) -> bool:
     """Post one card for this run, at most once. Returns whether it was sent now.
 
     `notified_at` is written only after Teams accepts the card, so a delivery that failed
@@ -101,6 +133,14 @@ def notify_run(session: Session, run: DailyRun) -> bool:
     ]
     if run.error:
         facts.append(("Error", run.error[:300]))
+    if run.detail:
+        # The per-draft messages, not only the counts. `autonomous.run_autonomous` names each
+        # failure because the count says a redraw is needed and the message says whether a
+        # redraw could possibly help — an `UnresolvableAsset` naming a missing default is a
+        # template to fix, a `MissingSlotValue` is a slot nobody has chosen an asset for. The
+        # old notifier sent one line per draft; folding them into one fact keeps that
+        # distinction on the card without turning a daily run into a thread of messages.
+        facts.append(("Detail", run.detail[:800]))
 
     # To the Inbox, not to one draft. A run can produce several, and the Inbox is the screen
     # that puts the oldest waiting item first — which is the question the card is prompting.
@@ -109,7 +149,7 @@ def notify_run(session: Session, run: DailyRun) -> bool:
     if not deliver(card(title, facts, link=("Open Pixii Inbox", settings.pixii_base_url))):
         return False
 
-    run.notified_at = datetime.now(UTC)
+    run.notified_at = at or datetime.now(UTC)
     session.add(run)
     session.commit()
     return True
@@ -135,17 +175,32 @@ def run_daily_slot(
     if run_date is None:
         return None
 
-    run = _claim(session, run_date)
+    # One instant for the whole tick. Reading the clock again at each step would let a run
+    # finish before it started under a supplied `now`, and makes the stale-run threshold
+    # untestable without sleeping through it.
+    at = now or datetime.now(UTC)
+
+    run = _claim(session, run_date, at=at)
     if run is None:
         # Someone else owns today. Their delivery may still have failed, and delivery is
         # the part worth retrying: the drafts are already made either way.
         existing = _today(session, run_date)
-        if existing and existing.status != "running" and settings.teams_webhook_url:
-            notify_run(session, existing)
+        if existing is None or not settings.teams_webhook_url:
+            return None
+        if existing.status == "running":
+            _bury_if_stale(session, existing, at=at)
+        if existing.status != "running":
+            notify_run(session, existing, at=at)
         return None
 
+    # Collected rather than delivered one by one. `run_autonomous` names each failure as it
+    # happens, and the old scheduler forwarded every line straight to Teams — a run with
+    # three bad topics was four messages. They ride on the single daily card instead.
+    lines: list[str] = []
     try:
-        result = run_autonomous(session, llm, renderer, cap=settings.autonomous_max_drafts)
+        result = run_autonomous(
+            session, llm, renderer, cap=settings.autonomous_max_drafts, notify=lines.append
+        )
     except Exception as exc:
         # Deliberately broad. Anything that escapes `run_autonomous` — a provider outage, a
         # bug — has to end as a recorded, notified failure rather than as a traceback in a
@@ -168,8 +223,12 @@ def run_daily_slot(
         run.topics_failed = result.failed
         run.visuals_failed = result.visuals_failed
 
-    run.finished_at = datetime.now(UTC)
+    # The trailing line is always `run_autonomous`'s own summary, which restates the counts
+    # this card already shows as facts — or, when it raised, the reason already in `error`.
+    # Either way it is the one line worth dropping.
+    run.detail = "\n".join(lines[:-1]) or None
+    run.finished_at = at
     session.add(run)
     session.commit()
-    notify_run(session, run)
+    notify_run(session, run, at=at)
     return run

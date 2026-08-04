@@ -53,6 +53,13 @@ class DailyRun(SQLModel, table=True):
 
     error: str | None = None
 
+    # The per-draft messages the run produced, newline-joined. `run_autonomous` names each
+    # failure as it happens — an `UnresolvableAsset` is a template to fix, a
+    # `MissingSlotValue` is a slot nobody has chosen an asset for — and the counts alone
+    # cannot tell those apart. Stored rather than delivered as it happens, because the card
+    # is sent once and may be retried hours later from this row alone.
+    detail: str | None = None
+
     # When Teams accepted the card. NULL after a finished run means delivery has not
     # succeeded yet and the next tick should try again — which is what makes the
     # notification retriable without a second table.

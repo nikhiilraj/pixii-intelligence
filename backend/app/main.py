@@ -21,7 +21,7 @@ from app.corpus import (
     ingest_posts,
     upsert_linkedin_posts,
 )
-from app.db import engine
+from app.db import engine, utc
 from app.deps import SessionDep
 from app.metrics import draft_for_post, sync_metrics, template_performance
 from app.models.draft import Draft
@@ -279,7 +279,7 @@ def post_draft(session: SessionDep, post_id: int) -> DraftOut | None:
     sharing one `zernio_post_id`, which needs a forced re-push (`publishing.py:74` returns
     early once the id is set, and each push mints a fresh Zernio id) and would be a data bug
     rather than a case to choose between. Sorting here would also mean comparing `created_at`
-    values in Python, which is the naive/aware trap `_utc` exists for.
+    values in Python, which is the naive/aware trap `db.utc` exists for.
     """
     post = session.get(Post, post_id)
     if post is None:
@@ -438,18 +438,6 @@ def _label(text: str) -> str:
     return collapsed[: INBOX_LABEL_MAX - 1] + "…"
 
 
-def _utc(value: datetime) -> datetime:
-    """The same instant, always aware.
-
-    Every datetime column in this schema is `timestamp without time zone`, so a value the app
-    wrote as `datetime.now(UTC)` reads back naive once the row has round-tripped — and whether
-    that has happened yet depends on when the ORM expired the object. One query can therefore
-    yield both kinds, and comparing them raises. Normalised once, here, rather than at each
-    use. Same hazard `test_publish_detection.utc_naive` documents, resolved the other way.
-    """
-    return value if value.tzinfo else value.replace(tzinfo=UTC)
-
-
 def _queue(rows: list[tuple[int, str, datetime]]) -> InboxQueue:
     """Oldest first — the item that has waited longest is the one worth seeing.
 
@@ -465,9 +453,9 @@ def _queue(rows: list[tuple[int, str, datetime]]) -> InboxQueue:
             waiting_since=since,
             # Whole days, floored, and never negative: a clock skew that put an item slightly
             # in the future would otherwise render as "waiting -1 days".
-            age_days=max((now - _utc(since)).days, 0),
+            age_days=max((now - utc(since)).days, 0),
         )
-        for row_id, label, since in sorted(rows, key=lambda row: _utc(row[2]))
+        for row_id, label, since in sorted(rows, key=lambda row: utc(row[2]))
     ]
     return InboxQueue(count=len(items), items=items)
 

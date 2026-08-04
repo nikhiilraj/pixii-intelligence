@@ -42,7 +42,7 @@ authored before `type` existed carry no key at all.
 never add one to `.env.example` with a value.
 
 **Every datetime column is `timestamp without time zone`.** An aware value reads back naive,
-and comparing the two *raises*. Normalise through `main._utc`.
+and comparing the two *raises*. Normalise through `db.utc`.
 
 ## Testing
 

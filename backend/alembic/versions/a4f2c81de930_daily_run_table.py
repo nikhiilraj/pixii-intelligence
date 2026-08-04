@@ -32,6 +32,7 @@ def upgrade() -> None:
         sa.Column('topics_failed', sa.Integer(), nullable=True),
         sa.Column('visuals_failed', sa.Integer(), nullable=True),
         sa.Column('error', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
+        sa.Column('detail', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
         sa.Column('notified_at', sa.DateTime(), nullable=True),
         sa.PrimaryKeyConstraint('id'),
         # The lock. `INSERT … ON CONFLICT DO NOTHING` against this constraint is what stops

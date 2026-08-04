@@ -10,7 +10,7 @@ from app.daily import run_daily_slot, slot_date
 from app.models.daily_run import DailyRun
 from app.models.draft import Draft
 from app.notify import card
-from tests.test_autonomous import FakeLLM, FakeRenderer, add_post, library
+from tests.test_autonomous import BrokenRenderer, FakeLLM, FakeRenderer, add_post, library
 
 
 class Delivered:
@@ -153,6 +153,49 @@ def test_a_failed_run_does_not_free_the_day_for_a_retry(ready, teams):
     assert len(runs(ready)) == 1
 
 
+def test_a_run_killed_mid_flight_is_still_reported(ready, teams):
+    """The failure the claim itself creates.
+
+    A process killed after claiming the day leaves `status="running"` forever: the claim
+    correctly stops a second run, and before `_bury_if_stale` nothing ever sent a card, so
+    the day passed with no drafts and no message. That is a scheduled job failing in
+    silence — the precise thing this slice exists to end.
+    """
+    run_daily_slot(ready, FakeLLM(), FakeRenderer(), now=at("2026-08-05 09:05"))
+    killed = runs(ready)[0]
+    killed.status = "running"
+    killed.notified_at = None
+    ready.add(killed)
+    ready.flush()
+    teams.cards.clear()
+
+    run_daily_slot(ready, FakeLLM(), FakeRenderer(), now=at("2026-08-05 12:00"))
+
+    ready.refresh(killed)
+    assert killed.status == "failed"
+    assert "did not finish" in (killed.error or "")
+    assert len(teams.cards) == 1
+    # Buried, never re-run: whatever it made before dying is real, and a retry doubles it.
+    assert len(drafts(ready)) == 1
+
+
+def test_a_run_still_in_progress_is_left_alone(ready, teams):
+    """Twenty minutes in is a run that is working, not one that died."""
+    run_daily_slot(ready, FakeLLM(), FakeRenderer(), now=at("2026-08-05 09:05"))
+    working = runs(ready)[0]
+    working.status = "running"
+    working.notified_at = None
+    ready.add(working)
+    ready.flush()
+    teams.cards.clear()
+
+    run_daily_slot(ready, FakeLLM(), FakeRenderer(), now=at("2026-08-05 09:25"))
+
+    ready.refresh(working)
+    assert working.status == "running"
+    assert teams.cards == []
+
+
 # --- delivery is retried until it lands, and never repeated afterwards ------------------
 
 
@@ -191,6 +234,25 @@ def test_the_card_carries_the_counts_and_a_link_out(ready, teams):
     assert facts["Drafts created"] == "1"
     assert teams.cards[0]["actions"][0]["url"] == settings.pixii_base_url
     assert teams.cards[0]["actions"][0]["type"] == "Action.OpenUrl"
+
+
+def test_the_card_names_each_failure_and_not_only_the_count(ready, teams):
+    """Why the count alone is not enough.
+
+    `run_autonomous` names each failure as it happens because the count says a redraw is
+    needed and the message says whether a redraw could possibly help. Routing its notifier
+    to a list dropped those messages from Teams entirely; they belong on the card.
+    """
+    topics = {"topics": [{"idea": "one"}, {"idea": "two"}]}
+    run_daily_slot(
+        ready, FakeLLM(topics=topics), BrokenRenderer(), now=at("2026-08-05 09:05")
+    )
+
+    facts = {f["title"]: f["value"] for f in teams.cards[0]["body"][1]["facts"]}
+    assert "no visual" in facts["Detail"]
+    assert facts["Drafts without a visual"] == "2"
+    # The trailing line is `run_autonomous`'s own summary, restating facts already shown.
+    assert "run complete" not in facts["Detail"]
 
 
 def test_an_uncounted_run_shows_a_dash_and_not_a_zero(session, teams):

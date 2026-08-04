@@ -1,5 +1,6 @@
 import logging
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -80,6 +81,11 @@ def start() -> None:
         max_instances=1,
     )
     if settings.enable_autonomous:
+        # Here, not on the first tick. `slot_date` builds this on every call inside
+        # `tick_daily_slot`'s try, so a typo in `DAILY_SLOT_TIMEZONE` would disable the daily
+        # run permanently while `start()` logged the bad string as though it meant something.
+        # Failing at boot is the difference between a misconfiguration and a silent outage.
+        ZoneInfo(settings.daily_slot_timezone)
         scheduler.add_job(
             tick_daily_slot,
             "interval",
