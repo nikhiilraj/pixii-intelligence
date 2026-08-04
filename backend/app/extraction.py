@@ -1,6 +1,6 @@
 import io
-import json
 import logging
+import math
 from enum import StrEnum
 
 from PIL import Image
@@ -263,6 +263,71 @@ class _RejectedProposal(RuntimeError):
     """One proposal is unusable. The others in the batch are not."""
 
 
+def _unstorable(value: object) -> str | None:
+    """Why Postgres would refuse something inside `value`, or None if it would take it.
+
+    `json.loads` is more permissive than the database on three counts, and nothing in
+    between objects. `NaN`, `Infinity` and `-Infinity` are a documented stdlib extension
+    to the JSON spec; `"\\u0000"` and `"\\ud800"` are legal JSON escapes that decode to a
+    Python string Python is perfectly happy to hold. Each one is refused only at
+    `session.flush()`, as a `DataError` that `except _RejectedProposal` does not catch —
+    so one of them in one proposal costs every sibling in the batch its slot.
+
+    Probes an entire proposal: every value at any depth, and dict keys as well as values.
+    Deliberately not the fields that reach the database today. Four rounds of this defect
+    were each closed by naming the field that had just broken, and the next round found it
+    in a field none of them had named; a probe that must be widened whenever the write
+    changes is the same bug with a delay on it. The cost is that a proposal can be dropped
+    for a character in a field nothing would have written — an acceptable trade, since the
+    only characters this rejects are ones no usable layout contains.
+    """
+    # Iterative, not recursive, and that is not a style choice. `json.loads` accepts up to
+    # 1497 levels of nesting, a slot value may be nested arbitrarily deep, and a recursive
+    # walk over a 1000-deep proposal raises RecursionError (measured, both of them). That
+    # is not a `_RejectedProposal` either, so the obvious recursive version of this
+    # function would kill the batch in exactly the way it exists to prevent.
+    stack: list[object] = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            # Checked before the encode below because a NUL encodes to UTF-8 perfectly
+            # well; it is Postgres that has no room for it. Two layers, one cause: in
+            # JSONB the server raises UntranslatableCharacter, while a text column never
+            # reaches the server at all, since psycopg refuses to put a NUL in a
+            # parameter. Serialising and scanning the result cannot do this job —
+            # `json.dumps` escapes a NUL to the six characters `\u0000` even under
+            # `ensure_ascii=False`, which is indistinguishable from text that spells that
+            # escape out literally.
+            if "\x00" in item:
+                return f"NUL (U+0000) in {item!r}"
+            try:
+                # The encode the driver has to perform, performed here where it can be
+                # caught rather than reimplemented as a surrogate-range test that could
+                # drift from it. `json.loads` combines a surrogate *pair* into the real
+                # character, so anything still in that range arrived unpaired and has no
+                # UTF-8 encoding at all.
+                item.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                return f"{exc}, in {item!r}"
+            # `!r` on both, and it is load-bearing rather than tidiness: this string ends
+            # up in a `_RejectedProposal` that `propose_visuals` hands to `log.warning`,
+            # and an unescaped lone surrogate written to a stream raises UnicodeEncodeError
+            # at log time — outside the `except _RejectedProposal`, killing the batch this
+            # function just saved. `repr` escapes both triggers to ASCII.
+        elif isinstance(item, float) and not math.isfinite(item):
+            return f"{item!r} is not a finite number"
+        elif isinstance(item, dict):
+            # Keys as well as values: a NUL in a slot's key was measured to fail exactly
+            # as one in its value does, and only this branch can reach it.
+            stack.extend(item.keys())
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    # Everything else `json.loads` can produce — int, bool, None — has no unstorable
+    # value: JSONB holds an integer of any magnitude as `numeric` (checked with 10**400).
+    return None
+
+
 def _to_visual(
     session: Session, proposal: dict, sizes: dict[str, tuple[int, int]], cohort: Cohort
 ) -> Template:
@@ -274,6 +339,13 @@ def _to_visual(
     if not isinstance(proposal, dict):
         raise _RejectedProposal(f"proposal is not an object: {proposal!r}")
 
+    # Before anything is read out of it, so that every rejection message below — each of
+    # which interpolates `{name}` or `{proposal!r}` and is then logged — is built from
+    # text that can be written to a stream.
+    unstorable = _unstorable(proposal)
+    if unstorable:
+        raise _RejectedProposal(f"proposal is not storable: {unstorable}")
+
     name = str(proposal.get("name") or "").strip()
     markup = str(proposal.get("html") or "").strip()
     if not name or not markup:
@@ -282,16 +354,6 @@ def _to_visual(
     slots = proposal.get("slots") or []
     if not isinstance(slots, list) or any(not isinstance(slot, dict) for slot in slots):
         raise _RejectedProposal(f"{name}: slots must be a list of objects, got {slots!r}")
-    try:
-        # Python's `json.loads` accepts NaN, Infinity and -Infinity as an extension to the
-        # spec; Postgres JSONB rejects all three. So a slot value of NaN parses cleanly,
-        # passes every guard above, and only fails at `session.flush()` inside
-        # `create_template` — as a `DataError`, which `except _RejectedProposal` does not
-        # catch, taking every sibling proposal in the batch down with it. Probing here
-        # turns that into an ordinary rejection that names the slot.
-        json.dumps(slots, allow_nan=False)
-    except ValueError as exc:
-        raise _RejectedProposal(f"{name}: slots are not storable as JSONB: {exc}") from exc
     declared = {str(slot.get("name")) for slot in slots}
     used = set(SLOT.findall(markup))
     if used != declared:
