@@ -7,11 +7,20 @@ from PIL import Image
 from sqlalchemy import func
 from sqlmodel import Session, col, select
 
+from app.assets import UnresolvableAsset
 from app.config import settings
+from app.generation import render_template
 from app.llm import LLM
 from app.models.post import Post
 from app.models.template import Template, TemplateKind
-from app.rendering import DEFAULT_HEIGHT, DEFAULT_WIDTH, SLOT
+from app.rendering import (
+    DEFAULT_HEIGHT,
+    DEFAULT_WIDTH,
+    SLOT,
+    HtmlRenderer,
+    MissingSlotValue,
+    UnsupportedRenderer,
+)
 from app.templates import create_template, usable_templates
 
 log = logging.getLogger(__name__)
@@ -23,6 +32,10 @@ DEFAULT_SAMPLE_SIZE = 12
 # Fewer than a hook sample: every entry here is a full image in the request, and a layout
 # repeats visibly across far fewer examples than a sentence pattern does.
 VISUAL_SAMPLE_SIZE = 5
+
+# Bounds how long the extract route can take: each one costs a render, and a rate-limited
+# render costs 35s of backoff.
+MAX_VISUAL_PROPOSALS = 5
 
 # Suffixes `media.download_post_media` stores that are still images. A video frame is not
 # the artefact — the post's picture is — so `.mp4`, `.mov` and `.webm` are not here.
@@ -401,6 +414,17 @@ def _to_visual(
         DEFAULT_HEIGHT,
     )
 
+    # Pinned on the slot's declared role, never its name. `left_image_url` reads as an
+    # asset and `hero` does not, so a name heuristic here reintroduces exactly the silent
+    # wrongness the typed-slot design closes.
+    if settings.brand_logo_asset_id is not None:
+        slots = [
+            {**slot, "default_asset_id": settings.brand_logo_asset_id}
+            if slot.get("role") == "logo"
+            else slot
+            for slot in slots
+        ]
+
     return create_template(
         session,
         kind=TemplateKind.VISUAL,
@@ -437,12 +461,24 @@ def _visual_prompt(sample: list[tuple[Post, bytes]]) -> str:
 def propose_visuals(
     session: Session,
     llm: LLM,
+    renderer: HtmlRenderer,
     *,
     platform: str = "linkedin",
     sample_size: int = VISUAL_SAMPLE_SIZE,
     cohort: Cohort = Cohort.VOICE,
 ) -> list[Template]:
-    """Propose visual layouts from the images of the strongest posts. Proposals only."""
+    """Propose visual layouts from the images of the strongest posts. Proposals only.
+
+    Every proposal is rendered once before it is offered. A layout that does not render is
+    not a proposal — it is a trap with a human's approval on it, and there are already 50
+    proposals waiting in that queue.
+
+    **This route is slow, and that is expected rather than a hang.** One LLM call plus one
+    Cloudflare render per proposal, and `CloudflareRenderer` absorbs a per-minute 429 with
+    5 + 10 + 20 = 35s of backoff. `MAX_VISUAL_PROPOSALS` bounds the worst case.
+    ponytail: rendering at approval time instead was considered and rejected — it moves
+    the failure to the moment a human has already said yes.
+    """
     cohort = Cohort(cohort)
     sample = _visual_sample(session, platform, sample_size, cohort)
     if not sample:
@@ -457,14 +493,38 @@ def propose_visuals(
 
     sizes = {post.zernio_id: _size_of(raw) for post, raw in sample}
     kept: list[Template] = []
-    for proposal in proposals:
+    for proposal in proposals[:MAX_VISUAL_PROPOSALS]:
         try:
-            kept.append(_to_visual(session, proposal, sizes, cohort))
-        except _RejectedProposal as exc:
+            template = _to_visual(session, proposal, sizes, cohort)
+            _must_render(session, template, renderer)
+        except (_RejectedProposal, MissingSlotValue, UnresolvableAsset, UnsupportedRenderer) as exc:
             # One bad layout in five must not cost the other four. The reason is logged
             # rather than raised, and the proposal simply never appears.
             log.warning("visual proposal rejected: %s", exc)
+            continue
+        kept.append(template)
+    if len(proposals) > MAX_VISUAL_PROPOSALS:
+        # Never silently. A truncated batch that reads as a complete one is how a partial
+        # answer gets mistaken for the whole picture.
+        log.warning(
+            "model returned %d visuals; kept the first %d",
+            len(proposals),
+            MAX_VISUAL_PROPOSALS,
+        )
     return kept
+
+
+def _must_render(session: Session, template: Template, renderer: HtmlRenderer) -> None:
+    """Render the proposal from its own slot examples, or reject it.
+
+    The examples are what the model wrote down as representative, so they are the honest
+    values to prove the layout with — the same ones the template editor previews from.
+    """
+    values = {
+        str(slot.get("name")): str(slot.get("example") or slot.get("name") or "")
+        for slot in template.slots
+    }
+    render_template(session, template, values, renderer)
 
 
 def _build_prompt(posts: list[Post]) -> str:

@@ -1,13 +1,19 @@
 import io
+from collections.abc import Set as AbstractSet
 from datetime import datetime
 
 import pytest
+from fastapi.testclient import TestClient
 from PIL import Image
 
 from app.config import settings
+from app.db import get_session
+from app.deps import get_html_renderer, get_llm
 from app.extraction import ExtractionError, propose_visuals
+from app.main import app
 from app.models.post import Post
 from app.models.template import TemplateKind, TemplateStatus
+from app.rendering import MissingSlotValue
 
 CURRENT = datetime(2026, 6, 1)
 
@@ -71,7 +77,7 @@ def test_sample_is_image_posts_strongest_first(session):
     add_post(session, "strong", 900, media=(png(), ".png"))
     llm = FakeLLM()
 
-    propose_visuals(session, llm)
+    propose_visuals(session, llm, FakeRenderer())
 
     assert "strong" in (llm.user or "")
     assert (llm.user or "").index("strong") < (llm.user or "").index("weak")
@@ -82,7 +88,7 @@ def test_a_post_with_no_image_is_not_in_the_sample(session):
     add_post(session, "wordy", 900)
     llm = FakeLLM()
 
-    propose_visuals(session, llm)
+    propose_visuals(session, llm, FakeRenderer())
 
     assert llm.images == []
 
@@ -91,7 +97,7 @@ def test_a_video_is_not_visual_evidence(session):
     add_post(session, "clip", 900, media=(b"not-an-image", ".mp4"))
     llm = FakeLLM()
 
-    propose_visuals(session, llm)
+    propose_visuals(session, llm, FakeRenderer())
 
     assert llm.images == []
 
@@ -105,7 +111,7 @@ def test_a_corpus_with_no_images_proposes_nothing_and_raises_nothing(session):
     """
     llm = FakeLLM()
 
-    assert propose_visuals(session, llm) == []
+    assert propose_visuals(session, llm, FakeRenderer()) == []
     assert llm.user is None  # the model was never called
 
 
@@ -119,7 +125,7 @@ def test_an_image_only_post_is_still_evidence(session):
     add_post(session, "picture-only", 900, media=(png(), ".png"), content="   ")
     llm = FakeLLM()
 
-    propose_visuals(session, llm)
+    propose_visuals(session, llm, FakeRenderer())
 
     assert len(llm.images) == 1
 
@@ -141,7 +147,7 @@ ONE_VISUAL = {
 def test_a_proposal_becomes_a_proposed_visual_template(session):
     add_post(session, "strong", 900, media=(png(), ".png"))
 
-    [template] = propose_visuals(session, FakeLLM(ONE_VISUAL))
+    [template] = propose_visuals(session, FakeLLM(ONE_VISUAL), FakeRenderer())
 
     assert template.kind is TemplateKind.VISUAL
     assert template.status is TemplateStatus.PROPOSED
@@ -157,7 +163,7 @@ def test_dimensions_come_from_the_source_image(session):
     """
     add_post(session, "strong", 900, media=(png(1080, 1080), ".png"))
 
-    [template] = propose_visuals(session, FakeLLM(ONE_VISUAL))
+    [template] = propose_visuals(session, FakeLLM(ONE_VISUAL), FakeRenderer())
 
     assert (template.body["width"], template.body["height"]) == (1080, 1080)
 
@@ -167,7 +173,7 @@ def test_dimensions_fall_back_when_the_source_is_ambiguous(session):
     add_post(session, "b", 800, media=(png(1080, 1080), ".png"))
     two_sources = {"visuals": [{**ONE_VISUAL["visuals"][0], "source_post_ids": ["a", "b"]}]}
 
-    [template] = propose_visuals(session, FakeLLM(two_sources))
+    [template] = propose_visuals(session, FakeLLM(two_sources), FakeRenderer())
 
     assert (template.body["width"], template.body["height"]) == (1080, 1350)
 
@@ -176,7 +182,7 @@ def test_an_invented_source_id_is_dropped(session):
     add_post(session, "strong", 900, media=(png(), ".png"))
     invented = {"visuals": [{**ONE_VISUAL["visuals"][0], "source_post_ids": ["strong", "made-up"]}]}
 
-    [template] = propose_visuals(session, FakeLLM(invented))
+    [template] = propose_visuals(session, FakeLLM(invented), FakeRenderer())
 
     assert template.provenance == ["strong"]
 
@@ -189,7 +195,7 @@ def test_markup_referencing_an_undeclared_slot_is_dropped(session):
         ONE_VISUAL["visuals"][0],
     ]}
 
-    proposals = propose_visuals(session, FakeLLM(broken))
+    proposals = propose_visuals(session, FakeLLM(broken), FakeRenderer())
 
     assert [t.name for t in proposals] == ["ranked-bars"]
 
@@ -201,21 +207,21 @@ def test_a_declared_slot_missing_from_the_markup_is_dropped(session):
         "slots": [*ONE_VISUAL["visuals"][0]["slots"], {"name": "unused", "type": "text"}],
     }]}
 
-    assert propose_visuals(session, FakeLLM(orphan)) == []
+    assert propose_visuals(session, FakeLLM(orphan), FakeRenderer()) == []
 
 
 def test_a_response_without_a_visuals_list_is_an_extraction_error(session):
     add_post(session, "strong", 900, media=(png(), ".png"))
 
     with pytest.raises(ExtractionError):
-        propose_visuals(session, FakeLLM({"layouts": []}))
+        propose_visuals(session, FakeLLM({"layouts": []}), FakeRenderer())
 
 
 def test_the_prompt_carries_the_brand_tokens(session):
     add_post(session, "strong", 900, media=(png(), ".png"))
     llm = FakeLLM(ONE_VISUAL)
 
-    propose_visuals(session, llm)
+    propose_visuals(session, llm, FakeRenderer())
 
     assert "#d65831" in (llm.system or "")
 
@@ -224,7 +230,7 @@ def test_a_visuals_entry_that_is_not_an_object_does_not_cost_its_siblings(sessio
     add_post(session, "strong", 900, media=(png(), ".png"))
     malformed = {"visuals": ["not an object", ONE_VISUAL["visuals"][0]]}
 
-    proposals = propose_visuals(session, FakeLLM(malformed))
+    proposals = propose_visuals(session, FakeLLM(malformed), FakeRenderer())
 
     assert [t.name for t in proposals] == ["ranked-bars"]
 
@@ -236,7 +242,7 @@ def test_a_malformed_slots_list_does_not_cost_its_siblings(session):
         ONE_VISUAL["visuals"][0],
     ]}
 
-    proposals = propose_visuals(session, FakeLLM(malformed))
+    proposals = propose_visuals(session, FakeLLM(malformed), FakeRenderer())
 
     assert [t.name for t in proposals] == ["ranked-bars"]
 
@@ -248,7 +254,7 @@ def test_a_non_string_name_does_not_cost_its_siblings(session):
         ONE_VISUAL["visuals"][0],
     ]}
 
-    proposals = propose_visuals(session, FakeLLM(malformed))
+    proposals = propose_visuals(session, FakeLLM(malformed), FakeRenderer())
 
     assert "ranked-bars" in [t.name for t in proposals]
 
@@ -260,7 +266,7 @@ def test_a_non_list_source_post_ids_does_not_cost_its_siblings(session):
         ONE_VISUAL["visuals"][0],
     ]}
 
-    proposals = propose_visuals(session, FakeLLM(malformed))
+    proposals = propose_visuals(session, FakeLLM(malformed), FakeRenderer())
 
     assert [t.name for t in proposals] == ["ranked-bars"]
 
@@ -276,7 +282,7 @@ def test_a_nested_source_post_id_does_not_cost_its_siblings(session):
         ONE_VISUAL["visuals"][0],
     ]}
 
-    proposals = propose_visuals(session, FakeLLM(malformed))
+    proposals = propose_visuals(session, FakeLLM(malformed), FakeRenderer())
 
     assert [t.name for t in proposals] == ["malformed", "ranked-bars"]
 
@@ -296,7 +302,7 @@ def test_a_nan_slot_value_does_not_cost_its_siblings(session):
         ONE_VISUAL["visuals"][0],
     ]}
 
-    proposals = propose_visuals(session, FakeLLM(malformed))
+    proposals = propose_visuals(session, FakeLLM(malformed), FakeRenderer())
 
     assert [t.name for t in proposals] == ["ranked-bars"]
 
@@ -327,7 +333,7 @@ def test_a_nul_in_a_slot_value_does_not_cost_its_siblings(session):
         ONE_VISUAL["visuals"][0],
     ]}
 
-    proposals = propose_visuals(session, FakeLLM(malformed))
+    proposals = propose_visuals(session, FakeLLM(malformed), FakeRenderer())
 
     assert [t.name for t in proposals] == ["ranked-bars"]
 
@@ -341,7 +347,7 @@ def test_a_nul_in_a_slot_key_does_not_cost_its_siblings(session):
         ONE_VISUAL["visuals"][0],
     ]}
 
-    proposals = propose_visuals(session, FakeLLM(malformed))
+    proposals = propose_visuals(session, FakeLLM(malformed), FakeRenderer())
 
     assert [t.name for t in proposals] == ["ranked-bars"]
 
@@ -354,7 +360,7 @@ def test_a_nul_in_the_html_does_not_cost_its_siblings(session):
         ONE_VISUAL["visuals"][0],
     ]}
 
-    proposals = propose_visuals(session, FakeLLM(malformed))
+    proposals = propose_visuals(session, FakeLLM(malformed), FakeRenderer())
 
     assert [t.name for t in proposals] == ["ranked-bars"]
 
@@ -367,7 +373,7 @@ def test_a_nul_in_the_rationale_does_not_cost_its_siblings(session):
         ONE_VISUAL["visuals"][0],
     ]}
 
-    proposals = propose_visuals(session, FakeLLM(malformed))
+    proposals = propose_visuals(session, FakeLLM(malformed), FakeRenderer())
 
     assert [t.name for t in proposals] == ["ranked-bars"]
 
@@ -380,7 +386,7 @@ def test_a_nul_in_the_name_does_not_cost_its_siblings(session):
         ONE_VISUAL["visuals"][0],
     ]}
 
-    proposals = propose_visuals(session, FakeLLM(malformed))
+    proposals = propose_visuals(session, FakeLLM(malformed), FakeRenderer())
 
     assert [t.name for t in proposals] == ["ranked-bars"]
 
@@ -394,7 +400,7 @@ def test_a_lone_surrogate_does_not_cost_its_siblings(session):
         ONE_VISUAL["visuals"][0],
     ]}
 
-    proposals = propose_visuals(session, FakeLLM(malformed))
+    proposals = propose_visuals(session, FakeLLM(malformed), FakeRenderer())
 
     assert [t.name for t in proposals] == ["ranked-bars"]
 
@@ -415,6 +421,131 @@ def test_a_deeply_nested_slot_value_does_not_cost_its_siblings(session):
         ONE_VISUAL["visuals"][0],
     ]}
 
-    proposals = propose_visuals(session, FakeLLM(deep))
+    proposals = propose_visuals(session, FakeLLM(deep), FakeRenderer())
 
     assert [t.name for t in proposals] == ["deep", "ranked-bars"]
+
+
+class FakeRenderer:
+    """Screenshots, or refuses the layouts named in `broken`."""
+
+    # `AbstractSet`, not `set`: the brief's literal `set[str] = frozenset()` types the
+    # parameter as mutable but defaults it to an immutable instance, which mypy rejects as
+    # an incompatible default. `broken` is only ever read via `in`, so the read-only
+    # supertype both `set` and `frozenset` satisfy is the honest type here.
+    def __init__(self, broken: AbstractSet[str] = frozenset()):
+        self.broken = broken
+        self.rendered: list[str] = []
+
+    def screenshot(self, html: str, width: int, height: int) -> bytes:
+        self.rendered.append(html)
+        if any(name in html for name in self.broken):
+            raise MissingSlotValue("nothing to fill it with")
+        return b"PNG"
+
+
+def test_a_proposal_that_does_not_render_is_dropped(session):
+    """A layout that fails is not a proposal — it is a trap with an approval on it."""
+    add_post(session, "strong", 900, media=(png(), ".png"))
+    two = {"visuals": [
+        {**ONE_VISUAL["visuals"][0], "name": "bad", "html": "<h1>BOOM {headline}</h1>",
+         "slots": [{"name": "headline", "type": "text", "example": "x"}]},
+        ONE_VISUAL["visuals"][0],
+    ]}
+
+    proposals = propose_visuals(session, FakeLLM(two), FakeRenderer(broken={"BOOM"}))
+
+    assert [t.name for t in proposals] == ["ranked-bars"]
+
+
+def test_every_kept_proposal_was_rendered_once(session):
+    add_post(session, "strong", 900, media=(png(), ".png"))
+    renderer = FakeRenderer()
+
+    propose_visuals(session, FakeLLM(ONE_VISUAL), renderer)
+
+    assert len(renderer.rendered) == 1
+    assert "PRIME DAY 2026" in renderer.rendered[0]
+
+
+def test_a_logo_role_is_pinned_to_the_configured_asset(session, monkeypatch):
+    monkeypatch.setattr(settings, "brand_logo_asset_id", 42)
+    add_post(session, "strong", 900, media=(png(), ".png"))
+    with_logo = {"visuals": [{
+        "name": "with-logo",
+        "html": "<h1>{headline}</h1><img src='{mark}'>",
+        "slots": [
+            {"name": "headline", "type": "text", "example": "x"},
+            {"name": "mark", "type": "image_url", "role": "logo", "example": "https://x/y.png"},
+        ],
+        "source_post_ids": ["strong"],
+    }]}
+
+    [template] = propose_visuals(session, FakeLLM(with_logo), FakeRenderer())
+
+    mark = next(s for s in template.slots if s["name"] == "mark")
+    assert mark["default_asset_id"] == 42
+
+
+def test_a_slot_merely_named_logo_is_not_pinned(session, monkeypatch):
+    """Pinned on the declared role, never the name.
+
+    `left_image_url` reads as an asset and `hero` does not — the same reason
+    `asset_slots` reads `type` rather than guessing.
+    """
+    monkeypatch.setattr(settings, "brand_logo_asset_id", 42)
+    add_post(session, "strong", 900, media=(png(), ".png"))
+    named = {"visuals": [{
+        "name": "named-only",
+        "html": "<h1>{headline}</h1><img src='{logo}'>",
+        "slots": [
+            {"name": "headline", "type": "text", "example": "x"},
+            {"name": "logo", "type": "image_url", "example": "https://x/y.png"},
+        ],
+        "source_post_ids": ["strong"],
+    }]}
+
+    [template] = propose_visuals(session, FakeLLM(named), FakeRenderer())
+
+    assert "default_asset_id" not in next(s for s in template.slots if s["name"] == "logo")
+
+
+def test_no_configured_logo_leaves_the_slot_unpinned_and_raises_nothing(session, monkeypatch):
+    """A first run happens before anyone has uploaded a logo."""
+    monkeypatch.setattr(settings, "brand_logo_asset_id", None)
+    add_post(session, "strong", 900, media=(png(), ".png"))
+    with_logo = {"visuals": [{
+        "name": "with-logo",
+        "html": "<h1>{headline}</h1><img src='{mark}'>",
+        "slots": [
+            {"name": "headline", "type": "text", "example": "x"},
+            {"name": "mark", "type": "image_url", "role": "logo", "example": "https://x/y.png"},
+        ],
+        "source_post_ids": ["strong"],
+    }]}
+
+    [template] = propose_visuals(session, FakeLLM(with_logo), FakeRenderer())
+
+    assert "default_asset_id" not in next(s for s in template.slots if s["name"] == "mark")
+
+
+def test_extract_visuals_route_returns_proposals(session):
+    add_post(session, "strong", 900, media=(png(), ".png"))
+    session.commit()
+
+    # `TestClient(app)` otherwise gets its own `get_session()` — a fresh connection that
+    # cannot see this test's row without a real commit crossing connections. Overriding it
+    # to the test's own session is what `client_with()` does in test_api_templates.py; the
+    # brief's version of this test omitted it and returned no proposals, because the
+    # route's fresh connection never saw "strong" at all.
+    app.dependency_overrides[get_session] = lambda: session
+    app.dependency_overrides[get_llm] = lambda: FakeLLM(ONE_VISUAL)
+    app.dependency_overrides[get_html_renderer] = lambda: FakeRenderer()
+    try:
+        response = TestClient(app).post("/templates/extract/visuals")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    assert [t["name"] for t in response.json()] == ["ranked-bars"]
+    assert response.json()[0]["status"] == "proposed"

@@ -103,6 +103,14 @@ class Settings(BaseSettings):
     cloudflare_account_id: str = ""
     cloudflare_browser_rendering_token: str = Field(default="", repr=False)
 
+    # The Asset holding the real brand logo. Extraction pins it as the default for every
+    # slot a proposal declares with `role: "logo"`, so the mark is embedded file bytes and
+    # no model ever draws it.
+    #
+    # Not a credential — a row id — so no `repr=False` and no /health flag. Unset is the
+    # normal first-run state: a logo slot simply carries no default and the picker asks.
+    brand_logo_asset_id: int | None = None
+
     def configured(self) -> dict[str, bool]:
         """Which credentials are present, without revealing any value."""
         return {
