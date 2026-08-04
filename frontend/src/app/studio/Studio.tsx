@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  API_BASE,
   assetSrc,
   calls,
   postForm,
@@ -620,6 +621,10 @@ export default function Studio({
   const [picked, setPicked] = useState<Picked>({ hook: null, structure: null, visual: null });
   const [reason, setReason] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(initialDraft);
+  // The previous-image URL is stable while its bytes are not: redraw and restore both replace
+  // what that endpoint serves. A small revision makes the browser re-read it after either
+  // mutation instead of showing a cached comparison from one action ago.
+  const [visualRevision, setVisualRevision] = useState(0);
   // The batch of variants being chosen between, or `null`. It and `draft` share the right column
   // and are kept mutually exclusive by every handler that sets either: a batch left standing over
   // a draft that was just written would hide a real row, which is this page's recurring bug —
@@ -1018,19 +1023,51 @@ export default function Studio({
             </article>
 
             {draft.visual_png ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={`data:image/png;base64,${draft.visual_png}`}
-                alt="Generated visual"
-                className="w-full max-w-md rounded-card border border-border"
-              />
+              <div
+                className={
+                  draft.has_previous_visual
+                    ? "grid max-w-3xl gap-4 sm:grid-cols-2"
+                    : "max-w-md"
+                }
+              >
+                <figure className="space-y-2">
+                  <figcaption className="font-mono text-caption uppercase tracking-label text-muted">
+                    Current
+                  </figcaption>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={`data:image/png;base64,${draft.visual_png}`}
+                    alt="Generated visual"
+                    className="w-full rounded-card border border-border"
+                  />
+                </figure>
+                {draft.has_previous_visual && (
+                  <figure className="space-y-2">
+                    <figcaption className="font-mono text-caption uppercase tracking-label text-muted">
+                      Before redraw
+                    </figcaption>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={`${API_BASE}/drafts/${draft.id}/previous-visual?revision=${visualRevision}`}
+                      alt="Previous visual"
+                      className="w-full rounded-card border border-border"
+                    />
+                  </figure>
+                )}
+              </div>
             ) : (
               <p className="text-sm text-amber-700 dark:text-amber-400">
                 Visual not produced: {draft.visual_error ?? "unknown"} — the text is unaffected.
               </p>
             )}
 
-            <div className="flex gap-2">
+            {draft.visual_png && draft.visual_error && (
+              <p role="status" className="text-sm text-amber-700 dark:text-amber-400">
+                Redraw failed, so the last working visual is still in place: {draft.visual_error}
+              </p>
+            )}
+
+            <div className="flex flex-wrap gap-2">
               <Button
                 variant="outline"
                 disabled={busy !== null}
@@ -1046,11 +1083,29 @@ export default function Studio({
                 disabled={busy !== null}
                 onClick={async () => {
                   const d = await call<Draft>(`/drafts/${draft.id}/regenerate-visual`);
-                  if (d) setDraft(d);
+                  if (d) {
+                    setDraft(d);
+                    setVisualRevision((revision) => revision + 1);
+                  }
                 }}
               >
                 Redraw visual
               </Button>
+              {draft.has_previous_visual && (
+                <Button
+                  variant="outline"
+                  disabled={busy !== null}
+                  onClick={async () => {
+                    const d = await call<Draft>(`/drafts/${draft.id}/restore-visual`);
+                    if (d) {
+                      setDraft(d);
+                      setVisualRevision((revision) => revision + 1);
+                    }
+                  }}
+                >
+                  Restore previous visual
+                </Button>
+              )}
               {/* Identical for a loaded draft and a just-written one, because they are the same
                   value in the same state — `initialDraft` seeds it. Disabled once
                   `zernio_post_id` is set: pushing creates a Zernio DRAFT and nothing here ever

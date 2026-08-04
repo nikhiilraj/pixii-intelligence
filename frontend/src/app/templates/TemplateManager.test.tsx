@@ -78,7 +78,7 @@ const ALLOWED = [
   /^\/templates$/,
   /^\/templates\/\d+$/,
   /^\/templates\/\d+\/(approve|retire)$/,
-  /^\/templates\/extract\/(hooks|structures)\?/,
+  /^\/templates\/extract\/(hooks|structures|visuals)\?/,
 ];
 
 function stubApi(response: Response = jsonResponse(200, { ok: true })) {
@@ -259,6 +259,18 @@ describe("the extraction cohort reaching the query string", () => {
     ]);
   });
 
+  it("sends the cohort when extracting visual layouts", async () => {
+    const fetchStub = stubApi();
+    render(<TemplateManager initial={LIBRARY} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /extract visual layouts/i }));
+
+    await waitFor(() => expect(fetchStub).toHaveBeenCalled());
+    expect(requests(fetchStub)).toEqual([
+      { path: "/templates/extract/visuals?cohort=voice", method: "POST", body: undefined },
+    ]);
+  });
+
   it("carries either cohort into either endpoint's query", () => {
     // The component tests above can only prove the default: `cohort` is set by a Radix trigger,
     // which is a button that cannot be driven in jsdom. So the mapping from a chosen cohort to
@@ -268,6 +280,9 @@ describe("the extraction cohort reaching the query string", () => {
     expect(extractPath("hooks", "inspiration")).toBe("/templates/extract/hooks?cohort=inspiration");
     expect(extractPath("structures", "inspiration")).toBe(
       "/templates/extract/structures?sample_size=27&cohort=inspiration",
+    );
+    expect(extractPath("visuals", "inspiration")).toBe(
+      "/templates/extract/visuals?cohort=inspiration",
     );
   });
 

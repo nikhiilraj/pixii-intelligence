@@ -59,7 +59,7 @@ function cohortOf(template: Template): string | null {
  *  these endpoints already carries a param and the other does not, so `?` vs `&` is not the
  *  same by hand. Both call sites go through it; leaving one inline would put a second copy
  *  where a mutation could hide. */
-export function extractPath(what: "hooks" | "structures", cohort: Cohort): string {
+export function extractPath(what: "hooks" | "structures" | "visuals", cohort: Cohort): string {
   // Annotated: without it the ternary widens to a union carrying `sample_size?: undefined`,
   // which `URLSearchParams` does not accept.
   const params: Record<string, string> =
@@ -493,9 +493,17 @@ export default function TemplateManager({
           >
             Extract structures
           </Button>
+          <Button
+            variant="outline"
+            onClick={() => send(extractPath("visuals", cohort))}
+            disabled={busy}
+          >
+            Extract visual layouts
+          </Button>
           <span className="text-xs text-muted">
-            Proposes patterns from the strongest posts in the chosen cohort. Nothing becomes
-            usable until you approve it.
+            Proposes patterns from the strongest posts in the chosen cohort. Visual extraction
+            takes longer because every proposal is test-rendered. Nothing becomes usable until
+            you approve it.
           </span>
         </div>
 
@@ -507,7 +515,7 @@ export default function TemplateManager({
           <Card className="bg-surface-2 text-body">
             <p className="font-medium">No template exists yet.</p>
             <p className="mt-1 text-muted">
-              Extraction reads the corpus and proposes hooks, structures and visuals — the two
+              Extraction reads the corpus and proposes hooks, structures and visuals — the three
               buttons above — and nothing it proposes becomes usable until you approve it. A
               template can also be written by hand in the form beside this list.
             </p>

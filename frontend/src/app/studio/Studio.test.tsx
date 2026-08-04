@@ -133,6 +133,7 @@ const DRAFT: Draft = {
   asset_values: { left_image_url: "7", right_image_url: "9" },
   visual_error: null,
   visual_png: null,
+  has_previous_visual: false,
   zernio_post_id: null,
   lineage: { hook: null, structure: null, visual: null },
 };
@@ -773,6 +774,72 @@ describe("the produced draft", () => {
     // field would be absent here and these rows would silently not render.
     await waitFor(() => expect(screen.getByText(/Pixii wordmark \(#7\)/)).toBeInTheDocument());
     expect(screen.getByText(/Product shot \(#9\)/)).toBeInTheDocument();
+  });
+
+  it("compares and restores the image a redraw replaced", async () => {
+    const withHistory: Draft = {
+      ...DRAFT,
+      visual_png: "CURRENT",
+      has_previous_visual: true,
+    };
+    const fetchStub = vi.fn(() => Promise.resolve(jsonResponse(200, withHistory)));
+    vi.stubGlobal("fetch", fetchStub);
+
+    render(
+      <Studio
+        templates={library([])}
+        assets={LIBRARY}
+        drafts={[]}
+        initialDraft={withHistory}
+      />,
+    );
+
+    expect(screen.getByRole("img", { name: "Generated visual" })).toHaveAttribute(
+      "src",
+      "data:image/png;base64,CURRENT",
+    );
+    expect(screen.getByRole("img", { name: "Previous visual" })).toHaveAttribute(
+      "src",
+      "http://localhost:8000/drafts/11/previous-visual?revision=0",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore previous visual" }));
+
+    await waitFor(() => expect(fetchStub).toHaveBeenCalledTimes(1));
+    const [url, init] = fetchStub.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(url)).toMatch(/\/drafts\/11\/restore-visual$/);
+    expect(init.method).toBe("POST");
+    await waitFor(() =>
+      expect(screen.getByRole("img", { name: "Previous visual" })).toHaveAttribute(
+        "src",
+        "http://localhost:8000/drafts/11/previous-visual?revision=1",
+      ),
+    );
+  });
+
+  it("explains that a failed redraw kept the working image", () => {
+    render(
+      <Studio
+        templates={library([])}
+        assets={LIBRARY}
+        drafts={[]}
+        initialDraft={{ ...DRAFT, visual_png: "WORKING", visual_error: "renderer unavailable" }}
+      />,
+    );
+
+    expect(screen.getByRole("img", { name: "Generated visual" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Redraw failed, so the last working visual is still in place: renderer unavailable",
+    );
+  });
+
+  it("does not offer a comparison before a visual has been replaced", () => {
+    render(
+      <Studio templates={library([])} assets={LIBRARY} drafts={[]} initialDraft={DRAFT} />,
+    );
+
+    expect(screen.queryByRole("img", { name: "Previous visual" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Restore previous visual" })).not.toBeInTheDocument();
   });
 });
 
