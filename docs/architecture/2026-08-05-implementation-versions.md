@@ -297,6 +297,48 @@ Chosen over visual production 2026-08-05. Blueprint §11–12. Slices, in order:
    spend ceiling enforced server-side. `SpendMeter` already exists and extends to this.
 7. **Research UI.** Sources, contradictions, unknowns, claim coverage on the draft screen.
 
+### Build order, and what actually parallelises
+
+The slices are numbered by dependency, not by priority, and only some of them can run at
+once. Two limits decide this and neither is negotiable:
+
+- **One migration owner per wave.** Two agents each chaining a migration off the same head
+  produce two heads, and Alembic stops.
+- **Split by file, not by ambition.** Two agents editing `generation.py` overwrite each
+  other. This has already happened once on this project.
+
+**Wave 1 — started 2026-08-05, three agents, disjoint files:**
+
+| Owner | Slice | Files |
+|---|---|---|
+| `fetcher` | 3, hardened fetcher | `app/fetching.py`, `tests/test_fetching.py`. No migration, no shared file. |
+| `prompts` | 2, registry + traces | `app/prompts/`, `app/models/generation_trace.py`, `generation.py`/`autonomous.py` (prompt moves only). **Owns migrations this wave.** |
+| `browser-check` | v2 verification | `frontend/` only. Not a build task — see below. |
+
+`browser-check` is in this wave because the confirmation panel shipped with a green suite
+and no human has looked at it. `CLAUDE.md` names three defects this project actually shipped
+that only rendering caught. Building v3 on top of an unlooked-at v2 repeats that.
+
+**The fetcher's interface is the contract wave 2 builds against**, fixed before either
+started so slice 4 does not have to wait for slice 3 to finish:
+
+```python
+@dataclass(frozen=True)
+class Fetched:
+    url: str              # the FINAL url after redirects, not the one asked for
+    title: str | None     # None when absent. Never "".
+    text: str             # readable text, active content stripped
+    content_type: str
+    content_hash: str     # sha256 of the raw bytes, hex
+    fetched_at: datetime
+
+def fetch(url: str) -> Fetched: ...   # raises UnsafeUrl | FetchFailed
+```
+
+**Wave 2, after wave 1 lands:** slice 4 (research dossier — needs the fetcher and the
+registry), then slice 1 (editorial brief — needs the registry), then 5 and 6. Slice 7 is
+frontend and needs 4's API to exist.
+
 **Two rules survive v3 unchanged.** The rubric grade means *ready for editorial review*,
 never *likely to perform* — blueprint invariant 6. And **never rank**: §9 step 6 permits
 picking a default review candidate by craft grade, and that is all. No sort-by-performance
