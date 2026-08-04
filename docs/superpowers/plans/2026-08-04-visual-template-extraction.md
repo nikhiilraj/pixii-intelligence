@@ -992,12 +992,27 @@ class _RejectedProposal(RuntimeError):
 def _to_visual(
     session: Session, proposal: dict, sizes: dict[str, tuple[int, int]], cohort: Cohort
 ) -> Template:
-    name = (proposal.get("name") or "").strip()
-    markup = (proposal.get("html") or "").strip()
+    # `proposal` is annotated `dict` and is not one — it is an element of a list parsed by
+    # `json.loads` from a model response, so it can be any JSON type. A type-checker will
+    # call this guard dead code. It is not: the annotation is the lie, not the check.
+    # ponytail: annotation left loose to match `_to_template` and `_to_structure`, which
+    # take the same untyped element the same way. Widen all three together or none.
+    if not isinstance(proposal, dict):
+        raise _RejectedProposal(f"proposal is not an object: {proposal!r}")
+
+    # `str(...)` around each read, not an isinstance branch per field. A model returning
+    # `{"name": 5}` is as plausible as one returning no name at all, and `(5 or "").strip()`
+    # raises `AttributeError` — which `except _RejectedProposal` does not catch, so one
+    # wrong-typed field would kill every sibling proposal in the batch. Coercion is the
+    # idiom this file already uses for exactly this, e.g. `str(slot.get("name"))`.
+    name = str(proposal.get("name") or "").strip()
+    markup = str(proposal.get("html") or "").strip()
     if not name or not markup:
         raise _RejectedProposal(f"proposal missing name or html: {proposal!r}")
 
     slots = proposal.get("slots") or []
+    if not isinstance(slots, list) or any(not isinstance(slot, dict) for slot in slots):
+        raise _RejectedProposal(f"{name}: slots must be a list of objects, got {slots!r}")
     declared = {str(slot.get("name")) for slot in slots}
     used = set(SLOT.findall(markup))
     if used != declared:
@@ -1027,7 +1042,7 @@ def _to_visual(
             "html": markup,
             "width": width,
             "height": height,
-            "rationale": (proposal.get("rationale") or "").strip(),
+            "rationale": str(proposal.get("rationale") or "").strip(),
             "cohort": cohort.value,
         },
         slots=slots,
