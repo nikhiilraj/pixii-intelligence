@@ -496,7 +496,12 @@ def propose_visuals(
             # that never opened. Two narrower versions of this line each shipped one
             # exception type short, and each time the cost was every *other* proposal in
             # the batch. `_draw_visual` takes the same catch for the same reason.
-            log.warning("visual proposal rejected: %s", exc)
+            #
+            # The type is logged alongside the message because the catch is this broad: a
+            # `_RejectedProposal` from a malformed model response and an `AttributeError`
+            # from a real bug in `_to_visual` would otherwise read identically in the log,
+            # and the type is the only thing that tells them apart.
+            log.warning("visual proposal rejected: %s: %s", type(exc).__name__, exc)
             continue
         kept.append(template)
     if len(proposals) > MAX_VISUAL_PROPOSALS:
