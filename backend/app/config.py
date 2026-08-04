@@ -73,7 +73,22 @@ class Settings(BaseSettings):
     # cannot flood the review queue. Off by default — unattended generation is opt-in.
     enable_autonomous: bool = False
     autonomous_max_drafts: int = 2
-    autonomous_interval_hours: int = 24
+
+    # The daily editorial slot. The hour is **local** to `daily_slot_timezone`, and the run
+    # is keyed on the local date — see `daily.slot_date` for why a UTC date runs the slot
+    # twice on some days and never on others.
+    #
+    # The tick is not the slot. It asks "is today's slot due and unclaimed", which is why a
+    # process that was asleep at 09:00 still runs the day's slot when it wakes. Thirty
+    # minutes is one indexed lookup on a table with one row per day; the interval bounds how
+    # late a recovered run can be, not how much work is done.
+    daily_slot_hour: int = 9
+    daily_slot_timezone: str = "Asia/Kolkata"
+    daily_tick_minutes: int = 30
+
+    # Where a Teams card's link points. Not a credential and not a secret — it is the
+    # address of this app's own web UI, which authorises on its own when the link opens.
+    pixii_base_url: str = "http://localhost:3000"
 
     # How many drafts one idea may be written as at `POST /drafts/variants`. **A ceiling, not a
     # default**: N variants is N times the paid completions and N renders inside one request, and

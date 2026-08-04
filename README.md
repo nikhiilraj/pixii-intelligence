@@ -49,6 +49,7 @@ API assumptions are backed by the companion
 - Record a verdict — **Worked**, **Didn't**, or **Mixed** — and its reasoning.
 - Feed those human-written lessons into future generation.
 - Produce capped autonomous draft batches without pushing them anywhere.
+- Run that batch once per local day, claimed durably, and report it as a Teams card.
 - Show every point where the workflow is waiting on a human in one Inbox.
 
 ## How to use it
