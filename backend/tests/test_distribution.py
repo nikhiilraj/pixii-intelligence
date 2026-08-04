@@ -15,6 +15,7 @@ from app.distribution import (
     NotPushed,
     PublishingDisabled,
     StaleRevision,
+    _record,
     idempotency_key,
     resolve,
     scheduled_draft_ids,
@@ -26,6 +27,7 @@ from app.models.publication import (
     CANCEL_SCHEDULE,
     FAILED,
     PUBLISH_NOW,
+    REQUESTED,
     SCHEDULE,
     Publication,
 )
@@ -344,6 +346,86 @@ def test_a_refusal_is_not_retried(session, enabled):
     submit(session, draft, client, action=PUBLISH_NOW, revision=1)
 
     assert len(zernio.puts) == 1
+
+
+def test_a_command_that_died_in_flight_is_sent_again(session, enabled):
+    """The hole the record-before-sending guard opened, and the reason to test it.
+
+    A process killed between committing the row and getting an answer leaves `requested`
+    with nothing in flight. Before this, the retry found that row, returned it, and answered
+    HTTP 200 with `state: "requested"` — which reads as accepted. The post was never
+    scheduled and nothing anywhere noticed. Same shape as the daily slot's stale `running`
+    row: a claim that blocks its own retry.
+
+    Safe to resend because this is a PUT: it sets the same fields on the same post id, and
+    the same derived key rides as `x-request-id` either way.
+    """
+    draft = pushed(session)
+    zernio = Zernio()
+    client = zernio.client()
+
+    # Exactly what a killed process leaves behind: the row committed, nothing sent.
+    dead = _record(
+        session,
+        draft,
+        action=PUBLISH_NOW,
+        revision=1,
+        local=None,
+        timezone=None,
+        when=None,
+    )[0]
+    assert dead.state == REQUESTED
+    assert zernio.puts == []
+
+    publication = submit(session, draft, client, action=PUBLISH_NOW, revision=1)
+
+    assert publication.id == dead.id
+    assert publication.state == ACCEPTED
+    assert len(zernio.puts) == 1
+    assert len(rows(session)) == 1
+
+
+def test_an_accepted_command_is_not_sent_again(session, enabled):
+    """The other half: resending on `requested` must not resend on `accepted`."""
+    draft = pushed(session)
+    zernio = Zernio()
+    client = zernio.client()
+
+    submit(session, draft, client, action=PUBLISH_NOW, revision=1)
+    submit(session, draft, client, action=PUBLISH_NOW, revision=1)
+
+    assert len(zernio.puts) == 1
+
+
+def test_an_unknown_timezone_is_a_client_error(session, enabled):
+    """`ZoneInfoNotFoundError` subclasses `KeyError`, not `ValueError`, so the route's
+    `except ValueError` walked past it and a typo came back as a 500."""
+    with pytest.raises(ValueError, match="IANA timezone name"):
+        submit(
+            session,
+            pushed(session),
+            Zernio().client(),
+            action=SCHEDULE,
+            revision=1,
+            local=soon(),
+            timezone="Asia/Kolkta",
+        )
+
+
+def test_an_unknown_timezone_answers_422(api, session, enabled):
+    draft = pushed(session)
+    session.commit()
+
+    response = api.post(
+        f"/drafts/{draft.id}/schedule",
+        json={
+            "revision": draft.revision,
+            "local_time": soon().isoformat(),
+            "timezone": "Asia/Kolkta",
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_the_request_id_is_the_idempotency_key(session, enabled):

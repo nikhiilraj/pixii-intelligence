@@ -1,6 +1,6 @@
 import uuid
 from datetime import UTC, datetime
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session, col, select
@@ -50,8 +50,18 @@ def resolve(local: datetime, timezone: str) -> datetime:
 
     Naive in, aware out. The caller supplies "09:00 on the 12th" and the name of the place
     that means it; this is the only spot that turns the pair into a moment.
+
+    An unknown zone is re-raised as a `ValueError`. `ZoneInfo` raises
+    `ZoneInfoNotFoundError`, which subclasses `KeyError` and not `ValueError` — so the route
+    handler's `except ValueError` walked straight past it and `Asia/Kolkta` came back as a
+    500. It is a typo in a field the client supplies; it deserves the same 422 as a time in
+    the past.
     """
-    return local.replace(tzinfo=ZoneInfo(timezone)).astimezone(UTC)
+    try:
+        zone = ZoneInfo(timezone)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(f"{timezone!r} is not an IANA timezone name") from exc
+    return local.replace(tzinfo=zone).astimezone(UTC)
 
 
 def idempotency_key(draft_id: int, revision: int, action: str, when: datetime | None) -> str:
@@ -212,10 +222,23 @@ def submit(
     publication, is_new = _record(
         session, draft, action=action, revision=revision, local=local, timezone=timezone, when=when
     )
-    if not is_new:
-        # Already sent, or already being sent. The row is the answer; no second effect.
+    if not is_new and publication.state != REQUESTED:
+        # `accepted` and `failed` are terminal. A repeat of a command that already reached a
+        # conclusion is the row, and nothing more — a refusal in particular must never be
+        # retried as though it were a timeout.
         return publication
 
+    # Falling through on `requested` is deliberate, and it closes the same hole the daily
+    # slot had: a process that died between committing this row and getting an answer would
+    # otherwise leave a claim that blocks its own retry forever. The operator would resubmit,
+    # get HTTP 200 with `state: "requested"` — which reads as accepted — and the post would
+    # never be scheduled, with nothing anywhere to notice.
+    #
+    # Resending is safe because this is a **PUT**. `create_post` had to be guarded against
+    # producing a second post; an update sets the same fields on the same post id, so the
+    # second one either changes nothing or is refused. The same derived `idempotency_key`
+    # goes out as `x-request-id` regardless, so Zernio's own duplicate window sees it as one
+    # command too.
     publication.attempts += 1
     try:
         client.update_post(
