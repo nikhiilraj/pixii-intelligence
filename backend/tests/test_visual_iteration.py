@@ -140,4 +140,46 @@ def test_a_failed_redraw_does_not_destroy_the_image_that_worked(session):
         app.dependency_overrides.clear()
 
     session.refresh(draft)
+    # `_draw_visual` itself is what clears `visual_image` on a failed render — not this
+    # route — so this is asserted to pin the state the next assertion presumes, not to
+    # claim the guard below caused it.
+    assert draft.visual_image is None
     assert draft.previous_visual == b"OLDER"
+
+
+def _redraw(session, draft_id: int, renderer) -> None:
+    app.dependency_overrides[get_session] = lambda: session
+    app.dependency_overrides[get_html_renderer] = lambda: renderer
+    try:
+        TestClient(app).post(f"/drafts/{draft_id}/regenerate-visual")
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_a_kept_image_survives_a_failed_redraw_sandwiched_between_two_successes(session):
+    """The regression this closes: a *successful* redraw wiping the kept image.
+
+    `previous` is captured as `draft.visual_image` before each redraw runs. After a failed
+    redraw, that column is already `None` — so the very next redraw, even one that
+    succeeds, would capture `None` as "previous" and overwrite a real kept image with it.
+    One bad render used to cost the *next* good one its own history, not just its own.
+    """
+    draft = a_draft_with_visual(session, image=b"A")
+    session.commit()
+
+    _redraw(session, draft.id, ConstantRenderer(b"B"))  # succeed: keeps A
+    session.refresh(draft)
+    assert draft.visual_image == b"B"
+    assert draft.previous_visual == b"A"
+
+    _redraw(session, draft.id, ExplodingRenderer())  # fail: visual_image -> None, A untouched
+    session.refresh(draft)
+    assert draft.visual_image is None
+    assert draft.previous_visual == b"A"
+
+    _redraw(session, draft.id, ConstantRenderer(b"C"))  # succeed again, from a None current
+    session.refresh(draft)
+    assert draft.visual_image == b"C"
+    # The bug: this would be None here, because `previous` was captured as the None left
+    # by the failed redraw above rather than as a real image.
+    assert draft.previous_visual == b"A"
