@@ -218,3 +218,24 @@ def test_the_prompt_carries_the_brand_tokens(session):
     propose_visuals(session, llm)
 
     assert "#d65831" in (llm.system or "")
+
+
+def test_a_visuals_entry_that_is_not_an_object_does_not_cost_its_siblings(session):
+    add_post(session, "strong", 900, media=(png(), ".png"))
+    malformed = {"visuals": ["not an object", ONE_VISUAL["visuals"][0]]}
+
+    proposals = propose_visuals(session, FakeLLM(malformed))
+
+    assert [t.name for t in proposals] == ["ranked-bars"]
+
+
+def test_a_malformed_slots_list_does_not_cost_its_siblings(session):
+    add_post(session, "strong", 900, media=(png(), ".png"))
+    malformed = {"visuals": [
+        {**ONE_VISUAL["visuals"][0], "name": "malformed", "slots": ["kicker", "headline"]},
+        ONE_VISUAL["visuals"][0],
+    ]}
+
+    proposals = propose_visuals(session, FakeLLM(malformed))
+
+    assert [t.name for t in proposals] == ["ranked-bars"]
