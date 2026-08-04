@@ -292,8 +292,16 @@ def _to_visual(
             f"undeclared {sorted(used - declared)}, unused {sorted(declared - used)}"
         )
 
+    sources = proposal.get("source_post_ids") or []
+    if not isinstance(sources, list):
+        raise _RejectedProposal(f"{name}: source_post_ids must be a list, got {sources!r}")
     # Keep only ids the model was actually shown — provenance has to be checkable.
-    provenance = [pid for pid in proposal.get("source_post_ids") or [] if pid in sizes]
+    #
+    # `isinstance(pid, str)` is not fussiness about types. `pid in sizes` raises
+    # `TypeError: unhashable type` on a list or dict element, and a TypeError is not a
+    # `_RejectedProposal` — so one nested list in one proposal would kill the whole batch,
+    # which is precisely what the rejection path exists to prevent.
+    provenance = [pid for pid in sources if isinstance(pid, str) and pid in sizes]
     # The size is the source's, and only when there is exactly one source to take it from.
     # Averaging two sizes would invent a third that no post ever used.
     width, height = sizes[provenance[0]] if len(provenance) == 1 else (
