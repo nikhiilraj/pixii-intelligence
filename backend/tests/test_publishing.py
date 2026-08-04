@@ -348,3 +348,103 @@ def test_a_presign_that_answers_200_without_an_upload_target_is_a_push_failure(s
         push_draft(session, draft, client, account_id="a")
 
     assert draft.zernio_post_id is None
+
+
+def test_the_uploaded_url_is_persisted_on_the_draft(session):
+    """Not a cache — the record that reproduces Zernio's duplicate hash on a retry."""
+    draft = a_draft_with_a_visual(session)
+
+    push_draft(session, draft, client_with_media({}), account_id="a")
+
+    assert draft.zernio_media_url == PUBLIC_URL
+
+
+def test_a_retry_after_a_lost_response_reuses_the_url_and_uploads_once(session):
+    """The case the column exists for.
+
+    Zernio accepts the post, the response never arrives, so `zernio_post_id` is never set
+    and a human pushes again. The retry must send the *same* media URL: the duplicate hash
+    covers `content + media URLs`, so a freshly presigned URL would hash differently and
+    Zernio would accept it as a genuinely new post — in a colleague's account.
+    """
+    captured: dict = {}
+    draft = a_draft_with_a_visual(session)
+
+    class LosingTheResponse:
+        """Uploads normally; the create call dies after Zernio has already accepted it."""
+
+        def __init__(self, real):
+            self._real = real
+
+        def upload_media(self, *args, **kwargs):
+            return self._real.upload_media(*args, **kwargs)
+
+        def create_post(self, *args, **kwargs):
+            raise httpx.ReadTimeout("response never arrived")
+
+    real = client_with_media(captured)
+    with pytest.raises(httpx.ReadTimeout):
+        push_draft(session, draft, LosingTheResponse(real), account_id="a")
+
+    # The URL survived the failed push — that is the whole point of committing it.
+    assert draft.zernio_media_url == PUBLIC_URL
+
+    push_draft(session, draft, real, account_id="a")
+
+    presigns = [r for r in captured["requests"] if r["path"].endswith("/media/presign")]
+    creates = [r for r in captured["requests"] if r["path"].endswith("/posts")]
+    assert len(presigns) == 1  # the retry did not upload again
+    assert len(creates) == 1
+    assert creates[0]["body"]["mediaItems"] == [{"url": PUBLIC_URL, "type": "image"}]
+
+
+def test_a_forced_repush_uploads_again_so_a_redrawn_picture_is_the_one_sent(session):
+    """`force` exists to re-push a changed draft. Reusing the stored URL there would send
+    the old image, silently — worse than the duplicate post that force already implies."""
+    captured: dict = {}
+    draft = a_draft_with_a_visual(session)
+    client = client_with_media(captured)
+
+    push_draft(session, draft, client, account_id="a")
+    draft.visual_image = b"\x89PNG\r\n\x1a\nredrawn"
+    push_draft(session, draft, client, account_id="a", force=True)
+
+    puts = [r for r in captured["requests"] if r["method"] == "PUT"]
+    assert [p["content"] for p in puts] == [
+        b"\x89PNG\r\n\x1a\nrendered",
+        b"\x89PNG\r\n\x1a\nredrawn",
+    ]
+
+
+def test_the_url_is_committed_before_the_post_is_created(session, monkeypatch):
+    """A flush here would be rolled back with the request that dies mid-create — which is
+    the one case the column exists for, so it would guard nothing while looking right.
+
+    The rollback-per-test fixture cannot observe durability directly (see conftest), so
+    this pins the ordering instead: a commit lands between the upload and the create.
+    """
+    order: list[str] = []
+    draft = a_draft_with_a_visual(session)
+    real_commit = session.commit
+
+    def recording_commit():
+        order.append("commit")
+        real_commit()
+
+    monkeypatch.setattr(session, "commit", recording_commit)
+
+    class Recording:
+        def __init__(self, real):
+            self._real = real
+
+        def upload_media(self, *args, **kwargs):
+            order.append("upload")
+            return self._real.upload_media(*args, **kwargs)
+
+        def create_post(self, *args, **kwargs):
+            order.append("create")
+            return self._real.create_post(*args, **kwargs)
+
+    push_draft(session, draft, Recording(client_with_media({})), account_id="a")
+
+    assert order == ["upload", "commit", "create"]
