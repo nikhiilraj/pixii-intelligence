@@ -351,6 +351,30 @@ def _resolve(session: Session, kind: TemplateKind, template_id: int | None) -> T
     return template
 
 
+def render_template(
+    session: Session,
+    visual: Template,
+    values: dict[str, str],
+    renderer: HtmlRenderer | ImageRenderer,
+) -> bytes:
+    """Render a visual the one way the whole application renders visuals.
+
+    Three steps, in this order, and the order is the point:
+
+    1. `chosen_assets` settles each `image_url` slot — what was picked, else the slot's
+       `default_asset_id`. It also drops any key naming a non-image slot, so a caller
+       cannot write `big_number` through this door.
+    2. `resolve_asset_values` turns each settled reference into something loadable.
+    3. `render_visual` draws it.
+
+    Preview used to skip step 1, so a slot with a pinned default previewed from its
+    `example` and generated from the asset — two pictures from one template, with nothing
+    raised. Every render path goes through here now so that cannot recur.
+    """
+    settled = {**values, **chosen_assets(visual, values)}
+    return render_visual(visual, resolve_asset_values(session, visual, settled), renderer)
+
+
 def _draw_visual(
     session: Session, draft: Draft, visual: Template, renderer: HtmlRenderer | ImageRenderer
 ) -> None:
@@ -363,8 +387,7 @@ def _draw_visual(
     which is what makes the next re-render resolvable too.
     """
     try:
-        values = resolve_asset_values(session, visual, render_values(draft))
-        draft.visual_image = render_visual(visual, values, renderer)
+        draft.visual_image = render_template(session, visual, render_values(draft), renderer)
         draft.visual_error = None
     except Exception as exc:  # noqa: BLE001 — any failure here must not cost the words
         draft.visual_image = None
