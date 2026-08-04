@@ -475,10 +475,13 @@ def redraw(
         regenerate_visual(session, draft, _renderer(session, draft, html_renderer, image_renderer))
     except NoUsableTemplates as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    # Only when the redraw produced something. `_draw_visual` records a failure by setting
-    # `visual_image = None`, and moving that None across would turn one bad render into
-    # the loss of both pictures.
-    if draft.visual_image is not None:
+    # Two conditions, and they guard different losses. The new image must exist, or a
+    # failed render would replace a good `previous_visual` with the None `_draw_visual`
+    # writes on failure. The captured one must exist too: after a failed redraw
+    # `visual_image` is already None, so the *next successful* redraw would capture that
+    # None and wipe the image actually worth keeping — a 200 response that silently
+    # destroys the thing `restore-visual` exists to bring back.
+    if draft.visual_image is not None and previous is not None:
         draft.previous_visual = previous
     session.commit()
     session.refresh(draft)
