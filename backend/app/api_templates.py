@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 from sqlmodel import col, select
 
-from app.assets import UnresolvableAsset, resolve_asset_values
+from app.assets import UnresolvableAsset
 from app.deps import HtmlRendererDep, ImageRendererDep, LLMDep, SessionDep
 from app.extraction import (
     DEFAULT_SAMPLE_SIZE,
@@ -13,14 +13,10 @@ from app.extraction import (
     propose_hooks,
     propose_structures,
 )
+from app.generation import render_template
 from app.llm import LLMResponseError
 from app.models.template import Template, TemplateKind, TemplateStatus
-from app.rendering import (
-    ImageGenerationError,
-    MissingSlotValue,
-    UnsupportedRenderer,
-    render_visual,
-)
+from app.rendering import ImageGenerationError, MissingSlotValue, UnsupportedRenderer
 from app.templates import (
     RetiredTemplateError,
     approve,
@@ -172,6 +168,44 @@ def extract_structures(
     return proposals
 
 
+class PreviewIn(BaseModel):
+    body: dict = {}
+    slots: list[dict] = []
+    values: dict[str, str] = {}
+
+
+@router.post("/preview")
+def preview_unsaved(
+    session: SessionDep,
+    html_renderer: HtmlRendererDep,
+    image_renderer: ImageRendererDep,
+    payload: PreviewIn,
+) -> Response:
+    """Render a visual body that has not been saved, for the template editor.
+
+    An unsaved edit has no id, so this takes the body and slots directly. The row is
+    built in memory and never added to the session — previewing must not be able to
+    write a template, and a `Template(...)` that is never `session.add`ed cannot.
+
+    **`html` only.** The saved route guards on `kind`, which this route cannot: it
+    constructs the row, so `kind` is whatever it says. Without this check a body reading
+    `{"renderer": "ai", "prompt": "..."}` reaches `AzureImageRenderer` — a paid image
+    generation triggered from a textarea, with no id, no rate limit and nothing saved to
+    show for it. The editor only ever previews markup, so refusing the other renderer
+    costs nothing.
+    """
+    if payload.body.get("renderer") != "html":
+        raise HTTPException(
+            status_code=501,
+            detail="unsaved preview renders html only; save the template to preview an ai visual",
+        )
+    draft = Template(
+        family_id="preview", version=0, kind=TemplateKind.VISUAL,
+        name="preview", body=payload.body, slots=payload.slots,
+    )
+    return _rendered(session, draft, payload.values, html_renderer, image_renderer)
+
+
 @router.post("/{template_id}/preview")
 def preview_visual(
     session: SessionDep,
@@ -190,9 +224,16 @@ def preview_visual(
     template = _load(session, template_id)
     if template.kind is not TemplateKind.VISUAL:
         raise HTTPException(status_code=400, detail="only visual templates render")
+    return _rendered(session, template, values, html_renderer, image_renderer)
+
+
+def _rendered(
+    session: SessionDep, template: Template, values: dict[str, str],
+    html_renderer, image_renderer,
+) -> Response:
     renderer = image_renderer if template.body.get("renderer") == "ai" else html_renderer
     try:
-        image = render_visual(template, resolve_asset_values(session, template, values), renderer)
+        image = render_template(session, template, values, renderer)
     except (MissingSlotValue, UnresolvableAsset) as exc:
         # Both are the caller handing us values we cannot render: a slot with nothing in
         # it, or a slot holding something that is not an asset.
