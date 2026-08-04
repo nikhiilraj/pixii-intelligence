@@ -2,15 +2,18 @@ import io
 from collections.abc import Set as AbstractSet
 from datetime import datetime
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from app.assets import assets_dir
 from app.config import settings
 from app.db import get_session
 from app.deps import get_html_renderer, get_llm
 from app.extraction import ExtractionError, propose_visuals
 from app.main import app
+from app.models.asset import Asset, AssetKind
 from app.models.post import Post
 from app.models.template import TemplateKind, TemplateStatus
 from app.rendering import MissingSlotValue
@@ -48,6 +51,24 @@ def png(width: int = 1080, height: int = 1350) -> bytes:
     buffer = io.BytesIO()
     Image.new("RGB", (width, height), "white").save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+def a_logo(session) -> Asset:
+    """A real one-pixel asset on disk, so `data_uri` has bytes to embed.
+
+    `assets_dir()` resolves from `settings.media_dir` per call, which the `isolated_media`
+    fixture already points at `tmp_path` — so this writes nowhere near the real cache.
+    """
+    raw = png(1, 1)
+    assets_dir().mkdir(parents=True, exist_ok=True)
+    (assets_dir() / "logo.png").write_bytes(raw)
+    asset = Asset(
+        filename="logo.png", label="logo", kind=AssetKind.LOGO,
+        width=1, height=1, sha256="deadbeef",
+    )
+    session.add(asset)
+    session.flush()
+    return asset
 
 
 def add_post(session, zid, engaged, *, media=None, content="Body.", author=None):
@@ -469,7 +490,10 @@ def test_every_kept_proposal_was_rendered_once(session):
 
 
 def test_a_logo_role_is_pinned_to_the_configured_asset(session, monkeypatch):
-    monkeypatch.setattr(settings, "brand_logo_asset_id", 42)
+    """A real asset, not a bare id: the render gate resolves the pin, and a made-up id
+    would be caught there rather than proving anything about the pin itself."""
+    logo = a_logo(session)
+    monkeypatch.setattr(settings, "brand_logo_asset_id", logo.id)
     add_post(session, "strong", 900, media=(png(), ".png"))
     with_logo = {"visuals": [{
         "name": "with-logo",
@@ -484,7 +508,7 @@ def test_a_logo_role_is_pinned_to_the_configured_asset(session, monkeypatch):
     [template] = propose_visuals(session, FakeLLM(with_logo), FakeRenderer())
 
     mark = next(s for s in template.slots if s["name"] == "mark")
-    assert mark["default_asset_id"] == 42
+    assert mark["default_asset_id"] == logo.id
 
 
 def test_a_slot_merely_named_logo_is_not_pinned(session, monkeypatch):
@@ -527,6 +551,51 @@ def test_no_configured_logo_leaves_the_slot_unpinned_and_raises_nothing(session,
     [template] = propose_visuals(session, FakeLLM(with_logo), FakeRenderer())
 
     assert "default_asset_id" not in next(s for s in template.slots if s["name"] == "mark")
+
+
+def test_a_pin_naming_a_missing_asset_is_dropped_rather_than_offered(session, monkeypatch):
+    """A `brand_logo_asset_id` pointing nowhere is caught at the gate, before a human can
+    approve a template that will only fail once someone actually tries to generate from it.
+    """
+    monkeypatch.setattr(settings, "brand_logo_asset_id", 999999)
+    add_post(session, "strong", 900, media=(png(), ".png"))
+    with_logo = {"visuals": [{
+        "name": "with-logo",
+        "html": "<h1>{headline}</h1><img src='{mark}'>",
+        "slots": [
+            {"name": "headline", "type": "text", "example": "x"},
+            {"name": "mark", "type": "image_url", "role": "logo", "example": "https://x/y.png"},
+        ],
+        "source_post_ids": ["strong"],
+    }]}
+
+    assert propose_visuals(session, FakeLLM(with_logo), FakeRenderer()) == []
+
+
+def test_a_render_that_raises_an_http_status_error_does_not_cost_its_siblings(session):
+    """`CloudflareRenderer.screenshot` calls `raise_for_status()` on any non-429 response,
+    so a 500 on one proposal must not be an exception type the render gate lets through
+    to kill the batch — the same failure mode `MissingSlotValue` and `UnresolvableAsset`
+    already guard against, from a different layer.
+    """
+    add_post(session, "strong", 900, media=(png(), ".png"))
+    two = {"visuals": [
+        {**ONE_VISUAL["visuals"][0], "name": "flaky", "html": "<h1>FLAKY {headline}</h1>",
+         "slots": [{"name": "headline", "type": "text", "example": "x"}]},
+        ONE_VISUAL["visuals"][0],
+    ]}
+
+    class FlakyRenderer:
+        def screenshot(self, html: str, width: int, height: int) -> bytes:
+            if "FLAKY" in html:
+                request = httpx.Request("POST", "https://example.invalid")
+                response = httpx.Response(500, request=request)
+                raise httpx.HTTPStatusError("boom", request=request, response=response)
+            return b"PNG"
+
+    proposals = propose_visuals(session, FakeLLM(two), FlakyRenderer())
+
+    assert [t.name for t in proposals] == ["ranked-bars"]
 
 
 def test_extract_visuals_route_returns_proposals(session):
