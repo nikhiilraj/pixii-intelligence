@@ -48,7 +48,7 @@ def lineage_metadata(draft: Draft) -> dict:
     return metadata
 
 
-def _media_items(
+def media_items_for(
     session: Session, draft: Draft, client: ZernioClient, *, reuse: bool
 ) -> list[dict[str, str]]:
     """The draft's rendered visual, uploaded, in the shape a post attaches media in.
@@ -164,7 +164,7 @@ def push_draft(
         # lost — must send the URL it sent before, or the duplicate hash misses and the retry
         # creates a second post. A forced re-push must not, because the picture may have been
         # redrawn since.
-        media_items = _media_items(session, draft, client, reuse=not force)
+        media_items = media_items_for(session, draft, client, reuse=not force)
 
         payload: dict[str, object] = {
             "content": draft.full_text,

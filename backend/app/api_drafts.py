@@ -8,6 +8,13 @@ from sqlmodel import col, desc, select
 from app.autonomous import AutonomousRunFailed, SpendMeter, run_autonomous
 from app.config import settings
 from app.deps import HtmlRendererDep, ImageRendererDep, LLMDep, SessionDep, ZernioDep
+from app.distribution import (
+    CommandRefused,
+    NotPushed,
+    PublishingDisabled,
+    StaleRevision,
+    submit,
+)
 from app.generation import (
     NoUsableTemplates,
     generate_draft,
@@ -21,6 +28,7 @@ from app.llm import LLMResponseError
 from app.metrics import draft_for_post
 from app.models.draft import Draft
 from app.models.post import Post
+from app.models.publication import CANCEL_SCHEDULE, PUBLISH_NOW, SCHEDULE, Publication
 from app.models.template import Template
 from app.notify import notify
 from app.publishing import PushFailed, push_draft
@@ -73,6 +81,9 @@ class DraftOut(BaseModel):
     # tell "awaiting Monte" from "published" without a status column.
     went_live_at: datetime | None
     created_at: datetime
+    # What a publication command must be confirmed against. Without it on the wire the
+    # review screen has nothing to submit and the stale-revision guard cannot fire.
+    revision: int
     lineage: dict
 
 
@@ -118,6 +129,7 @@ def _out(session: SessionDep, draft: Draft) -> DraftOut:
         pushed_at=draft.pushed_at,
         went_live_at=draft.went_live_at,
         created_at=draft.created_at,
+        revision=draft.revision,
         lineage=_lineage(session, draft),
     )
 
@@ -451,6 +463,7 @@ def rewrite(session: SessionDep, llm: LLMDep, draft_id: int) -> DraftOut:
         regenerate_text(session, llm, draft)
     except (NoUsableTemplates, LLMResponseError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    draft.edited()
     session.commit()
     session.refresh(draft)
     return _out(session, draft)
@@ -480,7 +493,11 @@ def redraw(
     # older comparison slot untouched. `visual_error` still records why the redraw failed.
     if draft.visual_image is not None:
         draft.previous_visual = previous
+        draft.edited()
     else:
+        # A failed redraw leaves the last working image in place, so what a human would
+        # publish has not changed and the revision must not move. Bumping it here would
+        # invalidate a reviewer's confirmed command over a picture that never changed.
         draft.visual_image = previous
     session.commit()
     session.refresh(draft)
@@ -510,6 +527,7 @@ def restore_visual(session: SessionDep, draft_id: int) -> DraftOut:
     # Same reason as the redraw path in `generation._draw_visual`: a stored upload URL
     # describes the image being swapped out, and `push_draft` would re-send it.
     draft.zernio_media_url = None
+    draft.edited()
     session.add(draft)
     session.commit()
     session.refresh(draft)
@@ -531,6 +549,166 @@ def push(session: SessionDep, zernio: ZernioDep, draft_id: int) -> DraftOut:
     session.commit()
     session.refresh(draft)
     return _out(session, draft)
+
+
+class ScheduleIn(BaseModel):
+    """A schedule, in the words the reviewer typed plus the place that gives them meaning.
+
+    `revision` is not optional and has no default. It is the whole stale-command guard: a
+    caller who may omit it can publish a version of the words nobody approved, and a default
+    would be this endpoint quietly supplying the answer it is supposed to be checking.
+    """
+
+    revision: int
+    # Naive on purpose — "09:00 on the 12th" as written, with `timezone` saying where. An
+    # offset-bearing string here would let the caller and the zone disagree with no error.
+    local_time: datetime
+    timezone: str
+
+
+class ConfirmIn(BaseModel):
+    """Everything an action needs when it names no time."""
+
+    revision: int
+
+
+class PublicationOut(BaseModel):
+    """What became of one command. Hand-mapped for the reason `DraftOut` explains."""
+
+    id: int
+    draft_id: int
+    draft_revision: int
+    action: str
+    requested_local_time: datetime | None
+    timezone: str | None
+    scheduled_utc: datetime | None
+    state: str
+    attempts: int
+    last_error: str | None
+    created_at: datetime
+    accepted_at: datetime | None
+
+
+def _publication_out(publication: Publication) -> PublicationOut:
+    return PublicationOut(
+        id=publication.id or 0,
+        draft_id=publication.draft_id,
+        draft_revision=publication.draft_revision,
+        action=publication.action,
+        requested_local_time=publication.requested_local_time,
+        timezone=publication.timezone,
+        scheduled_utc=publication.scheduled_utc,
+        state=publication.state,
+        attempts=publication.attempts,
+        last_error=publication.last_error,
+        created_at=publication.created_at,
+        accepted_at=publication.accepted_at,
+    )
+
+
+def _command(
+    session: SessionDep,
+    zernio: ZernioDep,
+    draft_id: int,
+    *,
+    action: str,
+    revision: int,
+    local: datetime | None = None,
+    timezone: str | None = None,
+) -> PublicationOut:
+    """Every publication command comes through here, so every guard is in one place.
+
+    The status codes are the contract and each says something different:
+
+    - **403** the kill switch is off. Not 503: nothing is broken, the capability is turned
+      off deliberately and turning it on is a decision, not a retry.
+    - **409** the draft moved under the reviewer, or has never been pushed. Both are "the
+      thing you are commanding is not in the state you think", and both are fixed by looking
+      again rather than by trying again.
+    - **422** the command itself does not describe a moment — a past time, a missing zone.
+    - **502** Zernio refused. Its own words are passed through so the operator sees the
+      reason and not a shrug. **Never retried here**: a validation refusal is not a timeout,
+      and retrying one is how a rejected command becomes two rejected commands.
+    """
+    draft = _load(session, draft_id)
+    try:
+        publication = submit(
+            session, draft, zernio, action=action, revision=revision, local=local, timezone=timezone
+        )
+    except PublishingDisabled as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except StaleRevision as exc:
+        raise HTTPException(
+            status_code=409, detail={"error": str(exc), "current_revision": exc.current}
+        ) from exc
+    except NotPushed as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except CommandRefused as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return _publication_out(publication)
+
+
+@router.post("/{draft_id}/schedule")
+def schedule(
+    session: SessionDep, zernio: ZernioDep, draft_id: int, body: ScheduleIn
+) -> PublicationOut:
+    """Ask Zernio to publish this draft at a stated local time.
+
+    Sends `isDraft: false` alongside the time. A `scheduledFor` on its own leaves the post a
+    draft holding a schedule it will never act on — see `ZernioClient.update_post`.
+    """
+    return _command(
+        session,
+        zernio,
+        draft_id,
+        action=SCHEDULE,
+        revision=body.revision,
+        local=body.local_time,
+        timezone=body.timezone,
+    )
+
+
+@router.post("/{draft_id}/publish")
+def publish(
+    session: SessionDep, zernio: ZernioDep, draft_id: int, body: ConfirmIn
+) -> PublicationOut:
+    """Publish this draft now.
+
+    The single most consequential thing this application can do, and the reason every guard
+    in `_command` exists. It is reachable only when `PUBLISHING_ENABLED` is true, only with
+    the revision the reviewer confirmed against, and only for a draft already pushed.
+    """
+    return _command(session, zernio, draft_id, action=PUBLISH_NOW, revision=body.revision)
+
+
+@router.post("/{draft_id}/cancel-schedule")
+def cancel_schedule(
+    session: SessionDep, zernio: ZernioDep, draft_id: int, body: ConfirmIn
+) -> PublicationOut:
+    """Withdraw a schedule, putting the post back to a draft in Zernio.
+
+    The words and the picture stay exactly where they are; only the appointment is removed.
+    """
+    return _command(session, zernio, draft_id, action=CANCEL_SCHEDULE, revision=body.revision)
+
+
+@router.get("/{draft_id}/publications")
+def publications(session: SessionDep, draft_id: int) -> list[PublicationOut]:
+    """Every command issued against this draft, newest first.
+
+    This list *is* the audit trail — see `models/publication.py` for why there is no separate
+    table. A review screen showing a Publish button without showing what has already been
+    commanded is how one post gets scheduled twice by two people looking at the same page.
+    """
+    _load(session, draft_id)
+    rows = session.exec(
+        select(Publication)
+        .where(col(Publication.draft_id) == draft_id)
+        .order_by(col(Publication.created_at).desc())
+    ).all()
+    return [_publication_out(row) for row in rows]
 
 
 @router.post("/autonomous-run")

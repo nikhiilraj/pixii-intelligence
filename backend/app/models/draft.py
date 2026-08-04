@@ -88,8 +88,28 @@ class Draft(SQLModel, table=True):
     # is no status column: a third source of truth could disagree with these two.
     went_live_at: datetime | None = None
 
+    # How many times a human-visible change has been made to what this draft would publish.
+    #
+    # **Means "what a person would publish changed", not "a column changed."** A publication
+    # command carries the revision the reviewer was looking at, and a mismatch is refused —
+    # so bumping this on the wrong write silently breaks publishing rather than protecting
+    # it. `push_draft` writes `zernio_media_url` and `pushed_at` and must never bump it, or
+    # every push would invalidate its own command. The bumps live in `_edited`, one place,
+    # for the same reason.
+    revision: int = Field(default=1, nullable=False)
+
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @property
     def full_text(self) -> str:
         return f"{self.hook_text}\n\n{self.body_text}".strip()
+
+    def edited(self) -> None:
+        """Record that what a human would publish has changed.
+
+        A method rather than `draft.revision += 1` at each call site, so the answer to "what
+        counts as an edit" lives in one place and can be read at once. Call it from anything
+        that changes the words or the picture; do not call it from anything that only records
+        where the post went.
+        """
+        self.revision += 1

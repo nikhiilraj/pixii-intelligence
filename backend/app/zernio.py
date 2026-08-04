@@ -84,6 +84,48 @@ class ZernioClient:
             )
         return response.json()
 
+    def update_post(self, post_id: str, payload: dict, request_id: str | None = None) -> dict:
+        """Change a post that already exists. This is how a draft stops being a draft.
+
+        **`isDraft: false` is what takes it out of draft state, not `scheduledFor`.** Sending
+        a time alone leaves an existing draft sitting in draft — it acquires a schedule it
+        will never act on, and the post looks scheduled in Pixii and is not in Zernio. The
+        docs are explicit about it and it is the single easiest way to ship a publishing
+        feature that silently does nothing.
+
+        `x-request-id` for the same reason `create_post` takes one: a retry after a timeout
+        must be the same logical command, not a second one.
+
+        A refusal raises with the service's own words. A validation refusal and a network
+        timeout are different events and only one of them may be retried, which is why this
+        does not swallow either into a bare False.
+        """
+        headers = {"x-request-id": request_id} if request_id else None
+        response = self._client.put(f"/posts/{post_id}", json=payload, headers=headers)
+        if response.status_code >= 400:
+            raise ZernioRefused(
+                f"Zernio refused the update ({response.status_code}): {response.text[:300]}"
+            )
+        return dict(response.json())
+
+    def get_post(self, post_id: str) -> dict:
+        """One post as Zernio currently sees it. The reconciler's only question.
+
+        Not `list_posts`: that walks every page of the account to answer "what exists",
+        where this answers "what happened to this one".
+        """
+        response = self._client.get(f"/posts/{post_id}")
+        if response.status_code >= 400:
+            raise ZernioRefused(
+                f"Zernio would not return post {post_id} ({response.status_code}): "
+                f"{response.text[:300]}"
+            )
+        body = response.json()
+        # The single-post route returns the post either bare or wrapped in `post`; both
+        # shapes are documented across versions and neither is an error.
+        post = body.get("post") if isinstance(body, dict) else None
+        return dict(post if isinstance(post, dict) else body)
+
     def upload_media(self, data: bytes, filename: str, content_type: str) -> str:
         """Put these bytes where a post can reference them. Returns the public URL.
 

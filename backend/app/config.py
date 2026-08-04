@@ -90,6 +90,20 @@ class Settings(BaseSettings):
     # address of this app's own web UI, which authorises on its own when the link opens.
     pixii_base_url: str = "http://localhost:3000"
 
+    # The publishing kill switch. Off by default, and that default is the feature: the
+    # schedule/publish/cancel code can ship and sit inert until someone deliberately turns
+    # it on, and can be turned off again during an incident without a code rollback.
+    #
+    # It stops **external commands only**. Generation, review, and pushing a draft to Zernio
+    # all continue — the switch exists so a publishing problem does not take the rest of the
+    # tool down with it.
+    #
+    # This is the runtime half of the decision recorded in
+    # `docs/adr/0002-human-publication-authority.md`: automation prepares, a human commands,
+    # and on localhost with one operator that human is the authorisation boundary. The day
+    # this runs anywhere else, authentication comes before this flag may be true.
+    publishing_enabled: bool = False
+
     # How many drafts one idea may be written as at `POST /drafts/variants`. **A ceiling, not a
     # default**: N variants is N times the paid completions and N renders inside one request, and
     # `autonomous_max_drafts` was a default that a query parameter could walk straight past —

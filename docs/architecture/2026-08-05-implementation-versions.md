@@ -137,40 +137,72 @@ stale-revision rejection, and a kill switch **together**. That is one slice, not
 
 ### Slices
 
-1. **Zernio base-URL migration.** `zernio_base_url` is still `getlate.dev`. The documented
-   base is `https://zernio.com/api/v1`. Change behind adapter contract tests **and** a live
-   probe against the real account — the probe is a `! curl` line for the operator to run,
-   not something this codebase runs unattended.
-2. **`update_post`.** `zernio.py` has `create_post`, `upload_media`, `list_posts` and no
+**Reordered during implementation.** The plan originally put the base-URL migration first,
+coupling an unverified host swap to the one slice that must not have surprises. `getlate.dev`
+demonstrably works today, so the PUT is built and tested against the base already in use and
+the migration becomes its own commit afterwards.
+
+The whole slice lands with `publishing_enabled` defaulting to **False**, so the code can
+ship inert and the operator turns it on. That is also how "disabled without a code rollback"
+is satisfied.
+
+1. **`update_post`.** `zernio.py` has `create_post`, `upload_media`, `list_posts` and no
    PUT. Scheduling is `PUT /v1/posts/{postId}` with `isDraft: false`, `scheduledFor`,
    `timezone`. `scheduledFor` alone leaves a draft in draft state — the trap the research
    doc calls out. Publish-now is the same PUT with `publishNow: true`.
-3. **`publication` table.** `draft_id`, `draft_revision`, `action`
-   (`save_remote_draft` | `schedule` | `publish_now` | `cancel_schedule`),
-   `requested_local_time`, `timezone` (IANA), `scheduled_utc`, `idempotency_key` (unique),
-   `state`, `zernio_post_id`, `attempts`, `last_error`.
+2. **`publication` table.** `draft_id`, `draft_revision`, `action`
+   (`schedule` | `publish_now` | `cancel_schedule`), `requested_local_time`,
+   `timezone` (IANA), `scheduled_utc`, `idempotency_key` (unique), `state`, `attempts`,
+   `last_error`.
    - Three time columns, not one. Every column in this database is
-     `timestamp without time zone`, so the resolved UTC value goes through `main._utc` and
-     the local time and IANA zone are stored beside it verbatim. **Do not** start the
-     timestamptz migration here — that is blueprint ADR #8 and a separate decision.
+     `timestamp without time zone`, so the resolved UTC value goes through `db.utc` and the
+     local time and IANA zone are stored beside it verbatim. **Do not** start the timestamptz
+     migration here — that is blueprint ADR #8 and a separate decision.
    - `ponytail:` `attempts`/`last_error` on the row instead of a `publication_attempt`
-     table. One command's history is a counter and a string until someone needs the third.
-4. **Stale-revision rejection.** `Draft` has no `revision` column. Add one, bump on every
-   edit, require it on the command, reject a mismatch with 409 and the current revision.
-5. **Confirmation, audit, kill switch.** A confirm step in the UI showing account, action,
-   local time, timezone and resolved UTC before it fires. An append-only `audit_event`
-   row (action, draft id, revision, before/after state, result, timestamp) for every
-   command. A `publishing_enabled` setting that stops external commands without stopping
-   generation.
-6. **Reconciliation.** Poll nonterminal publications on the existing metrics tick and
-   resolve drift. `ponytail:` polling, not webhooks — webhooks need a public URL and HMAC
-   verification, and there is no public URL. Add them when there is one.
+     table, and **no separate `audit_event` table**. The publication row already records
+     action, draft revision, resolved time, outcome and error; with one operator on
+     localhost, a second table whose `actor` column is always the same person is ceremony.
+     Add it the day there are two people — which is the same day authentication arrives.
+   - **Its own idempotency key.** `push_draft._request_id` keys on the draft id and works
+     with the `zernio_post_id` guard and Zernio's 24-hour content hash; those three are
+     reasoned about together in that docstring. Publication commands get their own key and
+     leave push alone.
+3. **Stale-revision rejection.** `Draft` has no `revision` column. Add one, require it on
+   the command, reject a mismatch with 409 and the current revision.
+   - **`revision` means "what a human would publish changed"**, not "a column changed."
+     `regenerate-text`, `regenerate-visual`, `restore-visual` and any text edit bump it.
+     `push_draft` writes `zernio_media_url` and `pushed_at` and must **not**, or every push
+     would invalidate its own command.
+4. **Media re-upload on every command.** `push_draft`'s docstring records this as measured:
+   presign returns a `/temp/` URL that expires after seven days, and Zernio copies the file
+   to permanent storage only when a post **publishes**. That was unfixable while publishing
+   was an unbounded human act in Zernio — v2 makes Pixii the publisher, so a schedule more
+   than a week out would publish with a dead image. Every schedule/publish command
+   re-uploads the visual and sends the fresh URL, unconditionally. One extra upload per
+   command, and no age arithmetic anywhere.
+5. **Confirmation and kill switch.** A confirm step in the UI showing account, action, local
+   time, timezone and resolved UTC before it fires. `publishing_enabled` stops external
+   commands without stopping generation.
+6. **Reconciliation, and the Inbox stops lying.** Poll nonterminal publications on the
+   existing metrics tick. `ponytail:` polling, not webhooks — webhooks need a public URL and
+   HMAC verification, and there is no public URL. Add them when there is one.
+   - Inbox queue 3 (`main.py`) is `zernio_post_id IS NOT NULL AND went_live_at IS NULL`,
+     presented as *waiting on a human*. A scheduled post matches it and is waiting on a
+     clock. Exclude scheduled publications or the queue stops meaning what it says.
+7. **Base-URL migration, separately.** `zernio_base_url` is still `getlate.dev`; the
+   documented base is `https://zernio.com/api/v1`. The probe that matters is not "does
+   zernio.com answer" but "does the same key return the same account": `GET /posts` against
+   both bases, compare `pagination.total` and a known `_id`. If they differ it is not a URL
+   swap and it is a separate project.
 
 ### Done when
 
 Ten retries of one schedule command produce exactly one Zernio post; an ambiguous timeout
 reconciles to the original id rather than creating a second; a stale revision is refused;
 the kill switch blocks the command and lets generation continue. Each proved by breaking it.
+
+The mutation battery must include dropping the unique constraint on `idempotency_key`,
+accepting a stale revision, and bypassing the kill switch.
 
 ---
 

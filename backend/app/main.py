@@ -23,6 +23,7 @@ from app.corpus import (
 )
 from app.db import engine, utc
 from app.deps import SessionDep
+from app.distribution import scheduled_draft_ids
 from app.metrics import draft_for_post, sync_metrics, template_performance
 from app.models.draft import Draft
 from app.models.metric import MetricSnapshot
@@ -496,11 +497,22 @@ def inbox(session: SessionDep) -> Inbox:
 
     unpushed = session.exec(select(Draft).where(col(Draft.zernio_post_id).is_(None))).all()
 
-    awaiting_monte = session.exec(
-        select(Draft).where(
-            col(Draft.zernio_post_id).is_not(None), col(Draft.went_live_at).is_(None)
-        )
-    ).all()
+    # Pushed, not live, and **not scheduled**. The first two predicates alone were right
+    # while Pixii could only ever push a draft: everything matching them was waiting on a
+    # person to publish it in Zernio. A scheduled post matches them too and is waiting on a
+    # clock — leaving it here would put an item nobody can act on at the top of a queue
+    # whose entire promise is "these are waiting on you", where it would sit until its own
+    # schedule fired.
+    scheduled = scheduled_draft_ids(session)
+    awaiting_monte = [
+        draft
+        for draft in session.exec(
+            select(Draft).where(
+                col(Draft.zernio_post_id).is_not(None), col(Draft.went_live_at).is_(None)
+            )
+        ).all()
+        if draft.id not in scheduled
+    ]
 
     # The join is `Draft.zernio_post_id == Post.late_post_id`. Not `Post.zernio_id` — the
     # create response's `_id` surfaces in analytics as `latePostId`, and matching on

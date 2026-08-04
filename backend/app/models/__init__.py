@@ -9,6 +9,7 @@ from app.models.daily_run import DAILY_SLOT, DailyRun
 from app.models.draft import Draft
 from app.models.metric import MetricSnapshot
 from app.models.post import Post
+from app.models.publication import Publication
 from app.models.template import Template, TemplateKind, TemplateStatus
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "Draft",
     "MetricSnapshot",
     "Post",
+    "Publication",
     "Template",
     "TemplateKind",
     "TemplateStatus",
