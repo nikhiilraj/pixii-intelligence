@@ -187,14 +187,16 @@ export default function Explorer({
   // Ranked together they head the table, so an unscoped view reads as though someone
   // else's posts were our top performers. Creators stay one click away.
   const [posts, setPosts] = useState(() =>
-    initial.filter((p) => p.account_username === VOICE_ACCOUNT),
+    initial
+      .filter((p) => p.account_username === VOICE_ACCOUNT)
+      .sort((a, b) => (a.published_at ?? "") < (b.published_at ?? "") ? 1 : -1),
   );
   const [filters, setFilters] = useState<Filters>({
     platform: "",
     account: VOICE_ACCOUNT,
     family: "",
     since: "",
-    sort: "engaged_actions",
+    sort: "published_at",
     order: "desc",
   });
   const [loading, setLoading] = useState(false);
@@ -265,7 +267,7 @@ export default function Explorer({
 
   return (
     <>
-      <div className="mt-6 flex flex-wrap items-center gap-2">
+      <div className="-mx-6 mt-8 flex flex-wrap items-center gap-2 border-y border-border bg-surface px-6 py-3">
         <FilterSelect
           label="cohort"
           value={filters.account || ALL}
@@ -373,7 +375,15 @@ export default function Explorer({
       )}
 
       {series.length > 1 && (
-        <div className="mt-6 h-56 w-full">
+        <section className="mt-10">
+          <div className="flex items-end justify-between gap-4 border-b border-text pb-3">
+            <div>
+              <p className="font-mono text-caption uppercase tracking-[0.12em] text-muted">Shape of the run</p>
+              <h2 className="mt-1 text-head font-medium">Engaged actions over time</h2>
+            </div>
+            <span className="font-mono text-caption text-muted">filtered set · not a leaderboard</span>
+          </div>
+        <div className="mt-5 h-56 w-full">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={series} margin={{ top: 4, right: 8, bottom: 0, left: -18 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="currentColor" opacity={0.12} />
@@ -394,45 +404,46 @@ export default function Explorer({
             </LineChart>
           </ResponsiveContainer>
         </div>
+        </section>
       )}
 
       {/* Wide content scrolls inside its own container so the page body never does. */}
-      <div className="mt-6 overflow-x-auto">
-        <table className="w-full min-w-[46rem] border-collapse text-sm">
+      <div className="mt-10 overflow-x-auto rounded-card border border-border bg-surface">
+        <table className="w-full min-w-[46rem] border-collapse text-meta">
           <thead>
-            <tr className="border-b border-black/15 text-left dark:border-white/20">
-              <th className="py-2 pr-4 font-medium">Post</th>
-              <th className="py-2 pr-4 font-medium">Account</th>
-              <th className="py-2 pr-4 font-medium">Channel</th>
-              <th className="py-2 pr-4 font-medium">Published</th>
-              <th className="py-2 pr-4 text-right font-medium">Engaged</th>
-              <th className="py-2 pr-4 text-right font-medium">Impressions</th>
-              <th className="py-2 text-right font-medium">ER</th>
+            <tr className="border-b border-border bg-surface-2 text-left font-mono text-[10.5px] uppercase tracking-[0.12em] text-muted">
+              <th className="px-4 py-3 font-medium">Post</th>
+              <th className="py-3 pr-4 font-medium">Account</th>
+              <th className="py-3 pr-4 font-medium">Channel</th>
+              <th className="py-3 pr-4 font-medium">Published</th>
+              <th className="py-3 pr-4 text-right font-medium">Engaged</th>
+              <th className="py-3 pr-4 text-right font-medium">Impressions</th>
+              <th className="py-3 pr-4 text-right font-medium">ER</th>
             </tr>
           </thead>
           <tbody>
             {visible.map((post) => (
-              <tr key={post.id} className="border-b border-black/8 last:border-0 dark:border-white/10">
-                <td className="max-w-md py-3 pr-4">
+              <tr key={post.id} className="border-b border-border-subtle last:border-0 hover:bg-surface-2">
+                <td className="max-w-md px-4 py-3 pr-4">
                   <Link href={`/posts/${post.id}`} className="hover:underline">
                     {firstLine(post.content)}
                   </Link>
                 </td>
                 {/* Whose post this is, so a number's provenance is visible without a filter. */}
-                <td className="py-3 pr-4 opacity-70">{post.account_username ?? "—"}</td>
-                <td className="py-3 pr-4 opacity-70">{post.platform}</td>
-                <td className="py-3 pr-4 tabular-nums opacity-70">
+                <td className="py-3 pr-4 text-muted">{post.account_username ?? "—"}</td>
+                <td className="py-3 pr-4 text-muted">{post.platform}</td>
+                <td className="py-3 pr-4 font-mono tabular-nums text-muted">
                   {shortDate(post.published_at)}
                 </td>
-                <td className="py-3 pr-4 text-right font-medium tabular-nums">
+                <td className="py-3 pr-4 text-right font-mono font-medium tabular-nums">
                   {nf.format(post.engaged_actions)}
                 </td>
                 {/* See UNMEASURED above: a stored 0 in either column is an unread analytics
                     figure as often as it is a real zero, and the two are keyed separately. */}
-                <td className="py-3 pr-4 text-right tabular-nums opacity-70">
+                <td className="py-3 pr-4 text-right font-mono tabular-nums text-muted">
                   {post.impressions ? nf.format(post.impressions) : UNMEASURED}
                 </td>
-                <td className="py-3 text-right tabular-nums opacity-70">
+                <td className="py-3 pr-4 text-right font-mono tabular-nums text-muted">
                   {post.engagement_rate ? post.engagement_rate.toFixed(2) : UNMEASURED}
                 </td>
               </tr>
@@ -450,7 +461,14 @@ export default function Explorer({
             <span className="text-meta text-muted">
               Showing {showAll ? "all " : ""}
               {nf.format(visible.length)} of {nf.format(posts.length)}, sorted by{" "}
-              {filters.sort.replace(/_/g, " ")}, {filters.order === "desc" ? "highest" : "lowest"}{" "}
+              {filters.sort.replace(/_/g, " ")},{" "}
+              {filters.sort === "published_at"
+                ? filters.order === "desc"
+                  ? "newest"
+                  : "oldest"
+                : filters.order === "desc"
+                  ? "highest"
+                  : "lowest"}{" "}
               first.
             </span>
             <Button variant="outline" onClick={() => setShowAll(!showAll)}>

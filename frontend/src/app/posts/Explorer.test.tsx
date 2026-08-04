@@ -301,7 +301,7 @@ describe("the bounded table", () => {
     expect(screen.getAllByRole("row")).toHaveLength(26);
     expect(screen.getByText(/Showing 25 of 30/)).toBeInTheDocument();
     // Which end was cut. A truncated sort with no stated order is the silent version.
-    expect(screen.getByText(/sorted by engaged actions, highest first/)).toBeInTheDocument();
+    expect(screen.getByText(/sorted by published at, newest first/)).toBeInTheDocument();
   });
 
   it("keeps the live row count on the filtered total, not on the rows drawn", () => {

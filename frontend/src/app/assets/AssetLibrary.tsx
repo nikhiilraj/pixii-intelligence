@@ -213,7 +213,16 @@ export default function AssetLibrary({ initial }: { initial: Asset[] }) {
           library, no cropper, no client-side resize — the API downscales anything over
           1600px on the long edge. Ceiling: reach for a library when multi-file upload with
           per-file progress is wanted. */}
+      <div className="-mx-6 mt-8 flex flex-wrap items-center justify-between gap-3 border-y border-border bg-surface px-6 py-3">
+        <p className="text-meta"><span className="font-mono font-semibold tabular-nums">{assets.length}</span> reusable asset{assets.length === 1 ? "" : "s"}</p>
+        <p className="text-caption text-muted">Uploads stay drafts until a visual uses them.</p>
+      </div>
+
       <form onSubmit={upload} className="mt-8">
+        <div className="mb-3 flex items-baseline justify-between gap-4">
+          <h2 className="text-head font-semibold">Add to the library</h2>
+          <span className="text-caption text-muted">One file at a time</span>
+        </div>
         <label
           onDragOver={(e) => {
             e.preventDefault();
@@ -293,7 +302,7 @@ export default function AssetLibrary({ initial }: { initial: Asset[] }) {
         </div>
       </form>
 
-      <div className="mt-8 flex flex-wrap items-center gap-2 border-t border-border pt-6">
+      <div className="mt-10 flex flex-wrap items-center gap-2 border-y border-border bg-surface px-3 py-3">
         <Select
           value={filters.kind || ALL}
           onValueChange={(v) => reload({ ...filters, kind: noFilter(v) })}
@@ -350,10 +359,10 @@ export default function AssetLibrary({ initial }: { initial: Asset[] }) {
       )}
 
       {assets.length > 0 ? (
-        <ul className="mt-6 grid grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] gap-4">
+        <ul className="mt-6 grid grid-cols-[repeat(auto-fill,minmax(13rem,1fr))] gap-4">
           {assets.map((asset) => (
             <li key={asset.id}>
-              <Card className="flex h-full flex-col gap-2">
+              <Card className="group flex h-full flex-col gap-3 border-border-subtle transition-colors hover:border-border">
                 {/* A plain <img>: these are served by the backend at an arbitrary path, which
                     is the case next/image is wrong for (US-003's finding). The eslint
                     directive has to sit immediately above the tag — a comment between them
@@ -362,7 +371,7 @@ export default function AssetLibrary({ initial }: { initial: Asset[] }) {
                 <img
                   src={assetSrc(asset)}
                   alt={altOf(asset)}
-                  className="h-28 w-full rounded-input bg-surface-2 object-contain"
+                  className="h-36 w-full rounded-input bg-surface-2 object-contain p-2"
                 />
                 <div className="flex items-start justify-between gap-2">
                   <span className="text-meta font-medium break-words">{asset.label || "—"}</span>

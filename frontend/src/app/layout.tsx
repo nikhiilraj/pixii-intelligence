@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import Link from "next/link";
 import { Toaster } from "sonner";
+
+import { AppNav } from "@/components/app-nav";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -33,14 +34,6 @@ export const metadata: Metadata = {
 
    PRD.md:381's IA line lists six routes plus `/posts/[id]` — that is a route inventory, not a nav
    spec. Seven routes exist; five are destinations. Do not "restore" Scoreboard here. */
-const NAV = [
-  { href: "/", label: "Inbox" },
-  { href: "/studio", label: "Studio" },
-  { href: "/posts", label: "Corpus" },
-  { href: "/templates", label: "Templates" },
-  { href: "/assets", label: "Assets" },
-];
-
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -61,22 +54,11 @@ export default function RootLayout({
           sticky footer (the Inbox's `<footer>` is inside its own `<main>`). `items-stretch` is
           not the fix; auto margins beat it per spec. */}
       <body className="min-h-full">
-        <nav className="border-b border-black/10 dark:border-white/15">
-          {/* One shell width, `max-w-6xl`, and it has to be every page or none. The nav sat at
-              5xl while posts/, studio/ and assets/ rendered at 6xl, so on exactly the table pages
-              the extra width exists for, the nav's first link began 4rem inboard of the content
-              under it. Widening only the nav would have moved that 64px seam onto the other three
-              pages, not closed it — so US-018 took all eight containers (nav, and each page with
-              its loading.tsx twin) to 6xl. Prose is capped at max-w-2xl independently, so nothing
-              over-widens into an unreadable measure. */}
-          <div className="mx-auto flex max-w-6xl gap-5 px-6 py-3 text-sm">
-            {NAV.map((item) => (
-              <Link key={item.href} href={item.href} className="opacity-70 hover:opacity-100">
-                {item.label}
-              </Link>
-            ))}
-          </div>
-        </nav>
+        {/* One shell width, `max-w-6xl`, and it has to be every page or none. The active state
+            lives in a deliberately small client component; the layout and page data stay on the
+            server. Scoreboard remains represented by Templates because it is evidence about that
+            library, not a sixth destination. */}
+        <AppNav />
         {children}
         {/* The one toast mount. sonner carries its own `"use client"`, so it drops into this
             server layout without a client boundary around the app.

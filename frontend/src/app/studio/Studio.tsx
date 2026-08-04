@@ -690,19 +690,33 @@ export default function Studio({
     "w-full rounded-input border border-border bg-transparent px-3 py-2 text-meta";
 
   return (
-    <div className="mt-8 grid gap-10 lg:grid-cols-[22rem_1fr]">
+    <div className="mt-8">
+      <div className="-mx-6 flex flex-wrap items-center gap-x-6 gap-y-2 border-y border-border bg-surface px-6 py-3 font-mono text-caption text-muted">
+        <span><strong className="font-medium text-text">{approved.length}</strong> approved templates</span>
+        <span><strong className="font-medium text-text">{drafts?.length ?? "—"}</strong> drafts</span>
+        <span>{draft ? `draft #${draft.id} open` : "new composition"}</span>
+        <span className="ml-auto">Nothing publishes from here</span>
+      </div>
+
+      <div className="mt-10 grid gap-10 lg:grid-cols-[22rem_minmax(0,1fr)]">
       {/* `min-w-0` for the same reason the draft column carries it, and here it is the one that
           can actually move: at 390px this grid is a single column, so this section is the `1fr`
           track and a draft idea in the list below is the longest string on the page. */}
       <section className="min-w-0 space-y-3">
+        <div className="border-b border-text pb-3">
+          <p className="font-mono text-caption uppercase tracking-[0.12em] text-muted">Compose</p>
+          <h2 className="mt-1 text-head font-medium">Start with the point</h2>
+        </div>
         <textarea
           value={idea}
           onChange={(e) => setIdea(e.target.value)}
-          rows={5}
+          rows={7}
           placeholder="An idea, a finding, a link — what is this post about?"
           className={field}
         />
 
+        <div className="rounded-card border border-border bg-surface p-3">
+          <p className="mb-3 font-mono text-caption uppercase tracking-[0.12em] text-muted">Template path</p>
         {(["hook", "structure", "visual"] as const).map((kind) => (
           <Select
             key={kind}
@@ -716,7 +730,7 @@ export default function Studio({
             {/* `aria-label` on the trigger, not a first option that reads as one. The native
                 select carried the control's name only inside "hook — let it suggest", which
                 stops being the accessible name the moment something else is chosen. */}
-            <SelectTrigger aria-label={kind} className="w-full">
+            <SelectTrigger aria-label={kind} className="mb-2 w-full last:mb-0">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -729,6 +743,7 @@ export default function Studio({
             </SelectContent>
           </Select>
         ))}
+        </div>
 
         {slots.length > 0 && (
           /* The asset picker. Only appears once a visual with image slots is chosen — the
@@ -838,7 +853,7 @@ export default function Studio({
           )}
         </Dialog>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 border-t border-border pt-4">
           <Button
             variant="outline"
             disabled={!idea.trim() || busy !== null}
@@ -915,7 +930,7 @@ export default function Studio({
             `image_calls` afterwards and still does — that is the receipt, and a receipt is not a
             price. `variantsMax` is the server's own ceiling; with `/health` unread the sentence
             stops at the per-variant rate, which is true at any ceiling. */}
-        <p className="text-xs text-muted">
+        <p className="text-caption text-muted">
           Write variants writes this idea several times over, each through a different approved
           hook, structure and visual, then shows them side by side to keep one. It ignores the
           three selects above on purpose — varying the combination is the point — and it spends a
@@ -949,6 +964,14 @@ export default function Studio({
           the track past the viewport instead of scrolling inside it. Latent here rather than
           live — today's drafts happen to wrap — which is exactly why it is worth pinning. */}
       <section className="min-w-0 space-y-4">
+        <div className="border-b border-text pb-3">
+          <p className="font-mono text-caption uppercase tracking-[0.12em] text-muted">
+            {batch ? "Choose" : draft ? "Draft detail" : "Output"}
+          </p>
+          <h2 className="mt-1 text-head font-medium">
+            {batch ? "Keep one direction" : draft ? `Draft #${draft.id}` : "A reviewable draft appears here"}
+          </h2>
+        </div>
         {/* A draft in hand wins over both notices, and the order is load-bearing rather than
             arbitrary. `missing` is a prop and never clears, but the left column keeps working
             on that route: landing on `?draft=999` from a stale link and clicking Generate
@@ -990,7 +1013,7 @@ export default function Studio({
               </p>
             )}
 
-            <article className="whitespace-pre-wrap rounded-lg border border-black/10 p-4 text-[15px] leading-relaxed dark:border-white/15">
+            <article className="whitespace-pre-wrap border-y border-border py-6 text-[15px] leading-7">
               {draft.full_text}
             </article>
 
@@ -999,7 +1022,7 @@ export default function Studio({
               <img
                 src={`data:image/png;base64,${draft.visual_png}`}
                 alt="Generated visual"
-                className="w-full max-w-sm rounded-lg border border-black/10 dark:border-white/15"
+                className="w-full max-w-md rounded-card border border-border"
               />
             ) : (
               <p className="text-sm text-amber-700 dark:text-amber-400">
@@ -1066,9 +1089,9 @@ export default function Studio({
              here as a tint on the one state that is correct on every visit to a fresh Studio,
              beside a column whose other two states are a real failure (the `missing` alert) and
              a real warning. Neutral is what this is. */
-          <Card className="text-body">
-            <p className="font-medium">No draft yet.</p>
-            <p className="mt-1 text-muted">
+          <Card className="border-dashed p-6 text-body">
+            <p className="text-head font-medium">No draft yet.</p>
+            <p className="mt-2 max-w-2xl text-muted">
               Write an idea, choose a hook, a structure and a visual — or let Suggest choose them
               — and Generate writes the post and renders its picture here, stamped with the
               templates that produced it. Or open one of the drafts listed on the left. Nothing
@@ -1078,6 +1101,7 @@ export default function Studio({
           </Card>
         )}
       </section>
+      </div>
     </div>
   );
 }

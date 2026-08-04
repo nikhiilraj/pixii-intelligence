@@ -12,7 +12,7 @@ const BODY_LINES = ["w-full", "w-full", "w-11/12", "w-full", "w-2/3"];
 
 export default function PostDetailLoading() {
   return (
-    <main className="mx-auto max-w-3xl px-6 py-16" aria-busy="true">
+    <main className="mx-auto max-w-6xl px-6 py-16" aria-busy="true">
       <span role="status" className="sr-only">
         Loading this post…
       </span>
@@ -21,9 +21,12 @@ export default function PostDetailLoading() {
         ← Corpus
       </Link>
 
-      <header className="mt-6 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+      <header className="mt-6 border-b border-border pb-6">
+        <Skeleton className="h-3 w-28" />
+        <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <Skeleton className="h-7 w-40" />
         <Skeleton className="h-4 w-48" />
+        </div>
       </header>
 
       <section className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -35,10 +38,17 @@ export default function PostDetailLoading() {
         ))}
       </section>
 
-      <div className="mt-8 space-y-2">
+      <div className="mt-10 grid gap-10 lg:grid-cols-[minmax(0,1fr)_25.75rem]">
+      <div className="space-y-2">
         {BODY_LINES.map((width, i) => (
           <Skeleton key={i} className={`h-4 ${width}`} />
         ))}
+      </div>
+      <aside className="border-t-2 border-ink pt-4">
+        <Skeleton className="h-3 w-24" />
+        <Skeleton className="mt-3 h-6 w-64" />
+        <Skeleton className="mt-3 h-20 w-full" />
+      </aside>
       </div>
     </main>
   );

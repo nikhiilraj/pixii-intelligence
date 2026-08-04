@@ -146,9 +146,9 @@ describe("every route's skeleton announces itself", () => {
 /* The constants a skeleton copies from its page. Each of these is retyped on purpose — the
    files say why — and each is a place where the two can silently disagree. */
 describe("what a skeleton promises matches what arrives", () => {
-  it("names the Inbox's four gates in the page's own order", async () => {
-    // `section h2` is the gate headings in both files — the status footer's heading lives in a
-    // `<footer>` and the circuit counter's in a Card, so neither is picked up here.
+  it("promises the Inbox's circuit and unified worklist before they arrive", async () => {
+    // The redesigned home no longer promises four stacked queues. Its two stable structures are
+    // the circuit overview and the oldest-first worklist; counts and rows arrive from the API.
     const { container } = render(<InboxLoading />);
     const promised = [...container.querySelectorAll("section h2")].map((h) => h.textContent);
 
@@ -179,27 +179,13 @@ describe("what a skeleton promises matches what arrives", () => {
     const page = render(await InboxPage());
     const arrived = [...page.container.querySelectorAll("section h2")].map((h) => h.textContent);
 
-    // `GET /inbox` returns a fixed four and they are always in this order, so the headings are
-    // structure rather than content — which is why the skeleton may state them at all.
-    expect(promised).toEqual([
-      "Proposals awaiting review",
-      "Built, awaiting push",
-      "Pushed, awaiting Monte",
-      "Published, awaiting verdict",
-    ]);
-    // Identical lists, in order: these four are the whole of `GET /inbox` and the order is the
-    // order a post passes through them.
+    expect(promised).toEqual(["Lineage circuit", "Work waiting on a person"]);
     expect(arrived).toEqual(promised);
   });
 
-  it("reserves the scoreboard's exact column grid", async () => {
-    const cols = (root: ParentNode) =>
-      [...root.querySelectorAll("colgroup")].map((g) =>
-        [...g.querySelectorAll("col")].map((c) => c.className),
-      );
-
+  it("reserves the scoreboard's observed and absent evidence bands", async () => {
     const { container } = render(<ScoreboardLoading />);
-    const promised = cols(container);
+    const promised = container.querySelectorAll("section").length;
 
     cleanup();
     stubAll(() =>
@@ -221,11 +207,10 @@ describe("what a skeleton promises matches what arrives", () => {
     );
     const page = render(await ScoreboardPage());
 
-    // `table-fixed` plus these widths is what makes one grid out of three tables. A skeleton on
-    // different widths promises a table that is not the one that arrives, and every column
-    // shifts when it does.
-    expect(promised[0]).toEqual(cols(page.container)[0]);
-    expect(promised[0]).toHaveLength(6);
+    // The evidence-first scoreboard has two stable regions: versions with observations and
+    // versions with none. Loading promises that shape without inventing table columns or data.
+    expect(promised).toBe(2);
+    expect(page.container.querySelectorAll("section")).toHaveLength(promised);
   });
 
   it("states the corpus table's real headings", () => {

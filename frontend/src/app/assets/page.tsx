@@ -10,11 +10,11 @@ export default async function AssetsPage() {
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-16">
-      <h1 className="text-title font-semibold tracking-tight">Assets</h1>
-      <p className="mt-1 text-body text-muted">
-        Logos, product shots and brand furniture, reusable across post visuals. An `image_url`
-        slot on a visual template is filled from here — the model never writes one — and the
-        renderer embeds the file rather than linking to it.
+      <p className="text-caption font-medium uppercase tracking-[0.18em] text-muted">Visual library</p>
+      <h1 className="mt-2 text-display font-semibold tracking-[-0.04em]">Assets</h1>
+      <p className="mt-2 max-w-2xl text-body text-muted">
+        Keep reusable logos, product shots and brand furniture ready for Studio. Visual
+        templates choose a slot; this library supplies the real file and keeps it local.
       </p>
 
       {assets.ok ? (

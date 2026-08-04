@@ -23,6 +23,8 @@
   --surface: #ffffff;
   --surface-2: #f5f0e8; /* brand cream, raised cards */
   --border: #e4dac6; /* real brand tan, extracted from the APPROVED visual templates */
+  --border-subtle: #f0e8d8;
+  --absent: #c9bda2;
   --text: #191917;
   --text-muted: #6b635a; /* real brand muted ink (5.6:1 on --bg; the PRD's guess was 5.0:1) */
 
@@ -68,6 +70,8 @@
     --surface: #1b1b18;
     --surface-2: #232320;
     --border: #34342e;
+    --border-subtle: #2a2a26;
+    --absent: #4a4a42;
     --text: #edebe4;
     --text-muted: #98958a;
 
@@ -89,6 +93,8 @@
   --color-surface: var(--surface);
   --color-surface-2: var(--surface-2);
   --color-border: var(--border);
+  --color-border-subtle: var(--border-subtle);
+  --color-absent: var(--absent);
   --color-text: var(--text);
   --color-muted: var(--text-muted);
   --color-accent: var(--accent);
@@ -142,6 +148,16 @@
 body {
   background: var(--bg);
   color: var(--text);
+}
+
+.pixii-hatch {
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0,
+    transparent 4px,
+    var(--absent) 4px,
+    var(--absent) 6px
+  );
 }
 
 /* Global, not per-component: one accent focus ring everywhere. Uses --accent-text,

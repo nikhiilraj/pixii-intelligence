@@ -14,10 +14,11 @@ export default async function PostsPage() {
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-16">
-      <h1 className="text-2xl font-semibold tracking-tight">Corpus</h1>
-      <p className="mt-1 text-sm text-muted">
-        Every post, ranked by engaged actions — likes, comments, shares and saves. Reach and
-        engagement rate sit alongside as secondary measures.
+      <p className="font-mono text-caption uppercase tracking-[0.12em] text-muted">Source material</p>
+      <h1 className="mt-2 text-display font-semibold tracking-[-0.02em]">Corpus</h1>
+      <p className="mt-3 max-w-2xl text-body text-muted">
+        Every post the system can learn from, newest first. Filter the body of work before reading
+        its numbers; engaged actions are observations, never a ranking of what to copy.
       </p>
 
       {posts.ok ? (

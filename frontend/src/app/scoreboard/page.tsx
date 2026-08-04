@@ -1,7 +1,6 @@
 import Link from "next/link";
 
 import { ApiFailureNotice } from "@/components/api-failure";
-import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { getJson } from "@/lib/api";
 
@@ -21,35 +20,19 @@ type Row = {
   min_sample_size: number;
 };
 
-const nf = new Intl.NumberFormat("en-US");
-
-/* One column grid for all three tables. Auto layout sized each table to its own longest
-   template name, so `Status` landed at x=645 under hook, x=666 under structure and x=505
-   under visual — three tables of identical shape reading as unrelated. `table-fixed` plus
-   these widths makes the grid a property of the page rather than of each group's content.
-
-   The widths sum to 752px, which is also what each table falls back to when the viewport
-   is narrower than that; the `overflow-x-auto` wrapper scrolls it. Above 752 the surplus
-   is distributed proportionally — identically for all three, so the edges stay aligned.
-
-   That 752 is why the table carries no `min-w-*` of its own. It used to carry `min-w-2xl`,
-   which is 42rem = 672px — below the floor the colgroup already sets, so it constrained
-   nothing and misstated the floor to anyone reading the class list. Removed and re-measured
-   at 390px: each table still lays out at 752 and the wrapper still scrolls, because a
-   `table-fixed` table is at least the sum of its columns. Deleting it changed no pixel.
-
-   ponytail: retyped in loading.tsx rather than shared, same as KINDS is there. Ceiling: a
-   `<ScoreboardCols />` in a shared module if a third caller appears. */
-function ScoreboardCols() {
+function Samples({ count, threshold }: { count: number; threshold: number }) {
+  const shown = Math.min(count, threshold);
   return (
-    <colgroup>
-      <col className="w-80" />
-      <col className="w-24" />
-      <col className="w-16" />
-      <col className="w-24" />
-      <col className="w-16" />
-      <col className="w-28" />
-    </colgroup>
+    <div className="flex items-center gap-1.5" aria-label={`${count} published post${count === 1 ? "" : "s"}`}>
+      {Array.from({ length: threshold }, (_, index) => (
+        <span
+          key={index}
+          aria-hidden="true"
+          className={`size-2 rounded-full border ${index < shown ? "border-text bg-text" : "border-absent"}`}
+        />
+      ))}
+      <span className="ml-2 font-mono text-caption tabular-nums text-muted">n={count}</span>
+    </div>
   );
 }
 
@@ -59,7 +42,8 @@ export default async function ScoreboardPage() {
   if (!result.ok) {
     return (
       <main className="mx-auto max-w-6xl px-6 py-16">
-        <h1 className="text-title font-semibold tracking-tight">Scoreboard</h1>
+        <p className="font-mono text-caption text-muted"><Link href="/templates" className="hover:underline">Templates</Link> · Scoreboard</p>
+        <h1 className="mt-4 text-display font-semibold tracking-[-0.02em]">Scoreboard</h1>
         <ApiFailureNotice failure={result} className="mt-8" />
       </main>
     );
@@ -67,126 +51,79 @@ export default async function ScoreboardPage() {
 
   const rows = result.data;
   const threshold = rows[0]?.min_sample_size ?? 5;
-  const withEvidence = rows.filter((r) => r.sample_count > 0);
-  // Grouped by kind, ordered by name — deliberately NOT by performance. Ranking these
-  // against each other at this sample size would be presenting noise as a finding.
-  const kinds = ["hook", "structure", "visual"];
+  const observed = rows.filter((row) => row.sample_count > 0).sort((a, b) => a.name.localeCompare(b.name));
+  const absent = rows.filter((row) => row.sample_count === 0).sort((a, b) => a.name.localeCompare(b.name));
+  const readable = rows.filter((row) => row.sufficient);
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-16">
-      <h1 className="text-title font-semibold tracking-tight">Scoreboard</h1>
-      <p className="mt-1 max-w-2xl text-body text-muted">
-        What each template version has actually done. Every figure carries its sample count,
-        and anything under {threshold} posts is marked insufficient. Templates are not ranked
-        against one another — at this sample size that would be reading noise.
+      <p className="font-mono text-caption text-muted"><Link href="/templates" className="hover:underline">Templates</Link> · Scoreboard</p>
+      <h1 className="mt-4 text-display font-semibold tracking-[-0.02em]">Scoreboard</h1>
+      <p className="mt-3 max-w-2xl text-body text-muted">
+        {readable.length === 0
+          ? `Nothing here has enough posts behind it to read yet. ${observed.length} version${observed.length === 1 ? " has" : "s have"} one to four; ${absent.length} ${absent.length === 1 ? "has" : "have"} none.`
+          : `${readable.length} version${readable.length === 1 ? " has" : "s have"} crossed the ${threshold}-post reading threshold.`}{" "}
+        Each published post is one dot below—count them before reading anything else. Versions are alphabetical, never ranked.
       </p>
 
-      {/* Two different empties, and collapsing them would be a lie in one direction or the
-          other. `rows.length === 0` means the template library itself is empty, so there is
-          nothing to score. `withEvidence.length === 0` means the library is full and no post
-          has ever been attributed to any of it — which is the real state of this app today
-          (zero generated drafts have gone live) and is a statement about the circuit, not
-          about the templates.
-
-          The second case keeps every table below it. All-zero sample counts are worth
-          rendering: they say *which* versions are waiting, and replacing them with an empty
-          state would hide a stocked library behind the words "nothing here".
-
-          Neutral, not the warning tint this carried before. A scoreboard with nothing on it is
-          the expected state of a circuit that has not run a lap, not a fault. */}
       {rows.length === 0 ? (
-        <Card className="mt-6 bg-surface-2 text-body">
+        <Card className="mt-8 border-dashed bg-surface-2 p-6 text-body">
           <p className="font-medium">No template version exists yet.</p>
-          <p className="mt-1 text-muted">
-            This page reads the template library, and the library is empty. Extraction on the{" "}
-            <Link href="/templates" className="underline">
-              Templates
-            </Link>{" "}
-            page proposes hooks, structures and visuals from the corpus; every version appears
-            here the moment it exists, at a sample count of zero, and starts carrying evidence
-            once a post generated from it goes live.
-          </p>
+          <p className="mt-2 text-muted">Extraction on <Link href="/templates" className="underline">Templates</Link> creates the library this page observes.</p>
         </Card>
       ) : (
-        withEvidence.length === 0 && (
-          <Card className="mt-6 bg-surface-2 text-body">
-            <p className="font-medium">
-              No generated post has been published yet — the scoreboard starts with the first
-              circuit.
-            </p>
-            <p className="mt-1 text-muted">
-              Every version below is listed at a sample count of zero, which is what waiting
-              looks like rather than what failure looks like. Analytics covers published posts
-              only, and publishing is a human act performed in Zernio — a draft pushed from
-              Studio contributes nothing until Monte publishes it. The first published post
-              fills the first row.
-            </p>
-          </Card>
-        )
-      )}
-
-      {kinds.map((kind) => {
-        const group = rows.filter((r) => r.kind === kind);
-        if (group.length === 0) return null;
-        return (
-          <section key={kind} className="mt-8">
-            <h2 className="text-caption font-medium uppercase tracking-widest text-muted">{kind}</h2>
-            <div className="mt-2 overflow-x-auto">
-              <table className="w-full table-fixed border-collapse text-meta">
-                <ScoreboardCols />
-                <thead>
-                  <tr className="border-b border-border text-left">
-                    <th className="py-2 pr-4 font-medium">Template</th>
-                    <th className="py-2 pr-4 font-medium">Status</th>
-                    <th className="py-2 pr-4 text-right font-medium">Posts</th>
-                    <th className="py-2 pr-4 text-right font-medium">Engaged</th>
-                    <th className="py-2 pr-4 text-right font-medium">Mean</th>
-                    <th className="py-2 font-medium">Evidence</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {group.map((row) => (
-                    <tr
-                      key={`${row.family}-${row.version}`}
-                      className="border-b border-border last:border-0"
-                    >
-                      <td className="py-3 pr-4">
-                        <Link
-                          href={`/posts?template_family=${row.family}`}
-                          className="hover:underline"
-                        >
-                          {row.name}
-                        </Link>
-                        <span className="ml-1.5 text-caption text-muted">v{row.version}</span>
-                      </td>
-                      <td className="py-3 pr-4 text-caption text-muted">{row.status}</td>
-                      <td className="py-3 pr-4 text-right font-mono tabular-nums">{row.sample_count}</td>
-                      <td className="py-3 pr-4 text-right font-mono tabular-nums">
-                        {nf.format(row.total_engaged_actions)}
-                      </td>
-                      <td className="py-3 pr-4 text-right font-mono tabular-nums">
-                        {row.sample_count ? row.mean_engaged_actions.toFixed(1) : "—"}
-                      </td>
-                      <td className="py-3 text-caption">
-                        {/* Was `text-success` / `text-warning`. Both fail AA as text on
-                            light (3.29:1 and 2.06:1) — the status colour belongs on the
-                            fill, which is what Badge does. See badge.tsx. */}
-                        {row.sufficient ? (
-                          <Badge variant="success">enough to read</Badge>
-                        ) : (
-                          <Badge variant="warning">
-                            too thin ({row.sample_count}/{threshold})
-                          </Badge>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        <>
+          <section className="mt-12">
+            <div className="flex items-end justify-between gap-4 border-b border-text pb-3">
+              <div>
+                <p className="font-mono text-caption uppercase tracking-[0.12em] text-muted">Observed</p>
+                <h2 className="mt-1 text-head font-medium">{observed.length} version{observed.length === 1 ? "" : "s"} with posts</h2>
+              </div>
+              <p className="font-mono text-caption text-muted">alphabetical · not ranked · no averages</p>
             </div>
+
+            {observed.length === 0 ? (
+              <Card className="mt-4 border-dashed bg-surface-2 p-6 text-body">
+                <p className="font-medium">No generated post has been published yet.</p>
+                <p className="mt-2 text-muted">The scoreboard begins when the first draft completes the circuit. Zero here is measured waiting, not a broken analytics read.</p>
+              </Card>
+            ) : (
+              <ol className="divide-y divide-border-subtle border-b border-border">
+                {observed.map((row) => (
+                  <li key={`${row.family}-${row.version}`} className="grid gap-3 py-5 md:grid-cols-[minmax(0,1fr)_20rem] md:items-center">
+                    <div className="min-w-0">
+                      <Link href={`/posts?template_family=${row.family}`} className="font-medium hover:underline">{row.name}</Link>
+                      <span className="ml-2 font-mono text-caption text-muted">v{row.version}</span>
+                      <p className="mt-1 font-mono text-caption text-muted">{row.kind} · {row.status}</p>
+                    </div>
+                    <Samples count={row.sample_count} threshold={threshold} />
+                  </li>
+                ))}
+              </ol>
+            )}
           </section>
-        );
-      })}
+
+          <section className="mt-12 border-t border-border pt-6">
+            <div className="flex flex-wrap items-baseline justify-between gap-3">
+              <h2 className="text-head font-medium text-muted">{absent.length} version{absent.length === 1 ? "" : "s"} with none</h2>
+              <span className="font-mono text-caption text-muted">a measured zero, not a gap</span>
+            </div>
+            {absent.length > 0 && (
+              <p className="mt-4 max-w-4xl text-body text-muted">
+                {absent.map((row, index) => (
+                  <span key={`${row.family}-${row.version}`}>
+                    {index > 0 ? " · " : ""}<Link href={`/posts?template_family=${row.family}`} className="hover:text-text hover:underline">{row.name}</Link><span className="font-mono text-caption"> v{row.version}</span>
+                  </span>
+                ))}
+              </p>
+            )}
+          </section>
+
+          <p className="mt-10 max-w-2xl border-t border-text pt-6 text-meta text-muted">
+            Five posts is where a figure starts being worth reading; the corpus spans 12.7×. This page withholds averages because arithmetic at n≈3 would look more certain than the evidence is.
+          </p>
+        </>
+      )}
     </main>
   );
 }
