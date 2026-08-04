@@ -1,5 +1,8 @@
+import io
+import logging
 from enum import StrEnum
 
+from PIL import Image
 from sqlalchemy import func
 from sqlmodel import Session, col, select
 
@@ -7,7 +10,10 @@ from app.config import settings
 from app.llm import LLM
 from app.models.post import Post
 from app.models.template import Template, TemplateKind
+from app.rendering import DEFAULT_HEIGHT, DEFAULT_WIDTH, SLOT
 from app.templates import create_template, usable_templates
+
+log = logging.getLogger(__name__)
 
 # How many of the strongest posts the model is shown. Enough to see a pattern repeat,
 # few enough that the weak tail cannot dilute it.
@@ -185,7 +191,117 @@ def _visual_sample(
     return pairs
 
 
-_VISUAL_SYSTEM = "Placeholder — Task 4 writes the real extraction prompt."
+# Copied from monte-workshop/bots-and-tools/brand/brand.json (version 2026-06-10) rather
+# than read across repositories at runtime. ponytail: one constant, re-copied when the
+# brand changes. Make it a fetch when a second tool in this repo needs the same values.
+BRAND = """\
+Colours: #d65831 primary orange — the ONLY saturated colour, used for one accent per
+image. #FAFAF8 page background (warm, never cold white). #FFFFFF card surface. #1A1816
+text. #7A756D muted text. #E0DFDB borders.
+Type: Cabinet Grotesk bold/extrabold for headlines, set tight and large. A neutral
+grotesque for body and labels. Kickers are small, letterspaced and uppercase.
+Layout: generous margins, one idea per image, a source line at the foot."""
+
+_VISUAL_SYSTEM = f"""\
+You extract reusable visual layouts from the images of social posts that already
+performed well.
+
+You are given those images, strongest first. Your job is to express the *repeatable
+layout* underneath the specific subject matter as HTML, so it can be reused for a
+different subject next week.
+
+The output is rendered by a headless browser at the size of the source image. It is not
+sent to an image model, so every word and number in it is exact.
+
+Rules:
+- Return complete, self-contained HTML: one root element with an inline <style>. No
+  external stylesheets, no <img> src you invent, no JavaScript, no web fonts.
+- Put a {{slot_name}} placeholder wherever the content changes between posts. Every
+  placeholder in the markup must appear in "slots", and every slot must appear in the
+  markup. This is checked, and a mismatch discards the proposal.
+- Slot "type" is "text" for words and numbers, "image_url" for a picture. An "image_url"
+  slot renders as <img src="{{slot}}">.
+- If the source image carries a brand mark, give that slot "role": "logo". It is filled
+  from a real logo file, never drawn.
+- Do not reproduce the source's words. The example values are illustrations of the shape.
+- Abstract only what genuinely repeats. Do not invent a layout no image shows.
+- Ground every layout in the images that justify it, by their id. Never cite an id you
+  were not given.
+- Prefer two or three sharply different layouts over many similar ones.
+
+Brand:
+{BRAND}
+
+Return ONLY JSON of this shape, with no commentary:
+{{
+  "visuals": [
+    {{
+      "name": "short-kebab-name",
+      "html": "<div style=…>{{kicker}}</div><h1>{{headline}}</h1>",
+      "slots": [
+        {{"name": "kicker", "type": "text", "example": "a real example"}},
+        {{"name": "logo", "type": "image_url", "role": "logo", "example": "https://…"}}
+      ],
+      "source_post_ids": ["id"],
+      "rationale": "why this shape works, one sentence"
+    }}
+  ]
+}}"""
+
+
+class _RejectedProposal(RuntimeError):
+    """One proposal is unusable. The others in the batch are not."""
+
+
+def _to_visual(
+    session: Session, proposal: dict, sizes: dict[str, tuple[int, int]], cohort: Cohort
+) -> Template:
+    name = (proposal.get("name") or "").strip()
+    markup = (proposal.get("html") or "").strip()
+    if not name or not markup:
+        raise _RejectedProposal(f"proposal missing name or html: {proposal!r}")
+
+    slots = proposal.get("slots") or []
+    declared = {str(slot.get("name")) for slot in slots}
+    used = set(SLOT.findall(markup))
+    if used != declared:
+        # Both directions matter and they fail differently. A placeholder with no slot
+        # raises MissingSlotValue in Studio, after a human approved it. A slot with no
+        # placeholder is a control the picker offers that changes nothing on the image.
+        raise _RejectedProposal(
+            f"{name}: markup and slots disagree — "
+            f"undeclared {sorted(used - declared)}, unused {sorted(declared - used)}"
+        )
+
+    # Keep only ids the model was actually shown — provenance has to be checkable.
+    provenance = [pid for pid in proposal.get("source_post_ids") or [] if pid in sizes]
+    # The size is the source's, and only when there is exactly one source to take it from.
+    # Averaging two sizes would invent a third that no post ever used.
+    width, height = sizes[provenance[0]] if len(provenance) == 1 else (
+        DEFAULT_WIDTH,
+        DEFAULT_HEIGHT,
+    )
+
+    return create_template(
+        session,
+        kind=TemplateKind.VISUAL,
+        name=name,
+        body={
+            "renderer": "html",
+            "html": markup,
+            "width": width,
+            "height": height,
+            "rationale": (proposal.get("rationale") or "").strip(),
+            "cohort": cohort.value,
+        },
+        slots=slots,
+        provenance=provenance,
+    )
+
+
+def _size_of(raw: bytes) -> tuple[int, int]:
+    """The source image's dimensions, which become the template's."""
+    return Image.open(io.BytesIO(raw)).size
 
 
 def _visual_prompt(sample: list[tuple[Post, bytes]]) -> str:
@@ -213,8 +329,23 @@ def propose_visuals(
     if not sample:
         return []
 
-    llm.complete_json(_VISUAL_SYSTEM, _visual_prompt(sample), [raw for _, raw in sample])
-    return []
+    result = llm.complete_json(
+        _VISUAL_SYSTEM, _visual_prompt(sample), [raw for _, raw in sample]
+    )
+    proposals = result.get("visuals")
+    if not isinstance(proposals, list):
+        raise ExtractionError(f"expected a 'visuals' list, got keys {sorted(result)}")
+
+    sizes = {post.zernio_id: _size_of(raw) for post, raw in sample}
+    kept: list[Template] = []
+    for proposal in proposals:
+        try:
+            kept.append(_to_visual(session, proposal, sizes, cohort))
+        except _RejectedProposal as exc:
+            # One bad layout in five must not cost the other four. The reason is logged
+            # rather than raised, and the proposal simply never appears.
+            log.warning("visual proposal rejected: %s", exc)
+    return kept
 
 
 def _build_prompt(posts: list[Post]) -> str:

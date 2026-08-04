@@ -18,7 +18,7 @@ DEFAULT_HEIGHT = 1350
 
 # A slot looks like {snake_name}. Deliberately narrow so CSS rules — `.card { color: red }`
 # — are never mistaken for placeholders. str.format() cannot be used here for that reason.
-_SLOT = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+SLOT = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 
 
 class MissingSlotValue(RuntimeError):
@@ -68,7 +68,7 @@ def fill(template_html: str, values: dict[str, str], *, escape: bool = True) -> 
         replacement = html_escape.escape(str(value)) if escape else str(value)
         filled = filled.replace(f"{{{name}}}", replacement)
 
-    unresolved = sorted(set(_SLOT.findall(filled)))
+    unresolved = sorted(set(SLOT.findall(filled)))
     if unresolved:
         raise MissingSlotValue(f"no value supplied for: {', '.join(unresolved)}")
     return filled
