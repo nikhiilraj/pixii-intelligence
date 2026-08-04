@@ -104,6 +104,20 @@ class Settings(BaseSettings):
     # this runs anywhere else, authentication comes before this flag may be true.
     publishing_enabled: bool = False
 
+    # Reconciliation: how long after a post's own moment — its scheduled instant, or the
+    # moment a `publish_now` was accepted — before Zernio is asked what actually happened.
+    #
+    # A grace period rather than an immediate check, because a post that is one second past
+    # its schedule and still `scheduled` is a queue doing its job, not a drift. Fifteen
+    # minutes is comfortably beyond any publish latency and far inside the interval that
+    # matters to a person.
+    reconcile_grace_minutes: int = 15
+    # How long an accepted command may sit with no clear answer before someone is told that
+    # Pixii cannot confirm it. Longer than the metrics tick, so at least one check has
+    # happened and come back unclear before the card goes out; short enough that the news
+    # still arrives on the day. This does **not** end the polling — see `reconcile.py`.
+    reconcile_stale_hours: int = 12
+
     # How many drafts one idea may be written as at `POST /drafts/variants`. **A ceiling, not a
     # default**: N variants is N times the paid completions and N renders inside one request, and
     # `autonomous_max_drafts` was a default that a query parameter could walk straight past —

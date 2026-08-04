@@ -9,6 +9,7 @@ from app.daily import run_daily_slot
 from app.db import engine
 from app.llm import AzureChat
 from app.metrics import sync_metrics
+from app.reconcile import reconcile_publications
 from app.rendering import CloudflareRenderer
 from app.zernio import ZernioClient
 
@@ -20,7 +21,20 @@ scheduler = BackgroundScheduler(timezone="UTC")
 
 
 def run_metrics_sync() -> None:
-    """Refresh every post's metrics. Failures are logged, never raised into the scheduler."""
+    """Refresh every post's metrics, then reconcile what Zernio accepted but never delivered.
+
+    Failures are logged, never raised into the scheduler.
+
+    Two questions on one tick rather than a second job, and in this order. The sync asks what
+    every post has done; reconciliation asks what became of the handful of commands still
+    unaccounted for — and it asks **after** the sync has committed, with its own commits, so a
+    reconciliation that dies cannot roll back a metrics sync that already succeeded. It also
+    means a post the sync just observed live is skipped rather than asked about.
+
+    ponytail: not a third scheduler entry. The note above still holds — two periodic jobs do
+    not justify a broker, and a third would only add a way for these to disagree about how
+    recent "recent" is.
+    """
     from sqlmodel import Session
 
     client = ZernioClient()
@@ -28,6 +42,7 @@ def run_metrics_sync() -> None:
         with Session(engine) as session:
             result = sync_metrics(session, client)
             session.commit()
+            result["reconciled"] = reconcile_publications(session, client)
         log.info("scheduled metrics sync complete: %s", result)
     except Exception:
         # A scheduler that dies on one bad run stops refreshing silently, which is the

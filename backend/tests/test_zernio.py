@@ -231,3 +231,48 @@ def test_a_presign_without_an_upload_target_is_an_error_not_an_empty_url():
 
     with pytest.raises(ZernioResponseError):
         client_returning(handler).upload_media(b"x", "v.png", "image/png")
+
+
+# --- one post, as the reconciler asks about it ------------------------------------------
+
+
+def test_get_post_asks_for_the_one_post_by_id():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"post": {"_id": "zp-9", "status": "published"}})
+
+    body = client_returning(handler).get_post("zp-9")
+
+    # Not `/posts` and not `/analytics`: one read of one post, so a pass over a handful of
+    # unconfirmed commands does not walk the whole account to answer each of them.
+    assert requests[0].method == "GET"
+    assert requests[0].url.path == "/api/v1/posts/zp-9"
+    assert body["status"] == "published"
+
+
+def test_get_post_reads_a_bare_post_as_well_as_a_wrapped_one():
+    """Both shapes are documented across versions and neither is an error. A reader that
+    only understood the wrapper would see every bare answer as a post with no status —
+    which reconciliation would record as "nobody could tell", forever."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"_id": "zp-9", "status": "failed"})
+
+    assert client_returning(handler).get_post("zp-9")["status"] == "failed"
+
+
+def test_a_post_zernio_will_not_return_raises_with_its_own_reason():
+    """A refusal must not read as an empty post. An empty dict has no status, and a missing
+    status is how this client says "unresolved" — so swallowing this would turn every
+    outage into a queue of posts nobody could ever confirm."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, text="post not found")
+
+    with pytest.raises(ZernioRefused) as raised:
+        client_returning(handler).get_post("zp-missing")
+
+    assert "404" in str(raised.value)
+    assert "post not found" in str(raised.value)

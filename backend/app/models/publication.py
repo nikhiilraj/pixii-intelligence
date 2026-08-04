@@ -12,11 +12,22 @@ PUBLISH_NOW = "publish_now"
 CANCEL_SCHEDULE = "cancel_schedule"
 ACTIONS = (SCHEDULE, PUBLISH_NOW, CANCEL_SCHEDULE)
 
-# `requested` — written down, not yet sent. `accepted` — Zernio took it. `failed` — Zernio
-# refused, or the attempts ran out. Nothing here claims the post is live; that is
-# `Draft.went_live_at`, observed rather than assumed.
+# `requested` — written down, not yet sent. `accepted` — Zernio took the command. `published`
+# — the post was afterwards **observed** live. `failed` — Zernio refused the command, or
+# reconciliation found the post never went out.
+#
+# **`accepted` is not `published`, and no amount of elapsed time turns one into the other.**
+# It records that Zernio took the command; whether the post went out is a separate question
+# with a separate answer, and the two drifts between them — a schedule that never fired, and
+# a `publish_now` accepted and then not delivered — are invisible unless something asks. That
+# is `reconcile.py`, and `published` here is its answer, not an assumption.
+#
+# There is deliberately no state for "we asked and could not tell". An unclear answer leaves
+# the row `accepted` with `checked_at` stamped, because a third state would either stop the
+# polling — losing a post that publishes an hour later — or claim knowledge nobody has.
 REQUESTED = "requested"
 ACCEPTED = "accepted"
+PUBLISHED = "published"
 FAILED = "failed"
 
 
@@ -79,3 +90,28 @@ class Publication(SQLModel, table=True):
     # When Zernio accepted it. NULL while `requested`, and NULL forever if it failed —
     # never a placeholder, because "accepted at midnight" is a thing that did not happen.
     accepted_at: datetime | None = None
+
+    # --- what reconciliation found out afterwards ------------------------------------------
+
+    # When the remote post was last asked about. NULL means **nobody has asked yet**, which is
+    # a different fact from "asked and it was not live" — the same distinction `—` versus `0`
+    # protects everywhere else in this app. On a terminal row this is also when the outcome
+    # was observed, so there is no separate `resolved_at`: polling stops at a terminal state,
+    # so the last check *is* the resolution.
+    checked_at: datetime | None = None
+
+    # Zernio's own word for the post at that check — `published`, `failed`, `draft`,
+    # `scheduled`. NULL until asked, and NULL again is what an answer carrying no status at
+    # all leaves behind: an unreadable answer is not a status of "unknown", it is no reading.
+    remote_status: str | None = None
+
+    # Two delivery stamps, not one, and each written only after Teams accepted that card —
+    # the retry mechanism `daily.notify_run` established, where a nullable timestamp does the
+    # work of a delivery table.
+    #
+    # They are separate because both cards can be owed on the same row: a command that stays
+    # unconfirmed for hours earns the "cannot confirm" card, and if Zernio later says it
+    # failed, that is new information and a second card. One column would swallow the second
+    # one — the real failure — as already-notified.
+    unconfirmed_notified_at: datetime | None = None
+    failure_notified_at: datetime | None = None

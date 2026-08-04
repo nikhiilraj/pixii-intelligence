@@ -189,6 +189,59 @@ is satisfied.
    - Inbox queue 3 (`main.py`) is `zernio_post_id IS NOT NULL AND went_live_at IS NULL`,
      presented as *waiting on a human*. A scheduled post matches it and is waiting on a
      clock. Exclude scheduled publications or the queue stops meaning what it says.
+
+   **Status: shipped 2026-08-05.** `app/reconcile.py` runs on `run_metrics_sync`, after the
+   sync commits and with its own commits, so a reconciliation that dies cannot roll back a
+   sync that succeeded. `ZernioClient.get_post` is back — deleted an hour after it was written
+   for having no caller, restored with one and three tests. `Publication` gains a `published`
+   state and four nullable columns (`checked_at`, `remote_status`, and a delivery stamp for
+   each of the two cards) in migration `f3c1d2e4a5b6`.
+
+   Three decisions are worth reading before changing anything here:
+
+   - **Only `published` and `failed` resolve a row.** A `draft` status past the moment
+     resolves too — that is the `isDraft` trap seen from the other end, and status plus clock
+     is determinate, not ambiguous. Everything else leaves the row `accepted` with `checked_at`
+     stamped and is asked again next tick. There is deliberately **no third state**: one would
+     either stop the polling, losing a post that publishes an hour later, or claim knowledge
+     nobody has.
+   - **A positive `published` stamps `went_live_at`.** This is not a second copy of
+     `metrics.stamp_published` — that one stays the corpus-scanning detector — it is a second
+     and stronger *observation*. Without it the slice would ship a regression: resolving the
+     row drops it out of `scheduled_draft_ids`, and a `NULL went_live_at` would put an
+     already-published post back in queue 3 as "waiting on you", possibly forever, since the
+     analytics window may never carry it.
+   - **Only the latest accepted command per draft is reconciled**, through the shared
+     `distribution.latest_accepted`. Reconciling every accepted row would report a schedule its
+     own operator cancelled as a failure, and send two cards for one rescheduled post.
+
+   Both cards retry until Teams accepts them, `daily.notify_run`'s idiom. The *failure* retry
+   needs its own sweep (`_owed_a_card`), because a resolved row is terminal and the due pass
+   never looks at it again — without that, one refused delivery loses the message permanently,
+   which is the failure this whole slice exists to end.
+
+   Twelve mutations checked, each fails a test — reconciling before the moment, calling an
+   ambiguous answer failed, calling it published, dropping the notification, stamping the
+   delivery regardless of the outcome, skipping the `went_live_at` stamp, reconciling every
+   accepted row instead of the latest, parking the still-a-draft case as unresolved, dropping
+   the undelivered-card sweep, stamping `checked_at` after a read that never returned,
+   understanding only the wrapped `get_post` shape, and letting a resolved publication still
+   count as scheduled. 613 backend tests.
+
+   **Not verified: the response shape.** Nothing has been read from the live account. The
+   reconciler assumes `GET /v1/posts/{postId}` answers with the post either bare or wrapped in
+   `post`, carrying a `status` of `draft` / `scheduled` / `published` / `failed` / `partial`
+   (the words the research doc records for the `GET /v1/posts` status filter and the webhook
+   event names), an optional `publishedAt`, and an optional `error` or `failureReason`. Every
+   one of those is read defensively — an unreadable answer is unresolved, never a publication —
+   so a wrong guess costs latency and a "cannot confirm" card, not a false record. The probe
+   that settles it is one authenticated GET against a real post id, and it should happen
+   alongside the slice 7 base-URL comparison.
+
+   Also unverified: no card has reached a real Teams channel, for the same reason v1's has
+   not. And a `partial` is treated as a failure on the ground that this account has exactly one
+   connected target, so "some of it went out" cannot arise — that reasoning expires the day a
+   draft goes to two platforms.
 7. **Base-URL migration, separately.** `zernio_base_url` is still `getlate.dev`; the
    documented base is `https://zernio.com/api/v1`. The probe that matters is not "does
    zernio.com answer" but "does the same key return the same account": `GET /posts` against

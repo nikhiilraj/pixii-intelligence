@@ -261,19 +261,40 @@ def submit(
     return publication
 
 
+def latest_accepted(session: Session) -> dict[int, Publication]:
+    """The last command Zernio accepted for each draft, keyed by draft id.
+
+    **Last command per draft wins**, and that rule has two customers now, which is why it
+    lives here rather than inside either of them. A cancel after a schedule puts the draft
+    back in the human queue — the whole point of cancelling — and it also stops the reconciler
+    raising an alarm about a schedule whose time passed because its own operator withdrew it.
+    Two copies of this rule could disagree about which command a post is living under, and the
+    disagreement would show up as a false failure card.
+
+    Ordered by `(created_at, id)`, not `created_at` alone: two commands committed inside the
+    same clock tick would otherwise resolve in whatever order the scan returned them.
+    """
+    rows = session.exec(
+        select(Publication)
+        .where(col(Publication.state) == ACCEPTED)
+        .order_by(col(Publication.created_at), col(Publication.id))
+    ).all()
+    return {row.draft_id: row for row in rows}
+
+
 def scheduled_draft_ids(session: Session) -> set[int]:
     """Drafts whose latest accepted command left them waiting on a clock.
 
     The Inbox presents "pushed but not live" as a human gate. A scheduled post matches that
     predicate and is waiting on nothing but time, so without this it would sit in a queue of
     things a person is supposed to act on and never leave it.
+
+    A schedule that reconciliation has since resolved — published, or found never to have
+    fired — leaves this set on its own, because it is no longer `accepted`. That is the
+    intended coupling: a post whose fate is known is not waiting on a clock.
     """
-    rows = session.exec(
-        select(Publication.draft_id, Publication.action)
-        .where(col(Publication.state) == ACCEPTED)
-        .order_by(col(Publication.created_at))
-    ).all()
-    # Last command per draft wins: a cancel after a schedule puts the draft back in the
-    # queue, which is the whole point of cancelling.
-    latest: dict[int, str] = {draft_id: action for draft_id, action in rows}
-    return {draft_id for draft_id, action in latest.items() if action == SCHEDULE}
+    return {
+        draft_id
+        for draft_id, publication in latest_accepted(session).items()
+        if publication.action == SCHEDULE
+    }

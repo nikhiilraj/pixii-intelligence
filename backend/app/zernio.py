@@ -108,6 +108,29 @@ class ZernioClient:
             )
         return dict(response.json())
 
+    def get_post(self, post_id: str) -> dict:
+        """One post as Zernio currently sees it. The reconciler's only question.
+
+        Not `list_posts`: that walks every page of the account to answer "what exists",
+        where this answers "what happened to this one". Not `/analytics` either — that is a
+        recent 50-row window and 11 published posts in the live account have no row in it at
+        all, so an absence there is not evidence that a post did not publish.
+
+        This method was written once before and deleted the same hour for having no caller.
+        It is back with one: `reconcile.reconcile_publications`.
+        """
+        response = self._client.get(f"/posts/{post_id}")
+        if response.status_code >= 400:
+            raise ZernioRefused(
+                f"Zernio would not return post {post_id} ({response.status_code}): "
+                f"{response.text[:300]}"
+            )
+        body = response.json()
+        # The single-post route returns the post either bare or wrapped in `post`; both
+        # shapes are documented across versions and neither is an error.
+        post = body.get("post") if isinstance(body, dict) else None
+        return dict(post if isinstance(post, dict) else body)
+
     def upload_media(self, data: bytes, filename: str, content_type: str) -> str:
         """Put these bytes where a post can reference them. Returns the public URL.
 
