@@ -668,3 +668,51 @@ def test_the_revision_reaches_the_api(api, session):
     session.commit()
 
     assert api.get(f"/drafts/{draft.id}").json()["revision"] == 2
+
+
+# --- the two wall clocks a year that are not one instant --------------------------------
+
+
+def test_a_time_that_daylight_saving_skips_is_refused(session, enabled):
+    """02:30 on a spring-forward morning never happens.
+
+    Python still returns *an* instant for it — `fold` picks one, defaulting to the first —
+    and the review screen resolves its own preview in the browser with no guarantee it picks
+    the same. The confirmation would show one instant and the server would schedule another
+    an hour away, silently, on the one morning a reader would least expect it.
+    """
+    with pytest.raises(ValueError, match="does not exist"):
+        resolve(datetime(2027, 3, 14, 2, 30), "America/New_York")
+
+
+def test_a_time_that_happens_twice_is_refused(session, enabled):
+    """01:30 on a fall-back morning names two different instants, an hour apart."""
+    with pytest.raises(ValueError, match="happens twice"):
+        resolve(datetime(2027, 11, 7, 1, 30), "America/New_York")
+
+
+def test_ordinary_times_either_side_of_a_change_still_resolve():
+    """The guard must refuse one hour a year, not make a DST zone unusable."""
+    assert resolve(datetime(2027, 3, 14, 1, 30), "America/New_York").hour == 6
+    assert resolve(datetime(2027, 3, 14, 3, 30), "America/New_York").hour == 7
+    # And a zone with no DST at all is untouched — the configured default.
+    assert resolve(datetime(2027, 3, 14, 2, 30), "Asia/Kolkata") == datetime(
+        2027, 3, 13, 21, 0, tzinfo=UTC
+    )
+
+
+def test_a_skipped_wall_clock_answers_422_and_says_why(api, session, enabled):
+    draft = pushed(session)
+    session.commit()
+
+    response = api.post(
+        f"/drafts/{draft.id}/schedule",
+        json={
+            "revision": draft.revision,
+            "local_time": datetime(2027, 3, 14, 2, 30).isoformat(),
+            "timezone": "America/New_York",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "does not exist" in response.json()["detail"]

@@ -56,12 +56,45 @@ def resolve(local: datetime, timezone: str) -> datetime:
     handler's `except ValueError` walked straight past it and `Asia/Kolkta` came back as a
     500. It is a typo in a field the client supplies; it deserves the same 422 as a time in
     the past.
+
+    A wall clock that daylight saving makes **nonexistent or ambiguous** is refused rather
+    than resolved, and that is the interesting case.
+
+    Twice a year, one hour wide, a local time either does not happen (02:30 on a
+    spring-forward morning) or happens twice (01:30 on a fall-back morning). Python will
+    still hand back *an* instant for both — `fold` decides which, and the default is the
+    first. The review screen computes its own preview of the resolved UTC in the browser, and
+    nothing makes the browser's choice of fold agree with this one. So the confirmation could
+    display one instant while the server scheduled another an hour away, with no error
+    anywhere: precisely the surprise the confirmation step exists to remove, arriving on the
+    one day a reader would least expect it.
+
+    Refusing costs a person one edit and tells them why. Resolving silently costs a post
+    going out at the wrong hour. `Asia/Kolkata` has no DST so this never fires on the
+    configured default — which is exactly why it would have gone unnoticed until the day
+    someone scheduled into a zone that does.
     """
     try:
         zone = ZoneInfo(timezone)
     except (ZoneInfoNotFoundError, ValueError) as exc:
         raise ValueError(f"{timezone!r} is not an IANA timezone name") from exc
-    return local.replace(tzinfo=zone).astimezone(UTC)
+
+    aware = local.replace(tzinfo=zone)
+
+    # PEP 495: for a time that does not exist, converting to UTC and back does not return
+    # what you started with. Comparing wall clocks rather than instants is the whole test.
+    if aware.astimezone(UTC).astimezone(zone).replace(tzinfo=None) != local:
+        raise ValueError(
+            f"{local.isoformat()} does not exist in {timezone} — the clocks move forward "
+            f"over it. Choose a time before or after the change."
+        )
+    # And for a time that happens twice, the two folds carry different offsets.
+    if aware.utcoffset() != aware.replace(fold=1).utcoffset():
+        raise ValueError(
+            f"{local.isoformat()} happens twice in {timezone} — the clocks move back over "
+            f"it, so it names two different instants. Choose a time either side of the change."
+        )
+    return aware.astimezone(UTC)
 
 
 def idempotency_key(draft_id: int, revision: int, action: str, when: datetime | None) -> str:
