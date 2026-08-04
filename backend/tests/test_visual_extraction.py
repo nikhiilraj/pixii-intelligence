@@ -1,6 +1,7 @@
 import io
 from datetime import datetime
 
+import pytest
 from PIL import Image
 
 from app.config import settings
@@ -8,6 +9,18 @@ from app.extraction import propose_visuals
 from app.models.post import Post
 
 CURRENT = datetime(2026, 6, 1)
+
+
+@pytest.fixture(autouse=True)
+def isolated_media(tmp_path, monkeypatch):
+    """Never write into the real media cache.
+
+    `settings.media_dir` is the live directory `download_post_media` fills, and
+    `_cached` resolves a post's file by scanning it for `{zernio_id}{suffix}` — so a
+    leftover fixture file named like a real post id would be served as that post's
+    media. The session fixture rolls back rows and does nothing to the filesystem.
+    """
+    monkeypatch.setattr(settings, "media_dir", tmp_path)
 
 
 class FakeLLM:
