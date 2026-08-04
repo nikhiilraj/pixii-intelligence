@@ -7,6 +7,7 @@ dict and drops the response's usage block, is that nobody measured it.
 
 import hashlib
 import json
+import time
 
 import pytest
 from sqlmodel import SQLModel, col, select
@@ -28,13 +29,16 @@ ANSWER = {"hook": "a hook", "body": "a body"}
 class FakeLLM:
     """Records what it was asked, answers with `responses` in turn, or raises."""
 
-    def __init__(self, *responses, raises: Exception | None = None):
+    def __init__(self, *responses, raises: Exception | None = None, delay: float = 0.0):
         self.responses = list(responses) or [ANSWER]
         self.raises = raises
+        self.delay = delay
         self.calls: list[tuple[str, str, tuple]] = []
 
     def complete_json(self, system: str, user: str, images=()) -> dict:
         self.calls.append((system, user, tuple(images)))
+        if self.delay:
+            time.sleep(self.delay)
         if self.raises is not None:
             raise self.raises
         return self.responses.pop(0) if len(self.responses) > 1 else self.responses[0]
@@ -161,13 +165,33 @@ def test_retries_is_zero_because_one_attempt_was_actually_observed(session):
     assert trace.retries == 0
 
 
-def test_latency_is_recorded(session):
-    traced_call(session, FakeLLM(), PROMPT, "u", correlation_id="c")
+def test_latency_is_the_time_the_call_took_and_not_a_constant(session):
+    """`assert latency_ms >= 0` passed against a hardcoded `0`, which is the same
+    structurally-always-zero number `SpendMeter` warns about. The call is made slow on
+    purpose, so a tracer that stopped timing fails here instead of reporting free calls."""
+    traced_call(session, FakeLLM(delay=0.05), PROMPT, "u", correlation_id="c")
     session.flush()
 
     (trace,) = traces(session)
     assert trace.latency_ms is not None
-    assert trace.latency_ms >= 0
+    assert trace.latency_ms >= 40
+
+
+def test_a_failing_call_is_timed_too(session):
+    """The time a failing call spent is real, and usually the interesting number."""
+    with pytest.raises(RuntimeError):
+        traced_call(
+            session,
+            FakeLLM(raises=RuntimeError("boom"), delay=0.05),
+            PROMPT,
+            "u",
+            correlation_id="c",
+        )
+    session.flush()
+
+    (trace,) = traces(session)
+    assert trace.latency_ms is not None
+    assert trace.latency_ms >= 40
 
 
 # --- the output hash ------------------------------------------------------------------------

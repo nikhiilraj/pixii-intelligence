@@ -199,3 +199,24 @@ def test_the_write_prompt_declares_the_keys_the_generator_actually_reads():
     # `visual_values` is not required: a visual with no writable slots asks for none, and
     # `_written_values` reads it with `.get(...) or {}`.
     assert set(schema["required"]) == {"hook", "body"}
+
+
+def test_the_suggest_prompt_declares_the_four_keys_it_asks_the_model_for():
+    """All four required, matching the text — including `reason`, which the operator reads.
+
+    `required` states what the *prompt* demands, which is stricter than what `suggest_templates`
+    survives: `_by_name` falls back to the first approved template deliberately, so a model
+    naming nothing does not cost a draft. The schema is the contract; the caller's tolerance is
+    a separate, documented decision.
+    """
+    schema = prompts.get("draft.suggest_templates", "1.0.0").output_schema
+    assert set(schema["required"]) == {"hook", "structure", "visual", "reason"}
+
+
+def test_the_topics_prompt_requires_an_idea_on_every_topic():
+    """`propose_topics` drops any topic without an `idea` — it is the only load-bearing key."""
+    schema = prompts.get("topics.propose", "1.0.0").output_schema
+    assert schema["required"] == ["topics"]
+    item = schema["properties"]["topics"]["items"]
+    assert item["required"] == ["idea"]
+    assert set(item["properties"]) == {"idea", "why"}
