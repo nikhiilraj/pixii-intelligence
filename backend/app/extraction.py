@@ -265,11 +265,16 @@ class _RejectedProposal(RuntimeError):
 def _to_visual(
     session: Session, proposal: dict, sizes: dict[str, tuple[int, int]], cohort: Cohort
 ) -> Template:
+    # `proposal` is annotated `dict` and is not one — it is an element of a list parsed by
+    # `json.loads` from a model response, so it can be any JSON type. A type-checker will
+    # call this guard dead code. It is not: the annotation is the lie, not the check.
+    # ponytail: annotation left loose to match `_to_template` and `_to_structure`, which
+    # take the same untyped element the same way. Widen all three together or none.
     if not isinstance(proposal, dict):
         raise _RejectedProposal(f"proposal is not an object: {proposal!r}")
 
-    name = (proposal.get("name") or "").strip()
-    markup = (proposal.get("html") or "").strip()
+    name = str(proposal.get("name") or "").strip()
+    markup = str(proposal.get("html") or "").strip()
     if not name or not markup:
         raise _RejectedProposal(f"proposal missing name or html: {proposal!r}")
 
@@ -305,7 +310,7 @@ def _to_visual(
             "html": markup,
             "width": width,
             "height": height,
-            "rationale": (proposal.get("rationale") or "").strip(),
+            "rationale": str(proposal.get("rationale") or "").strip(),
             "cohort": cohort.value,
         },
         slots=slots,
