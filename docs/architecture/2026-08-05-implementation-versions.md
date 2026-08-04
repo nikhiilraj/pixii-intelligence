@@ -218,15 +218,27 @@ is satisfied.
    Both cards retry until Teams accepts them, `daily.notify_run`'s idiom. The *failure* retry
    needs its own sweep (`_owed_a_card`), because a resolved row is terminal and the due pass
    never looks at it again — without that, one refused delivery loses the message permanently,
-   which is the failure this whole slice exists to end.
+   which is the failure this whole slice exists to end. And the "cannot confirm" notice hangs
+   off the **clock**, not off the answer: a read that raises falls through rather than
+   `continue`ing, so a Zernio that answers nothing on every tick — expired key, wrong host,
+   service down — still produces a card. The first draft of this had the `continue`, and it
+   reproduced a silent scheduled-job failure inside the pass built to end them.
 
-   Twelve mutations checked, each fails a test — reconciling before the moment, calling an
+   Two consequences worth knowing rather than fixing. `published` is the **uncommon** path: the
+   metrics sync runs first on the same tick and `stamp_published` usually gets there, so the
+   audit row for an ordinary publication stays `accepted` and `published` is written only for
+   the posts the analytics window missed. And a `failed` publication returns its draft to Inbox
+   queue 3 — the queue means "waiting on a human" and a failed publication genuinely is. That
+   is the in-app half of "must be noticed", and while the Teams webhook is the dead connector
+   URL v1 records, it is the only half that works.
+
+   Thirteen mutations checked, each fails a test — reconciling before the moment, calling an
    ambiguous answer failed, calling it published, dropping the notification, stamping the
    delivery regardless of the outcome, skipping the `went_live_at` stamp, reconciling every
    accepted row instead of the latest, parking the still-a-draft case as unresolved, dropping
    the undelivered-card sweep, stamping `checked_at` after a read that never returned,
-   understanding only the wrapped `get_post` shape, and letting a resolved publication still
-   count as scheduled. 613 backend tests.
+   understanding only the wrapped `get_post` shape, letting a resolved publication still count
+   as scheduled, and skipping the row entirely when the read raised. 614 backend tests.
 
    **Not verified: the response shape.** Nothing has been read from the live account. The
    reconciler assumes `GET /v1/posts/{postId}` answers with the post either bare or wrapped in

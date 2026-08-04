@@ -359,6 +359,30 @@ def test_an_unreachable_post_writes_nothing_at_all(session, teams):
     assert counts["checked"] == 0
 
 
+def test_a_zernio_that_answers_nothing_is_still_reported(session, teams):
+    """The silence inside the pass built to end silences.
+
+    An expired key, a wrong host, a service down — the read raises on every tick, so the row
+    is never resolved and never even checked. If the stale notice hung off the *answer* rather
+    than off the clock, a schedule days overdue would produce no card at all and leave a
+    `log.exception` nobody reads as its only trace. Not hypothetical: `zernio_base_url` is
+    still awaiting the slice 7 host swap, and a base that 404s every post id is this exact
+    path.
+    """
+    draft = pushed(session)
+    publication = accepted(session, draft, when=overdue())
+    late = NOW + timedelta(hours=settings.reconcile_stale_hours)
+
+    reconcile_publications(session, Zernio(status=500).client(), at=late)
+
+    [card] = teams.cards
+    assert card["body"][0]["text"] == "Pixii cannot confirm a publication"
+    # Still nothing claimed about the post itself: no reading happened.
+    assert publication.state == ACCEPTED
+    assert publication.checked_at is None
+    assert publication.remote_status is None
+
+
 def test_an_unresolved_command_is_asked_again_next_tick(session, teams):
     """The reason there is no third state: a post that publishes late is still recorded."""
     draft = pushed(session)

@@ -25,6 +25,14 @@ ACTIONS = (SCHEDULE, PUBLISH_NOW, CANCEL_SCHEDULE)
 # There is deliberately no state for "we asked and could not tell". An unclear answer leaves
 # the row `accepted` with `checked_at` stamped, because a third state would either stop the
 # polling — losing a post that publishes an hour later — or claim knowledge nobody has.
+#
+# **`published` is the uncommon path, not the success path.** The metrics sync runs first on
+# the same tick and `stamp_published` stamps `went_live_at` from the account's analytics, and
+# reconciliation skips a draft already known live — so the audit row for an ordinary,
+# uneventful publication stays `accepted` forever. `published` is written only for the posts
+# the analytics window missed, which is the case `stamp_published` cannot reach at all. An
+# `accepted` row is therefore not evidence that anything went wrong; `Draft.went_live_at` is
+# where "did this go out" is answered, as it has been since before this table existed.
 REQUESTED = "requested"
 ACCEPTED = "accepted"
 PUBLISHED = "published"

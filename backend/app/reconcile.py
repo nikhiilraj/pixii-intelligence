@@ -291,31 +291,46 @@ def reconcile_publications(
         counts["notified"] += _notify_failure(session, publication, draft, at=at)
 
     for publication, draft in _due(session, at=at):
+        remote: dict | None = None
         try:
             remote = client.get_post(draft.zernio_post_id or "")
         except Exception:
-            # One unreachable post must not stop the pass. Nothing is written: we did not get
-            # an answer, so `checked_at` would claim a reading that never happened, and the
-            # row stays exactly as unresolved as it was.
+            # One unreachable post must not stop the pass, and nothing is written about it:
+            # we did not get an answer, so `checked_at` would claim a reading that never
+            # happened. The row is exactly as unresolved as it was — which is the point of
+            # falling through rather than `continue`ing. **No answer and an unclear answer
+            # are the same situation to everything below**, and a `continue` here put the
+            # stale notice out of reach: a schedule three days overdue against a Zernio that
+            # answers nothing on every tick would produce no card at all, forever, leaving a
+            # `log.exception` nobody reads as the only trace. That is a scheduled job failing
+            # in silence, reproduced inside the pass built to end it — and it is not
+            # hypothetical while `zernio_base_url` is still awaiting the slice 7 host swap.
             log.exception("could not read Zernio post %s", draft.zernio_post_id)
-            continue
 
-        counts["checked"] += 1
-        publication.checked_at = at
-        status = remote.get("status")
-        publication.remote_status = status if isinstance(status, str) and status else None
+        outcome = None
+        if remote is not None:
+            counts["checked"] += 1
+            publication.checked_at = at
+            status = remote.get("status")
+            publication.remote_status = status if isinstance(status, str) and status else None
+            outcome = _outcome(publication, remote)
 
-        outcome = _outcome(publication, remote)
         if outcome is None:
             # Unresolved, and stays `accepted` so the next tick asks again. Only the card is
             # decided here, and only once the wait has gone on long enough to be news.
-            session.add(publication)
-            session.commit()
+            if remote is not None:
+                session.add(publication)
+                session.commit()
             counts["unresolved"] += 1
             moment = _moment(publication)
             if moment is not None and at - utc(moment) >= stale:
                 counts["notified"] += _notify_unconfirmed(session, publication, draft, at=at)
             continue
+
+        # An outcome exists only where there was an answer to read it from — `outcome` is left
+        # None whenever `remote` is. Asserted rather than re-checked because the two are one
+        # fact, and a reader arriving here should not have to wonder which.
+        assert remote is not None
 
         publication.state, publication.last_error = outcome
         if publication.state == PUBLISHED:
