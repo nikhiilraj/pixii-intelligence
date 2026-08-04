@@ -280,6 +280,19 @@ def _unstorable(value: object) -> str | None:
     changes is the same bug with a delay on it. The cost is that a proposal can be dropped
     for a character in a field nothing would have written — an acceptable trade, since the
     only characters this rejects are ones no usable layout contains.
+
+    Known gap, left open deliberately: *depth*, not content. Psycopg serialises with
+    `json.dumps`, which recurses in C and blows the stack below the 1497-level ceiling
+    `json.loads` allows, so a deeply nested proposal still raises `RecursionError` at
+    flush rather than being rejected here — the same batch-killing shape as everything
+    above. It is unfixed because there is no exact check to write: the safe threshold is
+    not a constant but a function of how deep the call stack already is when psycopg
+    encodes: the shallowest failure measured was 1480 under pytest, while a standalone
+    script still stored 1490 and only broke at 1497. So any depth limit is a guess with a
+    margin that can be wrong in another call context. That is
+    categorically weaker than the exact checks around it. Not unreachable, either —
+    degenerate repetition from a model can plausibly emit >1500 nested brackets within a
+    16k token budget — but unlikely, and one lost batch is recoverable.
     """
     # Iterative, not recursive, and that is not a style choice. `json.loads` accepts up to
     # 1497 levels of nesting, a slot value may be nested arbitrarily deep, and a recursive
@@ -309,11 +322,15 @@ def _unstorable(value: object) -> str | None:
                 item.encode("utf-8")
             except UnicodeEncodeError as exc:
                 return f"{exc}, in {item!r}"
-            # `!r` on both, and it is load-bearing rather than tidiness: this string ends
-            # up in a `_RejectedProposal` that `propose_visuals` hands to `log.warning`,
-            # and an unescaped lone surrogate written to a stream raises UnicodeEncodeError
-            # at log time — outside the `except _RejectedProposal`, killing the batch this
-            # function just saved. `repr` escapes both triggers to ASCII.
+            # `!r` on both, because this string ends up in a `_RejectedProposal` that
+            # `propose_visuals` hands to `log.warning`. Not a crash guard: `logging`
+            # catches a failed write inside the handler and routes it to `handleError`,
+            # so it would never have reached the caller. What it costs is the message —
+            # on a strict-encoding stream the line is replaced by a `--- Logging error ---`
+            # traceback on stderr (measured), and elsewhere a NUL or lone surrogate renders
+            # as mojibake or silently vanishes. The reason a proposal was dropped is the
+            # only record anyone gets of it, so it is worth keeping legible; `repr` escapes
+            # both triggers to ASCII.
         elif isinstance(item, float) and not math.isfinite(item):
             return f"{item!r} is not a finite number"
         elif isinstance(item, dict):
@@ -339,9 +356,11 @@ def _to_visual(
     if not isinstance(proposal, dict):
         raise _RejectedProposal(f"proposal is not an object: {proposal!r}")
 
-    # Before anything is read out of it, so that every rejection message below — each of
-    # which interpolates `{name}` or `{proposal!r}` and is then logged — is built from
-    # text that can be written to a stream.
+    # Probed before `name` and `markup` are read, so every rejection message below is built
+    # from text that has already been cleared. Not a crash guard — `logging` swallows a
+    # failed write inside the handler and would not have taken the batch down. It keeps the
+    # messages legible: a NUL or a lone surrogate reaching a log line renders as mojibake
+    # or vanishes, and the reason a proposal was dropped is the only record anyone gets.
     unstorable = _unstorable(proposal)
     if unstorable:
         raise _RejectedProposal(f"proposal is not storable: {unstorable}")
