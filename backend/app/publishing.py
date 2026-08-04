@@ -183,7 +183,15 @@ def push_draft(
         # `ZernioResponseError` as well as a refusal: a presign that answers 200 without an
         # upload target is a failed push, not a crash. Both reach the route as a 502.
         raise PushFailed(str(exc)) from exc
-    post = body.get("post") if isinstance(body.get("post"), dict) else body
+    # `existingPost` as well as `post`. Within about five minutes, a repeat of the same
+    # `x-request-id` is answered with HTTP 200 and the original post under `existingPost` —
+    # the idempotency guarantee working, not a failure. Reading only `post` turned exactly
+    # the retry this app is built to make into "accepted the post but returned no id", which
+    # is untrue and points away from the real state: the post exists, we had merely never
+    # recorded its id. Adopting it here is also what stops the draft looking permanently
+    # unpushed while a real post sits in the account.
+    candidate = body.get("post") or body.get("existingPost")
+    post = candidate if isinstance(candidate, dict) else body
     post_id = post.get("_id") if isinstance(post, dict) else None
     if not post_id:
         raise PushFailed(f"Zernio accepted the post but returned no id: {str(body)[:200]}")

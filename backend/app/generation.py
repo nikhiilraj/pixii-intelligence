@@ -399,6 +399,16 @@ def _draw_visual(
         draft.visual_image = None
         draft.visual_error = f"{type(exc).__name__}: {exc}"
 
+    # `zernio_media_url` describes bytes that no longer exist here, so it cannot survive a
+    # redraw. `push_draft` re-sends a stored URL to reproduce Zernio's duplicate hash, and a
+    # draft that was pushed unsuccessfully, redrawn, and pushed again would otherwise create
+    # the post carrying the *previous* picture — silently, with the right image on screen.
+    #
+    # Cleared unconditionally, including on the failure branch where the caller may put the
+    # old image back: over-clearing costs one repeated upload, under-clearing publishes the
+    # wrong picture. Only one of those is worth guarding against.
+    draft.zernio_media_url = None
+
 
 def generate_draft(
     session: Session,
