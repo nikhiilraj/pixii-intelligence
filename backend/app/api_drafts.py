@@ -1,7 +1,7 @@
 import base64
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 from sqlmodel import col, desc, select
 
@@ -60,6 +60,10 @@ class DraftOut(BaseModel):
     asset_values: dict
     visual_error: str | None
     visual_png: str | None
+    # Whether there is a previous image to show or restore. The bytes themselves are not
+    # inlined here the way `visual_png` is — `GET /{id}/previous-visual` fetches those,
+    # since every list/get caller pays for this field but few will ever want the picture.
+    has_previous_visual: bool
     zernio_post_id: str | None
     # When Zernio accepted the push. Together with `created_at` this is what gives the Inbox
     # an age per queue: "built 6 days ago and never pushed" is the thing a count cannot say,
@@ -109,6 +113,7 @@ def _out(session: SessionDep, draft: Draft) -> DraftOut:
         visual_png=(
             base64.b64encode(draft.visual_image).decode() if draft.visual_image else None
         ),
+        has_previous_visual=draft.previous_visual is not None,
         zernio_post_id=draft.zernio_post_id,
         pushed_at=draft.pushed_at,
         went_live_at=draft.went_live_at,
@@ -465,10 +470,42 @@ def redraw(
     not a 500: it is the same "the library cannot serve this" conflict as generation's.
     """
     draft = _load(session, draft_id)
+    previous = draft.visual_image
     try:
         regenerate_visual(session, draft, _renderer(session, draft, html_renderer, image_renderer))
     except NoUsableTemplates as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    # Only when the redraw produced something. `_draw_visual` records a failure by setting
+    # `visual_image = None`, and moving that None across would turn one bad render into
+    # the loss of both pictures.
+    if draft.visual_image is not None:
+        draft.previous_visual = previous
+    session.commit()
+    session.refresh(draft)
+    return _out(session, draft)
+
+
+@router.get("/{draft_id}/previous-visual")
+def previous_visual(session: SessionDep, draft_id: int) -> Response:
+    """The image the last redraw replaced, for showing beside the current one."""
+    draft = _load(session, draft_id)
+    if draft.previous_visual is None:
+        raise HTTPException(status_code=404, detail=f"draft {draft_id} has no previous visual")
+    return Response(content=draft.previous_visual, media_type="image/png")
+
+
+@router.post("/{draft_id}/restore-visual")
+def restore_visual(session: SessionDep, draft_id: int) -> DraftOut:
+    """Put the previous image back, keeping the one it replaces.
+
+    A swap, not a rollback: restoring is itself undoable, so a mis-click costs nothing.
+    """
+    draft = _load(session, draft_id)
+    if draft.previous_visual is None:
+        raise HTTPException(status_code=409, detail=f"draft {draft_id} has no previous visual")
+    draft.visual_image, draft.previous_visual = draft.previous_visual, draft.visual_image
+    draft.visual_error = None
+    session.add(draft)
     session.commit()
     session.refresh(draft)
     return _out(session, draft)
