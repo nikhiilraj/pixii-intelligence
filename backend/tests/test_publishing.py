@@ -191,3 +191,160 @@ def test_lineage_metadata_is_flat_and_json_safe(session):
 
     assert json.loads(json.dumps(metadata)) == metadata
     assert all(isinstance(v, str | int) for v in metadata.values())
+
+
+PUBLIC_URL = "https://media.zernio.test/temp/1700000000_abc_pixii-draft.png"
+
+
+def client_with_media(captured: dict, *, presign_status: int = 200, put_status: int = 200):
+    """A client that answers all three calls a push with a picture makes.
+
+    Records them in one list so a test can assert on the order as well as the contents:
+    the upload has to happen before the post is created, and that ordering is the whole
+    reason a failed upload cannot leave a text-only post behind.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.setdefault("requests", []).append(
+            {
+                "method": request.method,
+                "path": request.url.path,
+                "url": str(request.url),
+                "body": json.loads(request.content)
+                if request.content and request.method != "PUT"
+                else {},
+                "content": request.content if request.method == "PUT" else None,
+                "request_id": request.headers.get("x-request-id"),
+            }
+        )
+        if request.method == "PUT":
+            return httpx.Response(put_status, text="denied" if put_status >= 400 else "")
+        if request.url.path.endswith("/media/presign"):
+            if presign_status >= 400:
+                return httpx.Response(presign_status, json={"error": "file too large"})
+            return httpx.Response(
+                presign_status,
+                json={"uploadUrl": "https://store.test/temp/x?sig=1", "publicUrl": PUBLIC_URL},
+            )
+        return httpx.Response(201, json={"post": {"_id": "zpost-1"}})
+
+    return ZernioClient(
+        api_key="k", base_url="https://example.test/api/v1", transport=httpx.MockTransport(handler)
+    )
+
+
+def a_draft_with_a_visual(session) -> Draft:
+    draft = a_draft(session)
+    draft.visual_image = b"\x89PNG\r\n\x1a\nrendered"
+    session.add(draft)
+    session.flush()
+    return draft
+
+
+def test_the_rendered_visual_is_uploaded_and_attached_to_the_post(session):
+    captured: dict = {}
+
+    push_draft(session, a_draft_with_a_visual(session), client_with_media(captured), account_id="a")
+
+    presign, put, create = captured["requests"]
+    assert presign["path"].endswith("/media/presign")
+    assert presign["body"]["contentType"] == "image/png"
+    assert put["method"] == "PUT"
+    assert put["content"] == b"\x89PNG\r\n\x1a\nrendered"
+    # The public URL from the presign response, not the signed upload URL.
+    assert create["body"]["mediaItems"] == [{"url": PUBLIC_URL, "type": "image"}]
+
+
+def test_the_post_still_reaches_zernio_as_a_draft_with_media_attached(session):
+    """The safety property, asserted against the payload that now carries a picture.
+
+    Media is another field on the same create call. If attaching it ever starts sending a
+    schedule, a publish or a queue instruction, this is what says so.
+    """
+    captured: dict = {}
+
+    push_draft(session, a_draft_with_a_visual(session), client_with_media(captured), account_id="a")
+
+    create = captured["requests"][-1]["body"]
+    assert create["mediaItems"]
+    assert create["isDraft"] is True
+    assert not create.get("publishNow")
+    assert not create.get("scheduledFor")
+    assert not create.get("queuedFromProfile")
+
+
+def test_a_draft_with_no_visual_sends_no_media_key_at_all(session):
+    """Not an empty list: `[]` claims the post has no picture, which is a different thing
+    from a render that failed."""
+    captured: dict = {}
+
+    push_draft(session, a_draft(session), client_with_media(captured), account_id="a")
+
+    requests = captured["requests"]
+    assert len(requests) == 1  # nothing was uploaded
+    assert "mediaItems" not in requests[0]["body"]
+
+
+def test_the_image_is_uploaded_before_the_post_is_created(session):
+    """The ordering is the guarantee: a failed upload cannot leave a text-only post."""
+    captured: dict = {}
+
+    push_draft(session, a_draft_with_a_visual(session), client_with_media(captured), account_id="a")
+
+    methods = [(r["method"], r["path"].rsplit("/", 1)[-1]) for r in captured["requests"]]
+    assert methods == [("POST", "presign"), ("PUT", "x"), ("POST", "posts")]
+
+
+def test_a_failed_upload_creates_no_post_and_leaves_the_draft_retryable(session):
+    captured: dict = {}
+    draft = a_draft_with_a_visual(session)
+
+    with pytest.raises(PushFailed) as raised:
+        push_draft(session, draft, client_with_media(captured, presign_status=413), account_id="a")
+
+    assert "file too large" in str(raised.value)
+    assert [r["path"] for r in captured["requests"]] == ["/api/v1/media/presign"]
+    assert draft.zernio_post_id is None
+    assert draft.pushed_at is None
+
+
+def test_a_store_that_rejects_the_upload_also_creates_no_post(session):
+    captured: dict = {}
+    draft = a_draft_with_a_visual(session)
+
+    with pytest.raises(PushFailed):
+        push_draft(session, draft, client_with_media(captured, put_status=403), account_id="a")
+
+    assert not any(r["path"].endswith("/posts") for r in captured["requests"])
+    assert draft.zernio_post_id is None
+
+
+def test_pushing_a_pushed_draft_again_uploads_nothing_and_creates_nothing(session):
+    """Idempotency has to survive the upload: a second push must not re-upload the picture
+    any more than it re-creates the post."""
+    captured: dict = {}
+    draft = a_draft_with_a_visual(session)
+    client = client_with_media(captured)
+
+    push_draft(session, draft, client, account_id="a")
+    push_draft(session, draft, client, account_id="a")
+
+    assert len(captured["requests"]) == 3
+
+
+def test_a_presign_that_answers_200_without_an_upload_target_is_a_push_failure(session):
+    """HTTP 200 with the useful part missing is this API's signature failure, and it must
+    reach the route as a failed push rather than an unhandled error."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"expiresIn": 3600})
+
+    client = ZernioClient(
+        api_key="k", base_url="https://example.test/api/v1", transport=httpx.MockTransport(handler)
+    )
+    draft = a_draft_with_a_visual(session)
+
+    with pytest.raises(PushFailed):
+        push_draft(session, draft, client, account_id="a")
+
+    assert draft.zernio_post_id is None

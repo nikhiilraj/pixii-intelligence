@@ -382,7 +382,24 @@ def test_an_empty_pick_falls_through_to_the_default(session, asset):
 
 
 def zernio_capturing(captured: dict) -> ZernioClient:
+    """Captures the create call, and answers the two upload calls that now precede it.
+
+    These drafts carry a rendered visual, so a push uploads it before creating the post.
+    Only the create body is captured — this file is about lineage metadata, and the upload
+    is pinned in test_publishing.py.
+    """
+
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            return httpx.Response(200)
+        if request.url.path.endswith("/media/presign"):
+            return httpx.Response(
+                200,
+                json={
+                    "uploadUrl": "https://store.test/temp/x?sig=1",
+                    "publicUrl": "https://media.zernio.test/temp/x.png",
+                },
+            )
         captured["body"] = json.loads(request.content) if request.content else {}
         return httpx.Response(201, json={"post": {"_id": "zpost-1"}})
 

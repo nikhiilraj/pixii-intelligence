@@ -1,7 +1,9 @@
+import json
+
 import httpx
 import pytest
 
-from app.zernio import ZernioClient, ZernioResponseError
+from app.zernio import ZernioClient, ZernioRefused, ZernioResponseError
 
 
 def client_returning(handler) -> ZernioClient:
@@ -138,3 +140,94 @@ def test_sends_the_api_key_as_a_bearer_token():
     client_returning(handler).fetch_posts()
 
     assert seen["auth"] == "Bearer test-key"
+
+
+PRESIGNED = "https://store.test/temp/1700000000_abc_pixii.png?X-Amz-Signature=sig"
+PUBLIC = "https://media.zernio.test/temp/1700000000_abc_pixii.png"
+
+
+def upload_handler(requests: list, *, presign_status: int = 200, put_status: int = 200):
+    """Answers both halves of an upload: the presign call and the PUT to the store."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "PUT":
+            return httpx.Response(put_status, text="" if put_status < 400 else "denied")
+        if presign_status >= 400:
+            return httpx.Response(presign_status, json={"error": "unsupported contentType"})
+        return httpx.Response(
+            presign_status,
+            json={
+                "uploadUrl": PRESIGNED,
+                "publicUrl": PUBLIC,
+                "key": "temp/1700000000_abc_pixii.png",
+                "expiresIn": 3600,
+            },
+        )
+
+    return handler
+
+
+def test_upload_media_presigns_then_puts_the_bytes_and_returns_the_public_url():
+    requests: list[httpx.Request] = []
+
+    url = client_returning(upload_handler(requests)).upload_media(b"PNGDATA", "v.png", "image/png")
+
+    presign, put = requests
+    assert presign.method == "POST"
+    assert presign.url.path == "/api/v1/media/presign"
+    assert json.loads(presign.content) == {
+        "filename": "v.png",
+        "contentType": "image/png",
+        "size": 7,
+    }
+    assert put.method == "PUT"
+    assert str(put.url) == PRESIGNED
+    assert put.content == b"PNGDATA"
+    # The public URL, not the signed one: the signed URL expires in an hour and is a
+    # credential, and it is the public one a post references.
+    assert url == PUBLIC
+
+
+def test_the_upload_put_carries_no_authorization_header():
+    """A presigned URL is signed over a fixed set of headers. An unexpected `Authorization`
+    is not among them, and the store rejects the request rather than ignoring it."""
+    requests: list[httpx.Request] = []
+
+    client_returning(upload_handler(requests)).upload_media(b"x", "v.png", "image/png")
+
+    put = requests[1]
+    assert "authorization" not in {k.lower() for k in put.headers}
+    assert put.headers["content-type"] == "image/png"
+
+
+def test_a_refused_presign_carries_the_services_own_reason():
+    requests: list[httpx.Request] = []
+    client = client_returning(upload_handler(requests, presign_status=400))
+
+    with pytest.raises(ZernioRefused) as raised:
+        client.upload_media(b"x", "v.png", "image/png")
+
+    assert "400" in str(raised.value)
+    assert "unsupported contentType" in str(raised.value)
+    assert len(requests) == 1  # nothing was uploaded
+
+
+def test_a_store_that_rejects_the_put_is_a_failure_not_a_silent_success():
+    requests: list[httpx.Request] = []
+    client = client_returning(upload_handler(requests, put_status=403))
+
+    with pytest.raises(ZernioRefused) as raised:
+        client.upload_media(b"x", "v.png", "image/png")
+
+    assert "403" in str(raised.value)
+
+
+def test_a_presign_without_an_upload_target_is_an_error_not_an_empty_url():
+    """This API's signature failure is HTTP 200 with the useful part missing."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"expiresIn": 3600})
+
+    with pytest.raises(ZernioResponseError):
+        client_returning(handler).upload_media(b"x", "v.png", "image/png")
