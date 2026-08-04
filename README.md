@@ -241,8 +241,21 @@ published, awaiting verdict:  0
 corpus:      107 posts (69 Monte, 15 creator inspiration, 13 pixii.creates, 10 Pixii_ai)
 templates:   11 approved · 50 proposed · 2 retired
 verdicts:    0
-tests:       460 backend · 233 frontend
+tests:       508 backend · 232 frontend
 ```
+
+Visual templates can now be **extracted** rather than hand-authored. `POST /templates/extract/visuals`
+shows a vision model the images of the posts that performed and asks for the layout underneath
+them, as HTML — not as a prompt. Every proposal is rendered once before it is offered, so nothing
+reaches the review queue that cannot be drawn, and the route is slow for that reason.
+
+The brand mark is **pinned, never generated**: a slot declaring `role: "logo"` gets the real asset's
+id as its `default_asset_id`, and the renderer embeds the file's own bytes. Set `BRAND_LOGO_ASSET_ID`
+to the id returned by `POST /assets` and no model ever draws the logo. Leaving it unset is fine —
+the slot simply has no default and the picker asks.
+
+Extraction still proposes; a human still approves. Nothing here ranks a visual template, for the
+same reason nothing ranks a hook.
 
 The scoreboard reads empty and that is **correct**, not broken: no generated post has ever gone
 live, so there is nothing to attribute.
