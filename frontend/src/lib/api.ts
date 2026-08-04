@@ -113,6 +113,7 @@ export type Draft = {
   asset_values: Record<string, string>;
   visual_error: string | null;
   visual_png: string | null;
+  has_previous_visual: boolean;
   zernio_post_id: string | null;
   lineage: { hook: LineageEntry; structure: LineageEntry; visual: LineageEntry };
 };

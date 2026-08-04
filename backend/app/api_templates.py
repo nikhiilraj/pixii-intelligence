@@ -31,6 +31,12 @@ from app.templates import (
 router = APIRouter(prefix="/templates", tags=["templates"])
 
 
+class PNGResponse(Response):
+    """A rendered template, including an accurate OpenAPI media type."""
+
+    media_type = "image/png"
+
+
 class TemplateIn(BaseModel):
     kind: TemplateKind
     name: str
@@ -199,13 +205,13 @@ class PreviewIn(BaseModel):
     values: dict[str, str] = {}
 
 
-@router.post("/preview")
+@router.post("/preview", response_class=PNGResponse)
 def preview_unsaved(
     session: SessionDep,
     html_renderer: HtmlRendererDep,
     image_renderer: ImageRendererDep,
     payload: PreviewIn,
-) -> Response:
+) -> PNGResponse:
     """Render a visual body that has not been saved, for the template editor.
 
     An unsaved edit has no id, so this takes the body and slots directly. The row is
@@ -231,14 +237,14 @@ def preview_unsaved(
     return _rendered(session, draft, payload.values, html_renderer, image_renderer)
 
 
-@router.post("/{template_id}/preview")
+@router.post("/{template_id}/preview", response_class=PNGResponse)
 def preview_visual(
     session: SessionDep,
     html_renderer: HtmlRendererDep,
     image_renderer: ImageRendererDep,
     template_id: int,
     values: dict[str, str],
-) -> Response:
+) -> PNGResponse:
     """Render a visual template with real values and return the image.
 
     The template's declared renderer selects which of the two paths runs. `values` arrives
@@ -255,7 +261,7 @@ def preview_visual(
 def _rendered(
     session: SessionDep, template: Template, values: dict[str, str],
     html_renderer, image_renderer,
-) -> Response:
+) -> PNGResponse:
     renderer = image_renderer if template.body.get("renderer") == "ai" else html_renderer
     try:
         image = render_template(session, template, values, renderer)
@@ -274,7 +280,7 @@ def _rendered(
             status_code=502,
             detail=f"rendering service returned {exc.response.status_code}",
         ) from exc
-    return Response(content=image, media_type="image/png")
+    return PNGResponse(content=image)
 
 
 @router.get("/{template_id}/compatible-hooks")

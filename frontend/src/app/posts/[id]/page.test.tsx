@@ -82,6 +82,7 @@ function draft(overrides: Partial<Draft> = {}): Draft {
     asset_values: {},
     visual_error: null,
     visual_png: null,
+    has_previous_visual: false,
     zernio_post_id: "6a289584ed8bce87c92f5466",
     lineage: {
       hook: { family: "eb93614c", version: 1, name: "open-question-then-tested" },

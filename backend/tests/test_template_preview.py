@@ -35,6 +35,14 @@ class FakeHtmlRenderer:
         return b"PNG"
 
 
+def test_preview_contract_advertises_png_not_json():
+    schema = app.openapi()
+
+    for path in ("/templates/preview", "/templates/{template_id}/preview"):
+        content = schema["paths"][path]["post"]["responses"]["200"]["content"]
+        assert set(content) == {"image/png"}
+
+
 def a_logo(session, tmp_path_factory) -> Asset:
     """A real one-pixel asset on disk, so `data_uri` has bytes to embed."""
     from app.assets import assets_dir
