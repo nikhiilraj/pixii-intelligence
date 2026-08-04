@@ -1032,11 +1032,14 @@ export default function Studio({
           <>
             <Lineage draft={draft} assets={library} />
 
-            {draft.zernio_post_id && (
-              <p className="text-xs text-muted">
-                In Zernio as a draft ({draft.zernio_post_id}). Publishing stays a human act.
-              </p>
-            )}
+            {/* "In Zernio as a draft ({id}). Publishing stays a human act." stood here, under
+                exactly the condition that now renders the publication panel — so the two always
+                appeared together, saying the same thing with the same id. It also went false the
+                moment it mattered: an accepted schedule or publish sets `isDraft: false`, and
+                this line would have read "as a draft" directly above a history row saying the
+                post is scheduled. Deleted rather than reworded; the panel's own first paragraph
+                names the post, and one place saying where the draft is cannot disagree with
+                itself. */}
 
             <article className="whitespace-pre-wrap border-y border-border py-6 text-[15px] leading-7">
               {draft.full_text}

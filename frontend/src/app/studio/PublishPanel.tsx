@@ -73,9 +73,17 @@ function offsetMs(instant: number, timeZone: string): number | null {
  *
  *  Computed here as well as on the server, and that duplication is the point of this screen:
  *  ADR 0002 requires the reviewer to see the **resolved UTC instant** before firing, and a
- *  number the server would only reveal by acting on it is not a confirmation. The server stays
- *  the authority — it resolves again and refuses a past time with 422 — so a disagreement
- *  between the two shows up as a refusal, never as a post at the wrong hour.
+ *  number the server would only reveal by acting on it is not a confirmation. The server
+ *  resolves again and stays the authority, so a past time or a zone name it rejects comes back
+ *  as a 422 rather than as a post at the wrong hour.
+ *
+ *  **That does not cover every disagreement, and the gap is worth naming.** A wall clock that
+ *  DST makes *nonexistent* (02:30 on a spring-forward morning) or *ambiguous* (01:30 on a
+ *  fall-back morning) has no single answer: this returns one instant, `distribution.resolve`'s
+ *  `astimezone` picks one too, and nothing guarantees they agree. The server would not refuse
+ *  it — it would schedule an hour away from what this line displayed. Once a year per zone and
+ *  one hour wide, so it ships: the publication row keeps `requested_local_time` and `timezone`
+ *  verbatim, and those are what say what was meant when the instant is arguable.
  *
  *  Two passes, not one. The offset depends on the instant, and the instant is what is being
  *  solved for: guessing that the wall-clock fields are already UTC gives an offset within a

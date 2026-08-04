@@ -899,7 +899,10 @@ describe("opening a draft that already exists", () => {
 
     expect(pushButton()).toBeDisabled();
     expect(pushButton()).toHaveTextContent("In Zernio");
-    expect(screen.getByText(/Publishing stays a human act/)).toBeInTheDocument();
+    // Where the draft is, said once. The line this replaces read "In Zernio as a draft" and sat
+    // under the same condition as the panel, so it would have gone false above a history row
+    // saying the post was scheduled — see the comment where it used to be.
+    expect(screen.getByText(/This draft is in Zernio as post/)).toBeInTheDocument();
   });
 
   it("offers no publication controls until there is a post in Zernio to command", () => {
