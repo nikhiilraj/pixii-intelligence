@@ -659,10 +659,16 @@ def render_template(
     Three steps, in this order, and the order is the point:
 
     1. `chosen_assets` settles each `image_url` slot — what was picked, else the slot's
-       `default_asset_id`. It also drops any key naming a non-image slot, so a caller
-       cannot write `big_number` through this door.
+       `default_asset_id`.
     2. `resolve_asset_values` turns each settled reference into something loadable.
     3. `render_visual` draws it.
+
+    The merge is `values` first and the settled assets over the top, so a caller's text and
+    number slots pass through untouched. That is deliberate, not a gap: `chosen_assets`
+    filters its own dict to image slots, and the merge does not extend that filter to
+    `values` — nor should it, because preview exists precisely so a caller can set text and
+    number slots directly. The model-written path is guarded separately and earlier, by
+    `_written_values`/`writable_slots`, before a draft's values ever reach here.
 
     Preview used to skip step 1, so a slot with a pinned default previewed from its
     `example` and generated from the asset — two pictures from one template, with nothing
