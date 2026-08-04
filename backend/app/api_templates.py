@@ -12,6 +12,7 @@ from app.extraction import (
     compatible_hooks,
     propose_hooks,
     propose_structures,
+    propose_visuals,
 )
 from app.generation import render_template
 from app.llm import LLMResponseError
@@ -159,6 +160,30 @@ def extract_structures(
             focus=focus,
             cohort=cohort,
         )
+    except (ExtractionError, LLMResponseError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    session.commit()
+    for proposal in proposals:
+        session.refresh(proposal)
+    return proposals
+
+
+@router.post("/extract/visuals", status_code=201)
+def extract_visuals(
+    session: SessionDep,
+    llm: LLMDep,
+    html_renderer: HtmlRendererDep,
+    platform: str = "linkedin",
+    cohort: Cohort = Cohort.VOICE,
+) -> list[Template]:
+    """Ask the model for visual layouts from the images of the strongest posts.
+
+    Slower than the other two extract routes by design: each proposal is rendered once
+    before it is offered, so nothing reaches the review queue that cannot be drawn.
+    """
+    try:
+        proposals = propose_visuals(session, llm, html_renderer, platform=platform, cohort=cohort)
     except (ExtractionError, LLMResponseError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
