@@ -7,20 +7,12 @@ from PIL import Image
 from sqlalchemy import func
 from sqlmodel import Session, col, select
 
-from app.assets import UnresolvableAsset
 from app.config import settings
 from app.generation import render_template
 from app.llm import LLM
 from app.models.post import Post
 from app.models.template import Template, TemplateKind
-from app.rendering import (
-    DEFAULT_HEIGHT,
-    DEFAULT_WIDTH,
-    SLOT,
-    HtmlRenderer,
-    MissingSlotValue,
-    UnsupportedRenderer,
-)
+from app.rendering import DEFAULT_HEIGHT, DEFAULT_WIDTH, SLOT, HtmlRenderer
 from app.templates import create_template, usable_templates
 
 log = logging.getLogger(__name__)
@@ -497,17 +489,22 @@ def propose_visuals(
         try:
             template = _to_visual(session, proposal, sizes, cohort)
             _must_render(session, template, renderer)
-        except (_RejectedProposal, MissingSlotValue, UnresolvableAsset, UnsupportedRenderer) as exc:
-            # One bad layout in five must not cost the other four. The reason is logged
-            # rather than raised, and the proposal simply never appears.
+        except Exception as exc:  # noqa: BLE001
+            # Deliberately broad, and the third attempt at this. The gate asks one
+            # question — can this layout be drawn? — and every "no" is equivalent: a
+            # missing slot, an unresolvable asset, a 500 from Cloudflare, a connection
+            # that never opened. Two narrower versions of this line each shipped one
+            # exception type short, and each time the cost was every *other* proposal in
+            # the batch. `_draw_visual` takes the same catch for the same reason.
             log.warning("visual proposal rejected: %s", exc)
             continue
         kept.append(template)
     if len(proposals) > MAX_VISUAL_PROPOSALS:
         # Never silently. A truncated batch that reads as a complete one is how a partial
-        # answer gets mistaken for the whole picture.
+        # answer gets mistaken for the whole picture. "considered", not "kept": rejections
+        # among the first MAX_VISUAL_PROPOSALS mean fewer than that may end up in `kept`.
         log.warning(
-            "model returned %d visuals; kept the first %d",
+            "model returned %d visuals; considered the first %d",
             len(proposals),
             MAX_VISUAL_PROPOSALS,
         )
@@ -519,10 +516,19 @@ def _must_render(session: Session, template: Template, renderer: HtmlRenderer) -
 
     The examples are what the model wrote down as representative, so they are the honest
     values to prove the layout with — the same ones the template editor previews from.
+
+    **A pinned `image_url` slot is left out of `values`.** `chosen_assets` lets a supplied
+    value win over `default_asset_id`, so a slot's own example would always outrank the
+    pin and the gate would render the placeholder URL forever, never the real logo. Leaving
+    the slot absent here lets `chosen_assets` fall through to the pin instead, which is what
+    makes this the same render the approved template will actually produce — so a
+    `brand_logo_asset_id` naming an asset that does not exist is caught here, before a human
+    approves the template, rather than at the first real generation.
     """
     values = {
         str(slot.get("name")): str(slot.get("example") or slot.get("name") or "")
         for slot in template.slots
+        if not (slot.get("type") == "image_url" and slot.get("default_asset_id") is not None)
     }
     render_template(session, template, values, renderer)
 
