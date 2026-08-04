@@ -1,44 +1,75 @@
 # Pixii Intelligence
 
-A tool that learns what makes a LinkedIn post work, and helps write the next one.
+Pixii Intelligence is a human-in-the-loop system for learning from LinkedIn content and writing
+the next post. It reads existing posts, extracts reusable patterns, generates new drafts from
+those patterns, and remembers both their engagement and a human's verdict. That feedback becomes
+context for the next generation.
 
-It reads posts that already exist, pulls out the reusable shapes behind them, generates new
-posts from those shapes, and records a human's verdict on how each one did. That verdict feeds
-the next generation. One person uses it, daily.
+A post is modeled as three separate components:
 
-**It is not an analytics dashboard.** It refuses to tell you which template is "best", because
-the data cannot support that claim yet. More on that below — it is the single most important
-thing to understand about this app.
+- **Hook** — how the post opens.
+- **Structure** — how the argument or story unfolds.
+- **Visual** — the layout or image that accompanies it.
+
+Every generated draft records the exact versions of all three templates that created it. That
+lineage lets later engagement and human feedback reach the correct templates rather than whatever
+their newest versions happen to be.
+
+Two boundaries are fundamental:
+
+- **It never publishes automatically.** It can send a post to Zernio only as a draft; a human
+  publishes it there.
+- **It does not rank templates as "best."** There is not enough lineage-attributed performance
+  data yet to make that statistically reliable.
 
 ---
 
-## Start here
+## What it can do
+
+- Import published posts and metrics from Zernio.
+- Add external or reference LinkedIn posts manually.
+- Extract proposed hook, structure, and visual templates from the corpus.
+- Let a human approve, edit, version, retire, or author templates.
+- Generate a complete LinkedIn draft from an idea or topic.
+- Suggest templates while allowing every choice to be overridden.
+- Create several variants of one idea, then keep the preferred draft.
+- Regenerate text and visuals independently without changing their lineage.
+- Render deterministic HTML visuals or use AI-generated imagery.
+- Upload and reuse logos, screenshots, product images, and other brand assets.
+- Push a chosen result to Zernio as a draft, idempotently.
+- Detect when that draft has subsequently been published by a human.
+- Synchronize metrics and preserve engagement snapshots over time.
+- Record a verdict — **Worked**, **Didn't**, or **Mixed** — and its reasoning.
+- Feed those human-written lessons into future generation.
+- Produce capped autonomous draft batches without pushing them anywhere.
+- Show every point where the workflow is waiting on a human in one Inbox.
+
+## How to use it
 
 If the app is already running, open [http://localhost:3000](http://localhost:3000). The Inbox is
 the home screen and the daily starting point: it draws the full circuit, puts the oldest human
 blockers first, and points to the largest queue.
 
-For a first useful session:
+The normal workflow is:
 
-1. Open **Templates** and approve at least one hook, one structure, and one visual. Retire the
-   proposals you do not want to reuse; a retired row stays in the record.
-2. Open **Studio**, write an idea, choose or suggest templates, and generate a draft.
-3. Check the exact template versions in **Lineage**, then push the result to Zernio. Pixii sends
-   a draft only; it never publishes.
-4. After a human publishes in Zernio, sync metrics and record a verdict on the post. The reason
-   you write with the verdict is the lesson the next generation receives.
+1. Start at **Inbox** and open the oldest waiting item.
+2. Review proposals in **Templates**. Approve at least one hook, structure, and visual; retire
+   patterns you do not want to reuse. Retiring preserves the historical record.
+3. Open **Studio**, enter an idea, and choose templates or ask the application to suggest them.
+4. Generate a draft and inspect its text, image, and exact template versions under **Lineage**.
+5. Regenerate individual parts or create variants if the first result is not right.
+6. Push the chosen result to Zernio. Pixii sends a draft only.
+7. Have a human review and publish that exact draft inside Zernio.
+8. Synchronize metrics after the post has accumulated meaningful engagement.
+9. Record a verdict and explain why it worked, did not work, or produced a mixed result.
+10. Return to **Inbox** and confirm the item moved to the next gate or completed the circuit.
+
+The verdict explanation is especially important: the note, not just the label, is the lesson
+supplied to later generations.
 
 If something looks empty, read the wording before treating it as a failure. `0`, `—`, and an empty
 queue mean different things throughout the product. If the API itself is unavailable, the route
 says so instead of pretending the list is empty.
-
-### Daily operating loop
-
-- Start at **Inbox** and clear the oldest waiting item.
-- Use **Corpus** to inspect source posts; use **Scoreboard** only to inspect evidence attached to
-  template versions, never to rank them.
-- Use **Assets** when a visual template needs a real image rather than a text-only slot.
-- Return to **Inbox** after each action. The item should move to the next human gate.
 
 ---
 
@@ -133,21 +164,97 @@ there, by hand, always.
 
 ## Running it
 
+Prerequisites: Docker, Python 3.12 with `uv`, Node.js, and `pnpm`.
+
+For a fresh checkout, install both applications' dependencies:
+
 ```bash
-make up      # Postgres on :5433
-make api     # migrations + FastAPI on :8000
-make web     # Next.js on :3000
-make check   # ruff, mypy, eslint, tsc, pytest, vitest — the full gate
+make install
 ```
 
-`.env` is a **symlink** to the vault's `.env`. Never copy secret values into this repo.
+Configure the variables documented in `.env.example`. Locally, `.env` is a **symlink** to the
+vault's `.env`; never copy secret values into this repository. `GET /health` reports whether each
+external integration is configured without exposing its credential.
+
+Run the three components in separate terminals:
+
+```bash
+# Terminal 1 — Postgres on :5433
+make up
+
+# Terminal 2 — migrations and FastAPI on :8000
+make api
+
+# Terminal 3 — Next.js on :3000
+make web
+```
+
+Then open:
+
+- Application: [http://localhost:3000](http://localhost:3000)
+- Interactive API documentation: [http://localhost:8000/docs](http://localhost:8000/docs)
+
+Check the running services:
+
+```bash
+curl -s http://localhost:8000/health
+curl -s http://localhost:8000/inbox
+```
 
 Stack: Python 3.12 · FastAPI · SQLModel · Alembic · Postgres · Next.js 16 · React 19 ·
 TypeScript · Tailwind 4 · Radix · Recharts. Tests: pytest + Vitest/Testing Library.
 
 ---
 
-## Testing the whole circuit
+## Testing it
+
+### 1. Automated checks
+
+Run the complete quality gate:
+
+```bash
+make check
+```
+
+This runs Ruff, mypy, ESLint, TypeScript, pytest, and Vitest. To run one side only:
+
+```bash
+cd backend && .venv/bin/pytest -q
+cd ../frontend && pnpm test
+```
+
+A green suite is necessary but not sufficient; the visual and end-to-end checks below cover
+things that jsdom and mocked integrations cannot prove.
+
+### 2. Safe UI smoke test
+
+This pass stays local except for generation or rendering calls and does not push to Zernio:
+
+1. Visit every screen and confirm an API failure is distinguishable from an honestly empty list.
+2. Approve one hook, one structure, and one visual template. Start with a text-only visual such as
+   `stat-card`; an `image_url` slot needs an asset selected.
+3. Generate a draft from a simple idea.
+4. Confirm it contains text, a rendered visual, and three lineage entries with explicit versions.
+5. Regenerate the text and verify its lineage does not change.
+6. Regenerate the visual, compare it with the previous version, and restore the previous image.
+7. Generate three variants, keep one, and confirm the discarded drafts leave the Inbox.
+8. Upload an asset and try a visual with an image slot.
+9. Exercise Corpus filters, open a post detail page, and inspect the unranked Scoreboard.
+
+Generation and AI rendering may make paid external API calls even though this test does not push
+a draft anywhere.
+
+### 3. Browser and responsive test
+
+Automated DOM tests cannot reliably prove layout, focus, chart sizing, or contrast. Inspect every
+screen in a real browser at **390px** and **1440px**, in both light and dark modes. Check that:
+
+- The page itself has no horizontal overflow.
+- Navigation, buttons, dialogs, and keyboard focus remain usable.
+- Charts have visible dimensions.
+- `0`, `—`, an empty queue, and an unavailable API are presented as different states.
+
+### 4. Full Zernio circuit
 
 This walks one post all the way round the loop. **Steps 1–4 are yours. Step 5 is Monte's, and it
 is the only step no software can do for you.**
@@ -155,10 +262,13 @@ is the only step no software can do for you.**
 ### Before you start
 
 ```bash
-make up && make api && make web
-curl -s localhost:8000/health          # all credentials should read true
-curl -s localhost:8000/inbox           # your four queues + closed_circuits
+curl -s http://localhost:8000/health   # required integration credentials should read true
+curl -s http://localhost:8000/inbox    # four queues plus closed_circuits
 ```
+
+Only continue when you intend to create a real external draft. Verify the Zernio, Azure chat, and
+renderer configuration you plan to use. The push and metrics steps require Zernio credentials;
+generation requires Azure chat; AI visuals require Azure image credentials.
 
 ### 1 · Approve at least one of each template kind
 
@@ -191,6 +301,9 @@ Zernio id.
 Verify it landed as a **draft**, not a live post — open Zernio and look. This is the safety
 property the whole tool is built around, so check it with your own eyes at least once.
 
+Call push a second time and confirm it returns the same draft without creating a duplicate. The
+route and underlying request are idempotent, but this live check proves the external behavior.
+
 ### 4 · Confirm the Inbox moved
 
 Reload `/`. The draft should have moved from **Built, awaiting push** to **Pushed, awaiting
@@ -208,7 +321,7 @@ Ask Monte to publish that specific draft in Zernio.
 Wait for real engagement — a day at least, ideally a few.
 
 ```bash
-curl -X POST localhost:8000/metrics/sync
+curl -X POST http://localhost:8000/metrics/sync
 ```
 
 The tool notices the draft went live, joins it to the published post, and starts recording
