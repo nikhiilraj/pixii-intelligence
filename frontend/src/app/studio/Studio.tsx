@@ -534,7 +534,7 @@ function Variants({
           three and choose. This batch spent {calls(batch.llm_calls, "chat completion")} and{" "}
           {calls(batch.image_calls, "image render")}. Keeping one <strong>deletes</strong> the
           rest, so they do not sit in the Inbox as work nobody is waiting on; the kept one is
-          still only a draft, and nothing publishes from here.
+          still only a draft, and keeping it publishes nothing.
         </p>
       </Card>
 
@@ -714,7 +714,13 @@ export default function Studio({
         <span><strong className="font-medium text-text">{approved.length}</strong> approved templates</span>
         <span><strong className="font-medium text-text">{drafts?.length ?? "—"}</strong> drafts</span>
         <span>{draft ? `draft #${draft.id} open` : "new composition"}</span>
-        <span className="ml-auto">Nothing publishes from here</span>
+        {/* This line used to read "Nothing publishes from here", which was the truth for as
+            long as publishing happened in Zernio by hand. The publication panel below makes it
+            false, and a status bar contradicting a button a few hundred pixels under it is
+            exactly the defect this codebase keeps finding — something on screen that is not
+            what happens. What survived the change is the guarantee, which is narrower and
+            still absolute: automation prepares, a person commands. */}
+        <span className="ml-auto">Nothing publishes without you saying so</span>
       </div>
 
       <div className="mt-10 grid gap-10 lg:grid-cols-[22rem_minmax(0,1fr)]">
@@ -1186,9 +1192,10 @@ export default function Studio({
             <p className="mt-2 max-w-2xl text-muted">
               Write an idea, choose a hook, a structure and a visual — or let Suggest choose them
               — and Generate writes the post and renders its picture here, stamped with the
-              templates that produced it. Or open one of the drafts listed on the left. Nothing
-              publishes from here: a draft reaches Zernio only when you push it, and goes live
-              only when a human publishes it there.
+              templates that produced it. Or open one of the drafts listed on the left. Writing
+              a draft publishes nothing: it reaches Zernio only when you push it, and goes live
+              only when a person schedules or publishes it — here, after confirming what that
+              commits to, or in Zernio by hand.
             </p>
           </Card>
         )}

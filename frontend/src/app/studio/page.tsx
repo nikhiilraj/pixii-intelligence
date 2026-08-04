@@ -79,7 +79,8 @@ export default async function StudioPage({
       <h1 className="mt-2 text-display font-semibold tracking-[-0.04em]">Studio</h1>
       <p className="mt-2 max-w-2xl text-body text-muted">
         Turn one clear point into a reviewable draft, with the exact templates and assets that
-        produced it kept visible. Nothing publishes from here.
+        produced it kept visible. Nothing publishes on its own — a person commands it, against
+        the exact revision they read, and is asked to confirm first.
       </p>
       {templates.ok ? (
         /* Keyed by the requested id so a link from one draft to another remounts the component.
