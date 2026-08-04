@@ -22,10 +22,20 @@ licence to redistribute its media.** Pixii collected them as reference material 
 template extraction, which is a defensible internal use; republishing them under this
 project's licence is a different act that nobody agreed to.
 
+Checking what else lived under `.scratch/` turned up a second, quieter case:
+`.scratch/v3/shots/` — 130 app screenshots kept as review evidence. Most are harmless
+layout captures, but the Corpus and Scoreboard shots render the post table in full: 69
+real post titles with their engaged-action counts, impressions, and engagement rate. That
+is Monte's own content, so it is not the rights problem above. It is Pixii's business
+performance data, and a public repository is not where it belongs.
+
 ## Decision
 
-Remove `.scratch/corpus-widening/` from **all** Git history with `git filter-repo`, force-push
-every branch, and add the path to `.gitignore`.
+Remove `.scratch/corpus-widening/` **and** `.scratch/v3/shots/` from **all** Git history
+with `git filter-repo`, force-push every branch, and add both paths to `.gitignore`.
+
+The `.scratch/v1`, `v2`, and `v3` working notes stay tracked. They are specs, handoffs, and
+progress logs — design records, not data.
 
 A normal `git rm` commit was considered and rejected: it leaves every byte reachable at the
 prior commit, so the material stays published to anyone who clones.
