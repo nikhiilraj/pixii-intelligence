@@ -3,7 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ApiFailure, Draft, Publication } from "@/lib/api";
+import type { ApiFailure, Draft, Publication, PublishingTarget } from "@/lib/api";
 
 import PublishPanel, { classify, resolveUtc, stamp, utcLabel } from "./PublishPanel";
 
@@ -79,9 +79,22 @@ function sentBody(fetchStub: ReturnType<typeof stubApi>, call = 0): unknown {
   return JSON.parse(init.body as string);
 }
 
+/** The configured, switched-on destination. Overridden per test for the states that matter. */
+const TARGET: PublishingTarget = {
+  enabled: true,
+  platform: "linkedin",
+  account_id: "69719547c955c6705a96f1ce",
+};
+
 function panel(props: Partial<React.ComponentProps<typeof PublishPanel>> = {}) {
   return (
-    <PublishPanel draft={DRAFT} publications={[]} onDraft={() => {}} {...props} />
+    <PublishPanel
+      draft={DRAFT}
+      publications={[]}
+      publishing={TARGET}
+      onDraft={() => {}}
+      {...props}
+    />
   );
 }
 
@@ -232,7 +245,7 @@ describe("the confirmation step", () => {
   });
 
   it("shows the action, the account, both times and the zone before it fires", () => {
-    render(panel({ account: "Monte Desai" }));
+    render(panel());
 
     fireEvent.change(screen.getByLabelText(/local time/i), {
       target: { value: "2026-08-12T09:00" },
@@ -242,7 +255,7 @@ describe("the confirmation step", () => {
 
     const confirm = dialog();
     expect(within(confirm).getByText("Schedule")).toBeInTheDocument();
-    expect(within(confirm).getByText("Monte Desai")).toBeInTheDocument();
+    expect(within(confirm).getByText(/69719547c955c6705a96f1ce/)).toBeInTheDocument();
     // The local time as typed, the zone name, and the instant they resolve to — three separate
     // rows. The instant is the one a reviewer cannot work out for themselves.
     expect(within(confirm).getByText("2026-08-12 09:00")).toBeInTheDocument();
@@ -250,14 +263,35 @@ describe("the confirmation step", () => {
     expect(within(confirm).getByText("2026-08-12 03:30 UTC")).toBeInTheDocument();
   });
 
-  it("prints — for the account rather than guessing when the API does not report it", () => {
+  it("presents the account as Zernio's id and not as a person", () => {
+    /* The substitution this guards is `settings.voice_account` — "Monte Desai" — which is a
+     * real human-readable name sitting one import away and describing something else entirely
+     * (whose writing templates may copy). A confirmation is the one screen where a plausible
+     * wrong answer is worse than an ugly right one. */
     render(panel());
     fireEvent.click(screen.getByRole("button", { name: /^publish now…$/i }));
 
     const confirm = dialog();
-    expect(within(confirm).getByText(/does not report which LinkedIn account/i)).toBeInTheDocument();
-    // And names what it can: the post the PUT acts on.
+    expect(within(confirm).getByText(/linkedin · 69719547c955c6705a96f1ce/)).toBeInTheDocument();
+    expect(within(confirm).getByText(/own account id, not a display name/i)).toBeInTheDocument();
+  });
+
+  it("prints — for the account when the destination could not be read", () => {
+    render(panel({ publishing: null }));
+    fireEvent.click(screen.getByRole("button", { name: /^publish now…$/i }));
+
+    const confirm = dialog();
+    expect(within(confirm).getByText(/destination could not be read/i)).toBeInTheDocument();
+    // And names what it still can: the post the PUT acts on.
     expect(within(confirm).getByText(/6a695286ead2fabfa56f3c27/)).toBeInTheDocument();
+  });
+
+  it("warns when no account is configured at all", () => {
+    // `account_id: null` is a real state — pushes fail — and is not the same as a failed read.
+    render(panel({ publishing: { ...TARGET, account_id: null } }));
+    fireEvent.click(screen.getByRole("button", { name: /^publish now…$/i }));
+
+    expect(within(dialog()).getByText(/No LinkedIn account is configured/i)).toBeInTheDocument();
   });
 
   it("sends nothing when the confirmation is dismissed", async () => {
@@ -567,5 +601,42 @@ describe("the timezone field", () => {
     fireEvent.click(screen.getByRole("button", { name: /^schedule…$/i }));
 
     expect(within(dialog()).getByText(/already passed/i)).toBeInTheDocument();
+  });
+});
+
+describe("the kill switch, before a command is composed", () => {
+  it("says the switch is off and disables all three commands", async () => {
+    /* Without the read, the only way to discover the capability is off is to fire a command
+     * and read the 403 — finding out by attempting the thing. The 403 branch stays: this is a
+     * read taken when the page rendered and the server is still what decides. */
+    const fetchStub = stubApi();
+    render(panel({ publishing: { ...TARGET, enabled: false } }));
+
+    expect(screen.getByText(/Publishing is switched off/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^publish now…$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^cancel schedule…$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^schedule…$/i })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: /^publish now…$/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it("leaves the commands enabled when the switch could not be read", () => {
+    /* An unread flag is not "off". Disabling on a request that did not arrive would hide a
+     * capability that is working, which is the same conflation as rendering a failed read of
+     * the history as an empty history. */
+    render(panel({ publishing: null }));
+
+    expect(screen.getByText(/publishing target could not be read/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^publish now…$/i })).toBeEnabled();
+    expect(screen.queryByText(/Publishing is switched off/i)).not.toBeInTheDocument();
+  });
+
+  it("says nothing about the switch when it is on", () => {
+    render(panel());
+    expect(screen.queryByText(/switched off/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/could not be read/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^publish now…$/i })).toBeEnabled();
   });
 });

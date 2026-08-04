@@ -18,6 +18,7 @@ import {
   type Draft,
   type Publication,
   type PublicationAction,
+  type PublishingTarget,
 } from "@/lib/api";
 
 /** What each command is called on screen. `ACTIONS` in backend/app/models/publication.py. */
@@ -359,16 +360,12 @@ function PublicationRow({ publication }: { publication: Publication }) {
  *  refresh control here the day a command is slow enough that the operator waits on it. */
 export default function PublishPanel({
   draft,
-  // The LinkedIn account this command would publish to. `null` means **the API does not report
-  // it** — not that there is no account. Nothing on the wire carries it today:
-  // `settings.getlate_linkedin_id` is what `publishing.py` actually sends and is not exposed,
-  // and `settings.voice_account` is whose writing templates may describe, which is an
-  // extraction setting and not a destination. Labelling the destination with the wrong one of
-  // those is the conflation this codebase keeps finding, so the confirmation says `—` and
-  // names the post id instead, which is the one destination fact the client can state
-  // truthfully. A prop rather than a constant so this becomes one line in `page.tsx` the day
-  // the field lands.
-  account = null,
+  // `GET /publishing` — the destination and the kill switch. **`null` means the read failed**,
+  // which is not `enabled: false` and not "there is no account". That distinction decides
+  // whether anything gets disabled: a failed read leaves the controls alone and lets the
+  // server answer, because disabling on a request that did not arrive would hide a capability
+  // that is working. Only a read `false` turns the buttons off.
+  publishing = null,
   // Every command already issued against this draft, newest first. `null` means the read
   // failed, which is not an empty history — and here that distinction is load-bearing in a way
   // it is not elsewhere: "nothing has been commanded" beside a Publish button, said on a
@@ -380,7 +377,7 @@ export default function PublishPanel({
   onDraft,
 }: {
   draft: Draft;
-  account?: string | null;
+  publishing?: PublishingTarget | null;
   publications: Publication[] | null;
   onDraft: (draft: Draft) => void;
 }) {
@@ -394,6 +391,11 @@ export default function PublishPanel({
   // without a round trip through the server component. `null` still means the read failed.
   const [history, setHistory] = useState<Publication[] | null>(publications);
 
+  // `false` only when the read said so. An unread target leaves this `false` too — and the
+  // difference is carried by `publishing === null` at every place it matters, because "we do
+  // not know" and "it is switched off" are two different things to tell someone standing in
+  // front of a Publish button.
+  const switchedOff = publishing !== null && !publishing.enabled;
   const zones = zoneNames();
   const preview = local ? resolveUtc(local, timezone) : null;
   const zoneKnown = resolveUtc("2000-01-01T00:00", timezone) !== null;
@@ -461,6 +463,32 @@ export default function PublishPanel({
         </p>
       </div>
 
+      {/* The kill switch, said before a command is composed rather than after one is refused.
+          Discovering that a capability is off by attempting it and reading a 403 is a bad
+          trade when the answer is one field on `GET /publishing`. The 403 branch in `classify`
+          stays: this is a read taken when the page rendered, and the server is still the only
+          thing that decides. */}
+      {switchedOff && (
+        <Card className="bg-surface-2 text-meta">
+          <p className="font-medium">Publishing is switched off.</p>
+          <p className="mt-1 text-muted">
+            `PUBLISHING_ENABLED` is false, so schedule, publish and cancel commands are
+            refused. Nothing else is affected — generating, reviewing and pushing a draft to
+            Zernio all continue. Turning it on is a decision; see ADR 0002.
+          </p>
+        </Card>
+      )}
+      {publishing === null && (
+        <Card className="bg-surface-2 text-meta">
+          <p className="font-medium">The publishing target could not be read.</p>
+          <p className="mt-1 text-muted">
+            This is a failed request, not a switched-off capability and not a missing account —
+            the destination below is unknown rather than absent. The commands are left enabled
+            because the server, not this page, is what decides.
+          </p>
+        </Card>
+      )}
+
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="min-w-0 space-y-1">
           <span className="text-caption font-medium uppercase tracking-label text-muted">
@@ -514,7 +542,7 @@ export default function PublishPanel({
       <div className="flex flex-wrap gap-2 border-t border-border pt-4">
         <Button
           variant="outline"
-          disabled={busy || !local || !zoneKnown}
+          disabled={busy || switchedOff || !local || !zoneKnown}
           onClick={() => open("schedule")}
         >
           Schedule…
@@ -522,10 +550,10 @@ export default function PublishPanel({
         {/* Not the primary variant, and that is not a style choice: the primary button on this
             page is Push, which creates a draft, and giving the one irreversible action on the
             screen the loudest treatment is how it gets pressed on the way past. */}
-        <Button variant="outline" disabled={busy} onClick={() => open("publish_now")}>
+        <Button variant="outline" disabled={busy || switchedOff} onClick={() => open("publish_now")}>
           Publish now…
         </Button>
-        <Button variant="outline" disabled={busy} onClick={() => open("cancel_schedule")}>
+        <Button variant="outline" disabled={busy || switchedOff} onClick={() => open("cancel_schedule")}>
           Cancel schedule…
         </Button>
       </div>
@@ -587,8 +615,20 @@ export default function PublishPanel({
 
               <dt className="text-muted">Account</dt>
               <dd className="min-w-0 wrap-anywhere">
-                {/* `—`, never a guess. See the `account` prop. */}
-                {account ?? "—"}
+                {/* An account **identifier**, never presented as a person. Zernio holds the
+                    human-readable label behind a call this app does not speak, and inventing
+                    one — `voice_account` is right there and is a real name — would put a
+                    plausible wrong answer on the one screen that exists to be checked.
+                    `—` for both an unset id and a failed read; the line under the table says
+                    which, because those are different states. `font-mono` because an opaque
+                    hex id is compared character by character or not at all. */}
+                {publishing?.account_id ? (
+                  <span className="font-mono text-caption">
+                    {publishing.platform} · {publishing.account_id}
+                  </span>
+                ) : (
+                  "—"
+                )}
               </dd>
 
               <dt className="text-muted">Local time</dt>
@@ -610,12 +650,22 @@ export default function PublishPanel({
               <dd className="min-w-0">{pending.revision}</dd>
             </dl>
 
-            {account === null && (
+            {publishing === null ? (
               <p className="mt-3 text-caption text-muted">
-                The API does not report which LinkedIn account this publishes to, so the account
-                is shown as <span aria-hidden>—</span>
-                <span className="sr-only">an em dash</span> rather than guessed. What can be
-                named is the post: this command updates Zernio post {draft.zernio_post_id}.
+                The destination could not be read, so the account is shown as an em dash rather
+                than guessed. What can still be named is the post: this command updates Zernio
+                post {draft.zernio_post_id}.
+              </p>
+            ) : publishing.account_id === null ? (
+              <p className="mt-3 text-caption text-amber-700 dark:text-amber-400">
+                No LinkedIn account is configured (`GETLATE_LINKEDIN_ID` is unset), so this
+                command has nowhere to go and Zernio will refuse it.
+              </p>
+            ) : (
+              <p className="mt-3 text-caption text-muted">
+                That is Zernio&apos;s own account id, not a display name — this application does
+                not hold the label. It is the id sent with every push of this draft, so it
+                matches the account post {draft.zernio_post_id} already lives on.
               </p>
             )}
 

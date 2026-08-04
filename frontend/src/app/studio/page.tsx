@@ -6,6 +6,7 @@ import {
   type Draft,
   type Health,
   type Publication,
+  type PublishingTarget,
   type Template,
 } from "@/lib/api";
 
@@ -42,13 +43,17 @@ export default async function StudioPage({
   // arrived is a Publish button rendered without the history, and `GET /publications`' own
   // docstring names that as how one post gets commanded twice. A failed read is handed on as
   // `null` and the panel says so — it never renders as "nothing has been commanded".
-  const [templates, assets, drafts, requested, health, publications] = await Promise.all([
+  const [templates, assets, drafts, requested, health, publications, publishing] = await Promise.all([
     getJson<Template[]>("/templates"),
     getJson<Asset[]>("/assets"),
     getJson<Draft[]>("/drafts"),
     id === null ? Promise.resolve(null) : getJson<Draft>(`/drafts/${id}`),
     getJson<Health>("/health"),
     id === null ? Promise.resolve(null) : getJson<Publication[]>(`/drafts/${id}/publications`),
+    // Where a command would go and whether it may go at all. Read unconditionally — it is one
+    // small response and the panel needs both fields before the first button is pressed, not
+    // after a command comes back 403.
+    getJson<PublishingTarget>("/publishing"),
   ]);
 
   /* Why the requested draft is not on screen, in words, or `null` when none was asked for.
@@ -99,13 +104,11 @@ export default async function StudioPage({
           missing={missing}
           variantsMax={health.ok ? health.data.variants_max : null}
           publications={publications?.ok ? publications.data : null}
-          /* `null` — no route reports the LinkedIn account a command publishes to.
-             `settings.getlate_linkedin_id` is what `publishing.py` actually sends and is not
-             exposed; `settings.voice_account` is whose writing templates may describe, which
-             is an extraction setting and not a destination. The confirmation prints `—` and
-             names the Zernio post id instead of labelling the destination with a value not
-             derived from it. This line is the whole change the day the field lands. */
-          publishAccount={null}
+          /* `null` when the read failed, which is deliberately not the same as either field's
+             own falsy value. An unread flag is not "publishing is off" and an unread account is
+             not "there is no account" — the panel says which, and only a *read* `false`
+             disables anything. */
+          publishing={publishing.ok ? publishing.data : null}
         />
       ) : (
         <ApiFailureNotice failure={templates} className="mt-8" />

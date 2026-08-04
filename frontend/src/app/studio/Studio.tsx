@@ -29,6 +29,7 @@ import {
   type AssetKind,
   type Draft,
   type Publication,
+  type PublishingTarget,
   type Spend,
   type Template,
 } from "@/lib/api";
@@ -618,9 +619,9 @@ export default function Studio({
   // history has arrived is a Publish button shown without the history, for as long as the
   // request takes.
   publications = null,
-  // Which LinkedIn account a command would publish to, or `null` when the API does not report
-  // it — which is the case today. See `PublishPanel`'s own prop for why nothing here guesses.
-  publishAccount = null,
+  // `GET /publishing` — the destination and the kill switch, or `null` when that read failed.
+  // Handed straight down; the panel is what knows the difference between "off" and "unknown".
+  publishing = null,
 }: {
   templates: Template[];
   assets: Asset[] | null;
@@ -629,7 +630,7 @@ export default function Studio({
   missing?: string | null;
   variantsMax?: number | null;
   publications?: Publication[] | null;
-  publishAccount?: string | null;
+  publishing?: PublishingTarget | null;
 }) {
   const [idea, setIdea] = useState("");
   const [picked, setPicked] = useState<Picked>({ hook: null, structure: null, visual: null });
@@ -1161,7 +1162,7 @@ export default function Studio({
               <PublishPanel
                 key={draft.id}
                 draft={draft}
-                account={publishAccount}
+                publishing={publishing}
                 publications={draft.id === initialDraft?.id ? publications : []}
                 onDraft={setDraft}
               />

@@ -127,6 +127,22 @@ export type Draft = {
  *  `ACTIONS` in backend/app/models/publication.py. */
 export type PublicationAction = "schedule" | "publish_now" | "cancel_schedule";
 
+/** `GET /publishing` — where a command would go, and whether it may go at all.
+ *
+ *  Its own route rather than keys on `/health`, which states the rule that would break:
+ *  presence flags and scalar ceilings, never a value. The Inbox footer renders `credentials`
+ *  row-per-key as a health light, so a string in there draws a junk boolean.
+ *
+ *  `account_id` is **an opaque Zernio id, not a display name** — the label lives in Zernio
+ *  behind an accounts call this app does not speak. Render it as an identifier, never as a
+ *  person. `null` means `GETLATE_LINKEDIN_ID` is unset, which is a real state (pushes fail),
+ *  and is not the same as the read having failed. */
+export type PublishingTarget = {
+  enabled: boolean;
+  platform: string;
+  account_id: string | null;
+};
+
 /** `PublicationOut` (api_drafts.py) — one command and what became of it. `GET
  *  /drafts/{id}/publications` returns these newest first, and that list *is* the audit trail;
  *  there is no separate audit table.
