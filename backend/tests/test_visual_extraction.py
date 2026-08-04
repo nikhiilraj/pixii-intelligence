@@ -299,3 +299,122 @@ def test_a_nan_slot_value_does_not_cost_its_siblings(session):
     proposals = propose_visuals(session, FakeLLM(malformed))
 
     assert [t.name for t in proposals] == ["ranked-bars"]
+
+
+# Written as escapes, never as literal characters: a source file carrying a real NUL or a
+# lone surrogate is unreadable in most editors and unsafe to move through a terminal.
+NUL = "\x00"
+LONE_SURROGATE = "\ud800"
+
+# Deep enough that a recursive walk is guaranteed to fail — Python's recursion limit is
+# 1000 frames and a recursive walk spends at least one per level — and far enough below
+# the ~1490 that psycopg's own encoder manages here that Postgres stores it comfortably.
+DEEP = 1000
+
+
+def _deep_list(depth: int) -> list:
+    value: list = []
+    for _ in range(depth):
+        value = [value]
+    return value
+
+
+def test_a_nul_in_a_slot_value_does_not_cost_its_siblings(session):
+    add_post(session, "strong", 900, media=(png(), ".png"))
+    malformed = {"visuals": [
+        {**ONE_VISUAL["visuals"][0], "name": "malformed",
+         "slots": [{"name": "kicker", "example": "a" + NUL}, {"name": "headline"}]},
+        ONE_VISUAL["visuals"][0],
+    ]}
+
+    proposals = propose_visuals(session, FakeLLM(malformed))
+
+    assert [t.name for t in proposals] == ["ranked-bars"]
+
+
+def test_a_nul_in_a_slot_key_does_not_cost_its_siblings(session):
+    """A key is as unstorable as a value, and only the key path reaches this one."""
+    add_post(session, "strong", 900, media=(png(), ".png"))
+    malformed = {"visuals": [
+        {**ONE_VISUAL["visuals"][0], "name": "malformed",
+         "slots": [{"name": "kicker", "note" + NUL: "x"}, {"name": "headline"}]},
+        ONE_VISUAL["visuals"][0],
+    ]}
+
+    proposals = propose_visuals(session, FakeLLM(malformed))
+
+    assert [t.name for t in proposals] == ["ranked-bars"]
+
+
+def test_a_nul_in_the_html_does_not_cost_its_siblings(session):
+    add_post(session, "strong", 900, media=(png(), ".png"))
+    malformed = {"visuals": [
+        {**ONE_VISUAL["visuals"][0], "name": "malformed",
+         "html": ONE_VISUAL["visuals"][0]["html"] + NUL},
+        ONE_VISUAL["visuals"][0],
+    ]}
+
+    proposals = propose_visuals(session, FakeLLM(malformed))
+
+    assert [t.name for t in proposals] == ["ranked-bars"]
+
+
+def test_a_nul_in_the_rationale_does_not_cost_its_siblings(session):
+    """A distinct sink from `html`, even though both are str()-coerced into `body`."""
+    add_post(session, "strong", 900, media=(png(), ".png"))
+    malformed = {"visuals": [
+        {**ONE_VISUAL["visuals"][0], "name": "malformed", "rationale": "why" + NUL},
+        ONE_VISUAL["visuals"][0],
+    ]}
+
+    proposals = propose_visuals(session, FakeLLM(malformed))
+
+    assert [t.name for t in proposals] == ["ranked-bars"]
+
+
+def test_a_nul_in_the_name_does_not_cost_its_siblings(session):
+    """`name` is a text column, not JSONB — psycopg refuses it before the wire."""
+    add_post(session, "strong", 900, media=(png(), ".png"))
+    malformed = {"visuals": [
+        {**ONE_VISUAL["visuals"][0], "name": "malformed" + NUL},
+        ONE_VISUAL["visuals"][0],
+    ]}
+
+    proposals = propose_visuals(session, FakeLLM(malformed))
+
+    assert [t.name for t in proposals] == ["ranked-bars"]
+
+
+def test_a_lone_surrogate_does_not_cost_its_siblings(session):
+    """`"\\ud800"` is a legal JSON escape that decodes to a string UTF-8 cannot encode."""
+    add_post(session, "strong", 900, media=(png(), ".png"))
+    malformed = {"visuals": [
+        {**ONE_VISUAL["visuals"][0], "name": "malformed",
+         "slots": [{"name": "kicker", "example": LONE_SURROGATE}, {"name": "headline"}]},
+        ONE_VISUAL["visuals"][0],
+    ]}
+
+    proposals = propose_visuals(session, FakeLLM(malformed))
+
+    assert [t.name for t in proposals] == ["ranked-bars"]
+
+
+def test_a_deeply_nested_slot_value_does_not_cost_its_siblings(session):
+    """Postgres stores this one — the batch-killer would be the probe walking it.
+
+    The other tests here prove the probe rejects what it must. This one proves it does not
+    crash on what it must accept: a recursive walk over a 1000-deep value raises
+    RecursionError, which is not a `_RejectedProposal` either. So this test fails not when
+    the probe is removed but when it is rewritten recursively, which is the obvious
+    simplification a later reader would reach for.
+    """
+    add_post(session, "strong", 900, media=(png(), ".png"))
+    deep = {"visuals": [
+        {**ONE_VISUAL["visuals"][0], "name": "deep",
+         "slots": [{"name": "kicker", "example": _deep_list(DEEP)}, {"name": "headline"}]},
+        ONE_VISUAL["visuals"][0],
+    ]}
+
+    proposals = propose_visuals(session, FakeLLM(deep))
+
+    assert [t.name for t in proposals] == ["deep", "ranked-bars"]
