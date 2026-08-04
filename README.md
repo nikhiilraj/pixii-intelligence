@@ -73,11 +73,12 @@ The normal workflow is:
 6. Push the chosen result to Zernio. Pixii sends a draft.
 7. Schedule or publish it. Studio shows a publication panel for any draft that has reached
    Zernio. Nothing fires from the button that names it: Schedule, Publish now and Cancel
-   schedule each open a confirmation showing the action, the local time as typed, the
-   timezone, and the UTC instant those two resolve to, alongside every command already issued
-   against the draft. A command is refused if it was confirmed against an older version of the
-   words. With `PUBLISHING_ENABLED` off — still the default — the panel says the capability is
-   switched off rather than pretending to work, and publishing happens in Zernio by hand.
+   schedule each open a confirmation showing the action, the destination account, the local
+   time as typed, the timezone, and the UTC instant those two resolve to, alongside every
+   command already issued against the draft. A command is refused if it was confirmed against
+   an older version of the words. With `PUBLISHING_ENABLED` off — still the default — the
+   panel says so up front and the three buttons are disabled, rather than letting you compose
+   a command and then refusing it; publishing happens in Zernio by hand.
 8. Synchronize metrics after the post has accumulated meaningful engagement.
 9. Record a verdict and explain why it worked, did not work, or produced a mixed result.
 10. Return to **Inbox** and confirm the item moved to the next gate or completed the circuit.

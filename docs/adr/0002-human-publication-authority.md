@@ -44,13 +44,17 @@ stale-revision rejection, and a kill switch **together**. All five ship in the s
   which is read once when the confirmation opens and not again when it is confirmed. The
   panel lists every command already issued beside the buttons, because a Publish button shown
   without that history is how one post gets commanded twice.
-  **One field is still missing: the account.** No route reports which LinkedIn account a
-  command publishes to — `settings.getlate_linkedin_id` is what `publishing.py` actually sends
-  and is not exposed, and `settings.voice_account` is an extraction setting, not a
-  destination — so the confirmation prints `—` there and names the Zernio post id instead of
-  labelling the destination with a value not derived from it. With one operator and one
-  configured account that is a small gap; it is the last thing between this bullet and being
-  unqualified, and turning `PUBLISHING_ENABLED` on is a decision to be taken knowing it.
+  The destination comes from `GET /publishing`, which reports the account id
+  `publishing.push_draft` actually sends — **not** `settings.voice_account`, which is an
+  extraction setting that merely happens to be a human-readable name, and is pinned against
+  substitution by a test on each side. The same route reports the kill switch, so the panel
+  says the capability is off before a command is composed rather than after one is refused.
+  **Known limit: the account is an opaque Zernio id, not a display name.** Looked at on the
+  rendered screen it is 24 hex characters — enough to confirm two commands went to the same
+  place, not enough to recognise *whose* account it is. With one configured account that is
+  tolerable, and it is the remaining weakness in this bullet: a reviewer confirming a publish
+  is trusting that the single configured id is the right one rather than reading it. The
+  upgrade is a Zernio accounts lookup, noted as `ponytail:` in `app/api_publishing.py`.
 - **Audit** — every command is a `publication` row: action, the exact draft revision the
   reviewer confirmed against, all three forms of the time, outcome, and the provider's own
   refusal text. There is no separate `audit_event` table; with one operator, an `actor`
