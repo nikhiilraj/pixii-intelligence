@@ -7,7 +7,7 @@ from app.models.draft import Draft
 from app.models.template import TemplateKind
 from app.publishing import PushFailed, lineage_metadata, push_draft
 from app.templates import approve, create_template
-from app.zernio import ZernioClient
+from app.zernio import ZernioClient, ZernioRefused
 
 
 def client_capturing(captured: dict, *, status: int = 201, body: dict | None = None):
@@ -448,3 +448,57 @@ def test_the_url_is_committed_before_the_post_is_created(session, monkeypatch):
     push_draft(session, draft, Recording(client_with_media({})), account_id="a")
 
     assert order == ["upload", "commit", "create"]
+
+
+def test_a_redraw_after_a_failed_push_sends_the_new_picture_not_the_stored_one(session):
+    """The stale-image path, reachable with no `force` anywhere.
+
+    A push whose create is refused still committed the upload URL. If the human then
+    redraws and pushes again, reusing that URL would create the post carrying the picture
+    they just replaced — silently, with the new one on screen. So a redraw clears it.
+    """
+    captured: dict = {}
+    draft = a_draft_with_a_visual(session)
+
+    refusing = client_with_media({})
+
+    def refuse(*args, **kwargs):
+        raise ZernioRefused("Zernio refused the post (422): content too long")
+
+    refusing.create_post = refuse  # type: ignore[method-assign]
+    with pytest.raises(PushFailed):
+        push_draft(session, draft, refusing, account_id="a")
+    assert draft.zernio_media_url == PUBLIC_URL  # the upload happened and was recorded
+
+    # Stands in for a redraw: `generation._draw_visual` writes the new image and clears the
+    # URL together, and that clearing is pinned in test_visual_iteration.py. What this test
+    # covers is the other half — that a cleared URL makes the next push upload again.
+    draft.visual_image = b"\x89PNG\r\n\x1a\nredrawn"
+    draft.zernio_media_url = None
+    session.add(draft)
+    session.flush()
+
+    push_draft(session, draft, client_with_media(captured), account_id="a")
+
+    puts = [r for r in captured["requests"] if r["method"] == "PUT"]
+    assert [p["content"] for p in puts] == [b"\x89PNG\r\n\x1a\nredrawn"]
+
+
+def test_a_retry_inside_the_idempotency_window_adopts_the_original_post(session):
+    """Zernio answers a repeated `x-request-id` with 200 and the post under `existingPost`.
+
+    That is the idempotency guarantee working. Reading only `post` reported it as "accepted
+    but returned no id" — untrue, and it left the draft looking unpushed while a real post
+    sat in the account.
+    """
+    draft = a_draft_with_a_visual(session)
+    client = client_with_media({}, )
+
+    def existing(*args, **kwargs):
+        return {"existingPost": {"_id": "zpost-original"}, "idempotent": True}
+
+    client.create_post = existing  # type: ignore[method-assign]
+    push_draft(session, draft, client, account_id="a")
+
+    assert draft.zernio_post_id == "zpost-original"
+    assert draft.pushed_at is not None

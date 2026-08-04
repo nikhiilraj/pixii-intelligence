@@ -507,6 +507,9 @@ def restore_visual(session: SessionDep, draft_id: int) -> DraftOut:
         raise HTTPException(status_code=409, detail=f"draft {draft_id} has no previous visual")
     draft.visual_image, draft.previous_visual = draft.previous_visual, draft.visual_image
     draft.visual_error = None
+    # Same reason as the redraw path in `generation._draw_visual`: a stored upload URL
+    # describes the image being swapped out, and `push_draft` would re-send it.
+    draft.zernio_media_url = None
     session.add(draft)
     session.commit()
     session.refresh(draft)

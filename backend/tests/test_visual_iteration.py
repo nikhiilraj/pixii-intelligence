@@ -177,3 +177,42 @@ def test_history_survives_a_failed_redraw_between_two_successes(session):
     session.refresh(draft)
     assert draft.visual_image == b"C"
     assert draft.previous_visual == b"B"
+
+
+def test_a_redraw_forgets_where_the_old_image_was_uploaded(session):
+    """`push_draft` re-sends a stored upload URL to reproduce Zernio's duplicate hash. That
+    URL describes bytes the redraw just replaced, so a push after a redraw would create the
+    post carrying the previous picture — with the new one on screen. See `_draw_visual`."""
+    draft = a_draft_with_visual(session, image=b"FIRST")
+    draft.zernio_media_url = "https://media.zernio.test/temp/first.png"
+    session.commit()
+
+    app.dependency_overrides[get_session] = lambda: session
+    app.dependency_overrides[get_html_renderer] = lambda: ConstantRenderer(b"SECOND")
+    try:
+        response = TestClient(app).post(f"/drafts/{draft.id}/regenerate-visual")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    session.refresh(draft)
+    assert draft.visual_image == b"SECOND"
+    assert draft.zernio_media_url is None
+
+
+def test_restoring_the_previous_image_forgets_the_upload_url_too(session):
+    """A swap changes which bytes the draft holds just as a redraw does."""
+    draft = a_draft_with_visual(session, image=b"NEW", previous=b"OLD")
+    draft.zernio_media_url = "https://media.zernio.test/temp/new.png"
+    session.commit()
+
+    app.dependency_overrides[get_session] = lambda: session
+    try:
+        response = TestClient(app).post(f"/drafts/{draft.id}/restore-visual")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    session.refresh(draft)
+    assert draft.visual_image == b"OLD"
+    assert draft.zernio_media_url is None
