@@ -1088,14 +1088,63 @@ def _size_of(raw: bytes) -> tuple[int, int]:
     return Image.open(io.BytesIO(raw)).size
 ```
 
-- [ ] **Step 4: Run the tests and verify they pass**
+- [ ] **Step 4: Reject anything Postgres cannot store**
+
+> **This step cost five review rounds when it was not in the plan. Do not skip it, and do
+> not implement it by listing the fields that reach the database.**
+
+`propose_visuals` rejects a bad proposal with `_RejectedProposal`, caught per-proposal so
+one bad layout does not cost its siblings. **Anything else that raises kills the batch** —
+and `json.loads` is more permissive than Postgres on three counts, none of which fail until
+`session.flush()`, as a `DataError` the `except` does not catch:
+
+| trigger | why it survives every type check | where it fails |
+|---|---|---|
+| `NaN`, `Infinity`, `-Infinity` | a documented stdlib extension to the JSON spec | JSONB, server-side |
+| NUL (`U+0000`) in any string | a legal JSON escape; `str()` preserves it and `.strip()` does not remove it, because `'\x00'.isspace()` is `False` | JSONB server-side, and `name` **client-side** — psycopg refuses to put a NUL on the wire |
+| a lone surrogate | legal JSON; `json.loads` combines a surrogate *pair* into a real character, so anything left unpaired arrived that way | JSONB, server-side |
+
+Write **one probe over the whole proposal** — every value at any depth, dict keys as well
+as values — placed *before* `name` and `markup` are read. Four rounds of this defect were
+each closed by naming the field that had just broken, and the next round found it in a
+field none of them had named. A probe that must be widened whenever the write changes is
+the same bug with a delay on it.
+
+Four things about the probe that are load-bearing and do not look it:
+
+- **Walk iteratively, not recursively.** `json.loads` accepts 1497 levels of nesting. A
+  recursive walk over a 1000-deep proposal raises `RecursionError`, which is not a
+  `_RejectedProposal` either — so the obvious implementation is itself a new instance of
+  the defect it fixes.
+- **Probe before reading `name`/`markup`.** Every rejection message below interpolates
+  `{name}` or `{proposal!r}` and is handed to `log.warning`; an unescaped lone surrogate
+  written to a stream raises `UnicodeEncodeError` at log time, outside the `except`,
+  killing the batch the probe just saved. Interpolate with `!r` — `repr` escapes both
+  triggers to ASCII.
+- **Test NUL with `in`, not by serialising.** `json.dumps` escapes NUL to the six literal
+  characters `\u0000` even under `ensure_ascii=False`, so scanning dumped output cannot
+  tell a real NUL from text that spells the escape out.
+- **Test surrogates with `.encode("utf-8")`**, the operation the driver itself performs,
+  rather than a surrogate-range check that can drift from it and over-reject valid pairs.
+
+One test per row of the table above, each with a good sibling proposal alongside, each
+asserting the good one still comes back. Plus one pinning the iterative walk — a
+1000-deep proposal that a recursive walker would fail on.
+
+**Known and deliberately unfixed:** psycopg serialises with `json.dumps`, which is
+recursive in C and blows the stack *below* `json.loads`' 1497-level ceiling, so a band of
+very deeply nested proposals still raises `RecursionError` at flush. Reachable only by a
+response with ~1000 levels of nesting, which no layout proposal has reason to contain and
+no untrusted input can induce. Costs one failed extraction run, recoverable by re-running.
+
+- [ ] **Step 5: Run the tests and verify they pass**
 
 Run: `cd backend && .venv/bin/pytest tests/test_visual_extraction.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Break it on purpose**
+- [ ] **Step 6: Break it on purpose**
 
-Change `if used != declared:` to `if False:` and confirm both mismatch tests fail. Change `len(provenance) == 1` to `len(provenance) >= 1` and confirm `test_dimensions_fall_back_when_the_source_is_ambiguous` fails. Revert both.
+Change `if used != declared:` to `if False:` and confirm both mismatch tests fail. Change `len(provenance) == 1` to `len(provenance) >= 1` and confirm `test_dimensions_fall_back_when_the_source_is_ambiguous` fails. Replace the iterative walk with the obvious recursive one and confirm the deep-nesting test fails. Revert all three.
 
 - [ ] **Step 6: Commit**
 
