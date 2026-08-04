@@ -920,12 +920,16 @@ from app.rendering import DEFAULT_HEIGHT, DEFAULT_WIDTH, SLOT
 # than read across repositories at runtime. ponytail: one constant, re-copied when the
 # brand changes. Make it a fetch when a second tool in this repo needs the same values.
 BRAND = """\
-Colours: #d65831 primary orange — the ONLY saturated colour, used for one accent per
-image. #FAFAF8 page background (warm, never cold white). #FFFFFF card surface. #1A1816
-text. #7A756D muted text. #E0DFDB borders.
-Type: Cabinet Grotesk bold/extrabold for headlines, set tight and large. A neutral
-grotesque for body and labels. Kickers are small, letterspaced and uppercase.
-Layout: generous margins, one idea per image, a source line at the foot."""
+Colours: #d65831 primary orange is the ONLY saturated colour — everything else is neutral.
+#FAFAF8 page background (warm smoke, not cold white). #FFFFFF card surface. #1A1816 text.
+#7A756D muted text. #E0DFDB borders. On an orange background use white text, with
+rgba(0,0,0,0.1-0.15) for any card overlay.
+Type: Cabinet Grotesk Bold or Extrabold for headlines, set large and tight. No full stops
+in headlines. Use digits, never spelled-out numbers.
+Layout: rounded corners — 12-20px on cards, 8-10px on buttons. No heavy drop shadows.
+Clean whitespace. No eyebrow or kicker tag above a headline.
+The logo is never typed as text in any font. It arrives as a real file through an image
+slot."""
 
 _VISUAL_SYSTEM = f"""\
 You extract reusable visual layouts from the images of social posts that already
@@ -950,6 +954,10 @@ Rules:
   from a real logo file, never drawn.
 - Do not reproduce the source's words. The example values are illustrations of the shape.
 - Abstract only what genuinely repeats. Do not invent a layout no image shows.
+- The brand rules below outrank the source image. Some posts that performed well break
+  them — a kicker above the headline, a full stop at the end of one. Do not carry that
+  across: follow the rule, and name the rule the source broke in the rationale.
+  brand.json is where the brand is decided; the corpus is only where shapes are found.
 - Ground every layout in the images that justify it, by their id. Never cite an id you
   were not given.
 - Prefer two or three sharply different layouts over many similar ones.
