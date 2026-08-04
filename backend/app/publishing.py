@@ -60,6 +60,14 @@ def _media_items(draft: Draft, client: ZernioClient) -> list[dict[str, str]]:
     if not draft.visual_image:
         return []
 
+    # PNG is a constant here rather than something sniffed from the bytes, because both
+    # renderers produce PNG and nothing else writes this column: the Cloudflare path asks for
+    # `screenshotOptions: {"type": "png"}`, and the image-model path ends in `_scale_to`,
+    # which re-encodes whatever the provider returned with `format="PNG"`. Worth stating
+    # because presign takes a fixed enum of content types and rejects a wrong one, and
+    # because the value is signed into the upload URL — a mismatch fails at the store, in the
+    # store's vocabulary, a long way from here.
+    #
     # The filename is only a label — the store prefixes its own timestamp and random token,
     # so this does not make the resulting URL predictable. It names the draft so a human
     # looking at Zernio's storage can tell where the file came from.
@@ -95,8 +103,9 @@ def push_draft(
     create the post, then attach — is what produces the state nobody can reason about: a
     post sitting in Zernio carrying our text and no picture, with our database recording a
     successful push. This way a failed upload means nothing was created at all: no post,
-    `zernio_post_id` still NULL, the draft as retryable as it was a second earlier, and the
-    only debris an orphaned object in the store that expires on its own.
+    `zernio_post_id` still NULL, the draft as retryable as it was a second earlier. The debris
+    is the other case — an upload that succeeded under a create that then failed — and it is
+    an object in temporary storage that no post references, which expires on its own.
 
     That covers the failure this app can control. The one it cannot: an upload sits in
     temporary storage for seven days and is copied to permanent storage only when a post
