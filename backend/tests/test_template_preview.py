@@ -64,8 +64,9 @@ def a_logo(session, tmp_path_factory) -> Asset:
 def test_preview_renders_a_slots_pinned_default(session, tmp_path_factory):
     """A logo slot the caller says nothing about renders from its pinned asset.
 
-    This is the assertion that fails today: preview reads only what the caller sent, so
-    the picture it shows is not the picture generation produces.
+    Before `render_template` unified the render paths, this assertion failed because
+    preview read only what the caller sent, showing the example instead of the pinned asset.
+    It now pins the unified behavior.
     """
     logo = a_logo(session, tmp_path_factory)
     template = create_template(
