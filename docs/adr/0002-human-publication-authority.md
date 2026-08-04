@@ -34,8 +34,13 @@ as the authorization boundary, and do not build Entra ID, organizations, or role
 Blueprint §4 forbids shipping publish without confirmation, audit, idempotency,
 stale-revision rejection, and a kill switch **together**. All five ship in the same slice:
 
-- **Confirmation** — the review screen shows account, action, local time, timezone, and
-  resolved UTC before the command fires.
+- **Confirmation** — every command requires the exact `revision` the reviewer confirmed
+  against, as a required field with no default. A caller that may omit it can publish words
+  nobody approved.
+  **Not yet built:** the review screen that shows account, action, local time, timezone and
+  resolved UTC before firing. Until it exists the guard is the required field alone, which
+  protects against a *stale* command but not against a *careless* one. `PUBLISHING_ENABLED`
+  stays off until the screen lands.
 - **Audit** — every command is a `publication` row: action, the exact draft revision the
   reviewer confirmed against, all three forms of the time, outcome, and the provider's own
   refusal text. There is no separate `audit_event` table; with one operator, an `actor`

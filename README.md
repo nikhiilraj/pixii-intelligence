@@ -72,8 +72,9 @@ The normal workflow is:
 5. Regenerate individual parts or create variants if the first result is not right.
 6. Push the chosen result to Zernio. Pixii sends a draft.
 7. Schedule or publish it. With `PUBLISHING_ENABLED` off — the default — that happens in
-   Zernio, by hand. With it on, confirm the account, time and timezone here and Pixii sends
-   the command, refusing it if the draft changed since you loaded the page.
+   Zernio, by hand. The API for doing it here exists and refuses any command confirmed
+   against an older version of the draft; the review screen that fires it is not built yet,
+   which is why the switch stays off.
 8. Synchronize metrics after the post has accumulated meaningful engagement.
 9. Record a verdict and explain why it worked, did not work, or produced a mixed result.
 10. Return to **Inbox** and confirm the item moved to the next gate or completed the circuit.
