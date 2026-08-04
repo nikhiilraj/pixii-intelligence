@@ -13,6 +13,14 @@ from app.templates import create_template, usable_templates
 # few enough that the weak tail cannot dilute it.
 DEFAULT_SAMPLE_SIZE = 12
 
+# Fewer than a hook sample: every entry here is a full image in the request, and a layout
+# repeats visibly across far fewer examples than a sentence pattern does.
+VISUAL_SAMPLE_SIZE = 5
+
+# Suffixes `media.download_post_media` stores that are still images. A video frame is not
+# the artefact — the post's picture is — so `.mp4`, `.mov` and `.webm` are not here.
+_STILL_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+
 # The opening is the hook. Sending whole posts buries it and wastes context.
 HOOK_CHARS = 220
 
@@ -104,7 +112,11 @@ def _hook_of(content: str) -> str:
 
 
 def _strongest_posts(
-    session: Session, platform: str, sample_size: int, cohort: Cohort
+    session: Session,
+    platform: str,
+    sample_size: int,
+    cohort: Cohort,
+    require_content: bool = True,
 ) -> list[Post]:
     """The sample the model learns from.
 
@@ -120,10 +132,15 @@ def _strongest_posts(
         .where(Post.account_username == account)
         # Held out by hand — strong for a reason that cannot repeat.
         .where(col(Post.excluded_from_extraction).is_(False))
+    )
+    if require_content:
         # A post with no text carries no hook, so it is no evidence. Load-bearing in both
         # cohorts: at least one creator post is an image with no text at all.
-        .where(func.trim(col(Post.content)) != "")
-    )
+        #
+        # Visual extraction passes False. That same textless post is a picture that
+        # performed, which is exactly the evidence a layout is drawn from — filtering it
+        # here would discard the purest sample in the set.
+        statement = statement.where(func.trim(col(Post.content)) != "")
     if cohort is Cohort.VOICE:
         # An era floor on Monte's own history: his older posts are a different genre and
         # their engagement is not comparable, having reached a different audience. It has
@@ -135,6 +152,69 @@ def _strongest_posts(
         statement = statement.where(col(Post.published_at) >= settings.voice_since)
     statement = statement.order_by(col(Post.engaged_actions).desc()).limit(sample_size)
     return list(session.exec(statement).all())
+
+
+def _visual_sample(
+    session: Session, platform: str, sample_size: int, cohort: Cohort
+) -> list[tuple[Post, bytes]]:
+    """The strongest posts that have a still image, paired with the image's bytes.
+
+    Returns pairs rather than posts because the caller needs the bytes twice — once to
+    send to the model, once to take the template's dimensions from. Re-resolving a file
+    from `Template.provenance` later is not possible in one step: that column is
+    `list[str]` of Zernio ids, so it would mean a `Post` lookup for bytes already in hand.
+
+    An unreadable file is skipped, not raised. `media/` is a cache of Zernio's files; one
+    truncated download must not cost the other four posts their slot.
+    """
+    pairs: list[tuple[Post, bytes]] = []
+    # Over-fetch, because the media filter cannot be expressed in the ranking query without
+    # assuming a suffix convention the column does not guarantee.
+    for post in _strongest_posts(
+        session, platform, sample_size * 4, cohort, require_content=False
+    ):
+        name = post.local_media_path or ""
+        if not name.lower().endswith(_STILL_SUFFIXES):
+            continue
+        try:
+            pairs.append((post, (settings.media_dir / name).read_bytes()))
+        except OSError:
+            continue
+        if len(pairs) == sample_size:
+            break
+    return pairs
+
+
+_VISUAL_SYSTEM = "Placeholder — Task 4 writes the real extraction prompt."
+
+
+def _visual_prompt(sample: list[tuple[Post, bytes]]) -> str:
+    lines = [
+        "Post images, strongest first. 'engaged' is likes + comments + shares + saves — "
+        "the measure that matters. Weight the top of this list most heavily.",
+        "",
+    ]
+    for post, _ in sample:
+        lines.append(f"id: {post.zernio_id} | engaged: {post.engaged_actions}")
+    return "\n".join(lines)
+
+
+def propose_visuals(
+    session: Session,
+    llm: LLM,
+    *,
+    platform: str = "linkedin",
+    sample_size: int = VISUAL_SAMPLE_SIZE,
+    cohort: Cohort = Cohort.VOICE,
+) -> list[Template]:
+    """Propose visual layouts from the images of the strongest posts. Proposals only."""
+    cohort = Cohort(cohort)
+    sample = _visual_sample(session, platform, sample_size, cohort)
+    if not sample:
+        return []
+
+    llm.complete_json(_VISUAL_SYSTEM, _visual_prompt(sample), [raw for _, raw in sample])
+    return []
 
 
 def _build_prompt(posts: list[Post]) -> str:
