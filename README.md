@@ -22,6 +22,13 @@ Two boundaries are fundamental:
 - **It does not rank templates as "best."** There is not enough lineage-attributed performance
   data yet to make that statistically reliable.
 
+The proposed next-generation architecture—including team authentication, durable daily automation,
+Teams notifications, publishing and scheduling from Pixii, compliant reference capture, deep
+research, and multi-provider image generation—is documented in the
+[Pixii Platform Blueprint](docs/architecture/2026-08-04-pixii-platform-blueprint.md). Its external
+API assumptions are backed by the companion
+[official platform research](docs/research/2026-08-04-platform-api-research.md).
+
 ---
 
 ## What it can do
