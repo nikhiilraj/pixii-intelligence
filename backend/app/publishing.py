@@ -48,7 +48,9 @@ def lineage_metadata(draft: Draft) -> dict:
     return metadata
 
 
-def _media_items(draft: Draft, client: ZernioClient) -> list[dict[str, str]]:
+def _media_items(
+    session: Session, draft: Draft, client: ZernioClient, *, reuse: bool
+) -> list[dict[str, str]]:
     """The draft's rendered visual, uploaded, in the shape a post attaches media in.
 
     Empty when there is no image — a draft whose visual failed, or a template that produces
@@ -56,9 +58,19 @@ def _media_items(draft: Draft, client: ZernioClient) -> list[dict[str, str]]:
     the same reason `lineage_metadata` omits an empty `asset_values`: an empty list is a
     claim that the post has no picture, and this app cannot make that claim about a draft
     whose render merely failed.
+
+    `reuse` is what keeps a retry from creating a second post. See `Draft.zernio_media_url`:
+    the API's duplicate hash covers media URLs, so an ordinary retry has to send back the
+    URL it sent last time or the hash will not match and the retry becomes a new post. It is
+    off for a forced re-push, which exists precisely to carry a *redrawn* picture — reusing
+    the stored URL there would re-send the old image, quietly, which is the one outcome worse
+    than a duplicate.
     """
     if not draft.visual_image:
         return []
+
+    if reuse and draft.zernio_media_url:
+        return [{"url": draft.zernio_media_url, "type": "image"}]
 
     # PNG is a constant here rather than something sniffed from the bytes, because both
     # renderers produce PNG and nothing else writes this column: the Cloudflare path asks for
@@ -72,6 +84,15 @@ def _media_items(draft: Draft, client: ZernioClient) -> list[dict[str, str]]:
     # so this does not make the resulting URL predictable. It names the draft so a human
     # looking at Zernio's storage can tell where the file came from.
     url = client.upload_media(draft.visual_image, f"pixii-draft-{draft.id}.png", "image/png")
+
+    # Committed, not flushed. A flush would be rolled back with the rest of the request when
+    # the create that follows dies mid-flight — which is the exact case this column exists
+    # for, so a flush here would look correct and guard nothing. The commit is safe to make
+    # early because the row it writes is true the moment the upload returns: this draft's
+    # picture is at this URL, whether or not a post ever references it.
+    draft.zernio_media_url = url
+    session.add(draft)
+    session.commit()
     return [{"url": url, "type": "image"}]
 
 
@@ -107,20 +128,30 @@ def push_draft(
     is the other case — an upload that succeeded under a create that then failed — and it is
     an object in temporary storage that no post references, which expires on its own.
 
-    That covers the failure this app can control. The one it cannot: an upload sits in
-    temporary storage for seven days and is copied to permanent storage only when a post
-    using it **publishes** — and publishing here is a human act performed in Zernio at an
-    unbounded later date. A draft left for longer than a week can therefore lose its picture
-    while keeping its text, and no call made here prevents it, because the promoting event
-    is the one this app exists not to perform. What a human sees then is the broken image in
-    Zernio's own editor, where they already are; `pushed_at` says how old the upload was.
-    Our records are not wrong in that state — `zernio_post_id` still names a real post whose
-    text is intact.
+    That covers the failure this app can control. The one it cannot, and this is **measured,
+    not inferred**: a presign against the live account returns a URL under `media.zernio.com`
+    **/temp/**, and that storage is documented to expire after seven days, with the file
+    copied to permanent storage only when a post using it **publishes**. Publishing here is a
+    human act performed in Zernio at an unbounded later date, so a draft that sits in the
+    queue longer than a week can lose its picture while keeping its text. Zernio's own advice
+    for this — "upload near publish time" — is not available to us by design, because the
+    publish is the event this tool exists not to perform.
+
+    (The account's existing drafts all carry `/media/` URLs rather than `/temp/` ones, which
+    looks like counter-evidence and is not: those were uploaded through the dashboard, by a
+    route the public API does not expose. Presign is what we have, and presign returns
+    `/temp/`.)
+
+    What a human sees in that state is the broken image in Zernio's own editor, where they
+    already are; `pushed_at` says how old the upload was. Our records are not wrong —
+    `zernio_post_id` still names a real post whose text is intact.
 
     ponytail: there is no repair path for that, only a re-push, and `force=True` re-pushes by
-    creating a *second* post — a fresh upload means a fresh URL, which defeats both the
-    5-minute request-id window and the 24-hour content hash. Repairing the picture in place
-    needs `PUT /posts/{id}`, which this client does not speak.
+    creating a *second* post — it re-uploads deliberately, so the URL is new and neither the
+    5-minute request-id window nor the 24-hour content hash suppresses it. That is confined to
+    `force`: an ordinary retry re-sends the stored `zernio_media_url`, reproducing the hash so
+    the API's own dedup catches it. Repairing the picture in place would need
+    `PUT /posts/{id}`, which this client does not speak.
     """
     if draft.zernio_post_id and not force:
         return draft
@@ -128,7 +159,12 @@ def push_draft(
     try:
         # Inside the try, and before the payload: an upload that fails must fail the push
         # here, where nothing has been created yet.
-        media_items = _media_items(draft, client)
+        #
+        # `reuse=not force`: an ordinary push — including the retry of one whose response was
+        # lost — must send the URL it sent before, or the duplicate hash misses and the retry
+        # creates a second post. A forced re-push must not, because the picture may have been
+        # redrawn since.
+        media_items = _media_items(session, draft, client, reuse=not force)
 
         payload: dict[str, object] = {
             "content": draft.full_text,

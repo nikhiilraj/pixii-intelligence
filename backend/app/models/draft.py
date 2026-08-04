@@ -60,6 +60,21 @@ class Draft(SQLModel, table=True):
 
     # Set by the publishing slice. Absent means this draft never left the building.
     zernio_post_id: str | None = Field(default=None, index=True)
+    # Where `visual_image` was uploaded, so a retry can reference the same file.
+    #
+    # **This column is a duplicate-post guard, not a cache.** Zernio rejects a repeat of the
+    # same post within 24 hours by hashing `(platform, accountId, content + media URLs)` —
+    # and every presign returns a freshly randomised URL. So a push that succeeded remotely
+    # while its response was lost would, on retry, upload again, hash differently, and create
+    # a *second* post in the account. Storing the URL is what reproduces the fingerprint and
+    # lets Zernio's own dedup catch the retry. Written before the post is created, and
+    # committed there rather than flushed, because the whole point is to outlive a request
+    # that dies mid-create.
+    #
+    # Deliberately **not** added to `DraftOut`, unlike the columns whose omission that class
+    # warns about: nothing in Studio reads or acts on this, and a storage URL for a file the
+    # reviewer already sees rendered is not information the review screen needs.
+    zernio_media_url: str | None = None
     pushed_at: datetime | None = None
     # When the pushed draft was observed live on the platform. NULL is the meaningful state:
     # pushed, but Monte has not published it yet.
