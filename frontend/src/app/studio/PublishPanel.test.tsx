@@ -106,42 +106,59 @@ function dialog(): HTMLElement {
 describe("resolveUtc — the instant the confirmation promises", () => {
   /* This is the number ADR 0002 requires the reviewer to see before firing, and it is the one
    * value on the screen that is computed rather than echoed. Every case below is a wall clock
-   * that is a different instant depending on a rule nobody holds in their head. */
+   * that is a different instant depending on a rule nobody holds in their head.
+   *
+   * The four non-`ok` kinds are the point of the union: they are `distribution.resolve`'s own
+   * refusals, asked early enough to answer in the field instead of after a command. */
+
+  /** The instant, for the cases that have one. Fails loudly rather than returning undefined. */
+  const at = (local: string, zone: string) => {
+    const r = resolveUtc(local, zone);
+    if (r.kind !== "ok") throw new Error(`expected an instant, got ${r.kind}`);
+    return r.utc.toISOString();
+  };
 
   it("applies a fixed offset", () => {
     // Asia/Kolkata is UTC+5:30 and has no DST — the half-hour is what a naive
     // hours-only implementation gets wrong.
-    expect(resolveUtc("2026-08-12T09:00", "Asia/Kolkata")?.toISOString()).toBe(
-      "2026-08-12T03:30:00.000Z",
-    );
+    expect(at("2026-08-12T09:00", "Asia/Kolkata")).toBe("2026-08-12T03:30:00.000Z");
   });
 
   it("applies the offset in force on the day, not a fixed one", () => {
-    // The same wall clock in the same zone, six months apart. A single-pass or fixed-offset
-    // resolver returns the same UTC hour for both, and a schedule then goes out an hour early
-    // or an hour late for half the year with nothing on screen saying so.
-    expect(resolveUtc("2026-07-01T12:00", "America/New_York")?.toISOString()).toBe(
-      "2026-07-01T16:00:00.000Z",
-    );
-    expect(resolveUtc("2026-01-01T12:00", "America/New_York")?.toISOString()).toBe(
-      "2026-01-01T17:00:00.000Z",
-    );
+    // The same wall clock in the same zone, six months apart. A fixed-offset resolver returns
+    // the same UTC hour for both, and a schedule then goes out an hour early or an hour late
+    // for half the year with nothing on screen saying so.
+    expect(at("2026-07-01T12:00", "America/New_York")).toBe("2026-07-01T16:00:00.000Z");
+    expect(at("2026-01-01T12:00", "America/New_York")).toBe("2026-01-01T17:00:00.000Z");
   });
 
-  it("resolves a wall clock on the far side of a DST jump", () => {
-    // 2026-03-08 02:00 local is when New York springs forward. 03:30 that morning is already
-    // on the new offset, which is exactly the hour a one-pass fixed point lands wrong on.
-    expect(resolveUtc("2026-03-08T03:30", "America/New_York")?.toISOString()).toBe(
-      "2026-03-08T07:30:00.000Z",
-    );
+  it("resolves the hours either side of a spring-forward change", () => {
+    // 2026-03-08 02:00 New York is the jump. 01:30 is still EST and 03:30 is already EDT, and
+    // both are ordinary times that must keep working — refusing them would be a guard broad
+    // enough to break the day rather than the hour.
+    expect(at("2026-03-08T01:30", "America/New_York")).toBe("2026-03-08T06:30:00.000Z");
+    expect(at("2026-03-08T03:30", "America/New_York")).toBe("2026-03-08T07:30:00.000Z");
   });
 
-  it("returns null for a name that is not a zone", () => {
-    // `Asia/Kolkta` — the typo `distribution.resolve`'s docstring records as having come back
-    // as a 500. Here it has to be a value, not an exception, or the panel crashes on a
-    // half-typed zone name.
-    expect(resolveUtc("2026-08-12T09:00", "Asia/Kolkta")).toBeNull();
-    expect(resolveUtc("", "Asia/Kolkata")).toBeNull();
+  it("refuses a wall clock that does not happen", () => {
+    /* 02:30 on the spring-forward morning. Any implementation that insists on one instant
+     * returns one — and nothing makes this side's choice agree with the server's `fold`, so
+     * the confirmation would display one instant while the server scheduled another an hour
+     * away. `distribution.resolve` refuses it; so does this. */
+    expect(resolveUtc("2026-03-08T02:30", "America/New_York").kind).toBe("nonexistent");
+  });
+
+  it("refuses a wall clock that happens twice", () => {
+    // 01:30 on the fall-back morning names two instants an hour apart.
+    expect(resolveUtc("2026-11-01T01:30", "America/New_York").kind).toBe("ambiguous");
+  });
+
+  it("tells an unknown zone apart from an unfinished time", () => {
+    /* `Asia/Kolkta` — the typo `distribution.resolve`'s docstring records as having come back
+     * as a 500. Both are "no instant" and they are different sentences: one says check the
+     * zone, the other says finish typing. */
+    expect(resolveUtc("2026-08-12T09:00", "Asia/Kolkta").kind).toBe("unknown_zone");
+    expect(resolveUtc("", "Asia/Kolkata").kind).toBe("incomplete");
   });
 });
 
@@ -215,6 +232,17 @@ describe("classify — each refusal says something different", () => {
     const conflict = classify(http(409, "draft 555 has not been pushed to Zernio.", "draft 555 has not been pushed to Zernio."), "schedule");
     const unprocessable = classify(http(422, "2026-01-01T09:00:00 Asia/Kolkata is in the past", "2026-01-01T09:00:00 Asia/Kolkata is in the past"), "schedule");
     const refused = classify(http(502, "Zernio 400: scheduledFor must be at least 5 minutes ahead", "Zernio 400: scheduledFor must be at least 5 minutes ahead"), "schedule");
+    // The server's 422s already end in what to do, so nothing of ours is appended after them.
+    const dst = classify(
+      http(
+        422,
+        "2026-03-08T02:30:00 does not exist in America/New_York — the clocks move forward over it. Choose a time before or after the change.",
+        "2026-03-08T02:30:00 does not exist in America/New_York — the clocks move forward over it. Choose a time before or after the change.",
+      ),
+      "schedule",
+    );
+    expect(dst.body).toContain("Choose a time before or after the change.");
+    expect(dst.body).not.toMatch(/change the time or the timezone/i);
 
     const titles = [conflict.title, unprocessable.title, refused.title];
     expect(new Set(titles).size).toBe(3);
@@ -588,6 +616,38 @@ describe("the timezone field", () => {
     fireEvent.change(screen.getByLabelText(/timezone/i), { target: { value: "Asia/Kolkta" } });
 
     expect(screen.getByText(/not a timezone name this browser knows/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^schedule…$/i })).toBeDisabled();
+  });
+
+  it("says the clocks moved rather than blaming the timezone", () => {
+    /* The reviewer's zone is fine and their time is a real thing to have typed. "Check the
+     * timezone" would be a correct-sounding message pointing at the wrong field, which is the
+     * whole reason `resolveUtc` returns four kinds instead of null. */
+    render(panel());
+
+    fireEvent.change(screen.getByLabelText(/local time/i), {
+      target: { value: "2026-03-08T02:30" },
+    });
+    fireEvent.change(screen.getByLabelText(/timezone/i), {
+      target: { value: "America/New_York" },
+    });
+
+    expect(screen.getByText(/does not happen in America\/New_York/i)).toBeInTheDocument();
+    expect(screen.queryByText(/not a timezone name/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^schedule…$/i })).toBeDisabled();
+  });
+
+  it("says a fall-back hour names two instants", () => {
+    render(panel());
+
+    fireEvent.change(screen.getByLabelText(/local time/i), {
+      target: { value: "2026-11-01T01:30" },
+    });
+    fireEvent.change(screen.getByLabelText(/timezone/i), {
+      target: { value: "America/New_York" },
+    });
+
+    expect(screen.getByText(/happens twice in America\/New_York/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^schedule…$/i })).toBeDisabled();
   });
 

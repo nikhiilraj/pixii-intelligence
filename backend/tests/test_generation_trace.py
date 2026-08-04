@@ -8,10 +8,12 @@ dict and drops the response's usage block, is that nobody measured it.
 import hashlib
 import json
 import time
+from datetime import UTC, datetime
 
 import pytest
 from sqlmodel import SQLModel, col, select
 
+from app.db import utc
 from app.models.generation_trace import GenerationTrace
 from app.prompts.registry import Prompt
 from app.prompts.tracing import new_correlation_id, output_hash, traced_call
@@ -312,3 +314,22 @@ def test_the_row_survives_a_round_trip_through_the_database(session):
     assert trace.prompt_name == "t.example"
     assert trace.input_artifact_ids == {"draft": "17"}
     assert trace.created_at is not None
+
+
+def test_the_timestamp_reads_back_naive_and_compares_through_db_utc(session):
+    """`created_at` is written aware and stored in a `timestamp without time zone`.
+
+    So it comes back naive, and comparing it to anything aware *raises* — the hazard CLAUDE.md
+    names and `test_publish_detection.utc_naive` documents from the other side. Asserted rather
+    than assumed, because "is not None" passes either way and the failure only shows up in
+    whatever first tries to ask how old a trace is.
+    """
+    traced_call(session, FakeLLM(), PROMPT, "u", correlation_id="c")
+    session.flush()
+    (trace,) = traces(session)
+    session.expire(trace)
+
+    assert trace.created_at.tzinfo is None
+    with pytest.raises(TypeError):
+        assert trace.created_at <= datetime.now(UTC)
+    assert utc(trace.created_at) <= datetime.now(UTC)

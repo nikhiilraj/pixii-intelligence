@@ -93,24 +93,35 @@ def fetch(url: str, *, transport: httpx.BaseTransport | None = None) -> Fetched:
             _check_url(target)
             _check_deadline(deadline)
 
-            with client.stream("GET", target) as response:
-                if response.status_code in _REDIRECT_STATUSES:
-                    location = response.headers.get("location")
-                    if not location:
-                        raise FetchFailed(
-                            f"{target} answered {response.status_code} with no Location"
-                        )
-                    # Joined against the *current* url, not the original: `Location: /b`
-                    # after two hops is relative to where we are now. The result then goes
-                    # through the full check at the top of the loop — scheme included,
-                    # because a redirect to `http://` is the downgrade vector.
-                    target = target.join(location)
-                    continue
+            # Everything httpx raises for a request that did not come back usable — a
+            # connect refusal, a TLS verification failure, a malformed response, and the
+            # per-request timeout above — becomes `FetchFailed`, because those are the two
+            # exceptions this module promises and a caller should not have to learn httpx's
+            # hierarchy to handle a dead host. `UnsafeUrl` and `FetchFailed` are
+            # `RuntimeError`, so nothing raised deliberately below is swallowed here.
+            try:
+                with client.stream("GET", target) as response:
+                    if response.status_code in _REDIRECT_STATUSES:
+                        location = response.headers.get("location")
+                        if not location:
+                            raise FetchFailed(
+                                f"{target} answered {response.status_code} with no Location"
+                            )
+                        # Joined against the *current* url, not the original: `Location: /b`
+                        # after two hops is relative to where we are now. Through `_parse`
+                        # because a `Location` is attacker-controlled and httpx rejects some
+                        # of them outright. The result then goes through the full check at
+                        # the top of the loop — scheme included, because a redirect to
+                        # `http://` is the downgrade vector.
+                        target = target.join(_parse(location))
+                        continue
 
-                if response.status_code >= 400:
-                    raise FetchFailed(f"{target} answered {response.status_code}")
+                    if response.status_code >= 400:
+                        raise FetchFailed(f"{target} answered {response.status_code}")
 
-                return _read(response, target, deadline)
+                    return _read(response, target, deadline)
+            except httpx.HTTPError as exc:
+                raise FetchFailed(f"{target} did not answer: {exc!r}") from exc
 
     raise FetchFailed(f"more than {MAX_REDIRECTS} redirects starting at {url}")
 
@@ -184,7 +195,14 @@ def _check_address(raw: str, url: httpx.URL) -> None:
     upstream redefinition would open a hole rather than break a feature. They also record
     what this refuses without making a reader go and read `ipaddress`.
     """
-    for address in _candidates(ipaddress.ip_address(raw)):
+    try:
+        resolved = ipaddress.ip_address(raw)
+    except ValueError as exc:
+        # Fails closed, and with the type this module promises rather than a bare
+        # ValueError from a library the caller never imported.
+        raise UnsafeUrl(f"{url.host} resolved to {raw!r}, which is not an address") from exc
+
+    for address in _candidates(resolved):
         unsafe = (
             address.is_private
             or address.is_loopback

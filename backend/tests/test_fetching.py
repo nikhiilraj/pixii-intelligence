@@ -292,6 +292,41 @@ def test_an_error_status_fails(public_dns):
         fetch(PAGE, transport=serving(httpx.Response(404, text="gone")))
 
 
+# --- nothing leaves through a third exception type ---------------------------------
+
+
+@pytest.mark.parametrize(
+    "raised",
+    [
+        httpx.ConnectError("refused"),
+        httpx.ConnectTimeout("no answer"),
+        # The per-request ceiling. Without this bucket, half the time limit exits as
+        # `FetchFailed` (the wall clock) and half as an httpx type.
+        httpx.ReadTimeout("trickle"),
+        httpx.RemoteProtocolError("garbage"),
+    ],
+)
+def test_transport_failures_arrive_as_fetch_failed(raised, public_dns):
+    """`Fetched`, `UnsafeUrl`, `FetchFailed`. Slice 4 should not have to import httpx."""
+
+    def explode(request: httpx.Request) -> httpx.Response:
+        raise raised
+
+    with pytest.raises(FetchFailed):
+        fetch(PAGE, transport=httpx.MockTransport(explode))
+
+
+def test_an_unparseable_redirect_target_is_refused(public_dns):
+    """A `Location` is attacker-controlled, and httpx rejects some strings outright."""
+    with pytest.raises(UnsafeUrl):
+        fetch(PAGE, transport=serving(redirect("https://research\n.test/x")))
+
+
+def test_the_caller_url_is_not_required_to_be_a_url():
+    with pytest.raises(UnsafeUrl):
+        fetch("https://resea rch.test/\x00", transport=serving(plain("never")))
+
+
 # --- content types -----------------------------------------------------------------
 
 

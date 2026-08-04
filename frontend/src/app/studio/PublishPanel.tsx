@@ -70,33 +70,53 @@ function offsetMs(instant: number, timeZone: string): number | null {
   );
 }
 
+/** What a local time and a zone name add up to — one instant, or a reason there isn't one.
+ *
+ *  A union rather than `Date | null`, because "no instant" has three causes and they are three
+ *  different things to tell someone: the zone name is not one this engine knows, the wall clock
+ *  does not happen, or it happens twice. Collapsing them would put "check the timezone" in front
+ *  of a reviewer whose timezone is fine.
+ *
+ *  These are exactly the refusals `distribution.resolve` raises, deliberately. The server is
+ *  still the authority and still answers 422; this is the same question asked early enough that
+ *  the answer arrives in the field rather than after a command. */
+export type Resolved =
+  | { kind: "ok"; utc: Date }
+  | { kind: "incomplete" }
+  | { kind: "unknown_zone" }
+  | { kind: "nonexistent" }
+  | { kind: "ambiguous" };
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 /** The instant a wall-clock time in a named zone refers to — the browser's `distribution.resolve`.
  *
  *  Computed here as well as on the server, and that duplication is the point of this screen:
  *  ADR 0002 requires the reviewer to see the **resolved UTC instant** before firing, and a
- *  number the server would only reveal by acting on it is not a confirmation. The server
- *  resolves again and stays the authority, so a past time or a zone name it rejects comes back
- *  as a 422 rather than as a post at the wrong hour.
+ *  number the server would only reveal by acting on it is not a confirmation.
  *
- *  **That does not cover every disagreement, and the gap is worth naming.** A wall clock that
- *  DST makes *nonexistent* (02:30 on a spring-forward morning) or *ambiguous* (01:30 on a
- *  fall-back morning) has no single answer: this returns one instant, `distribution.resolve`'s
- *  `astimezone` picks one too, and nothing guarantees they agree. The server would not refuse
- *  it — it would schedule an hour away from what this line displayed. Once a year per zone and
- *  one hour wide, so it ships: the publication row keeps `requested_local_time` and `timezone`
- *  verbatim, and those are what say what was meant when the instant is arguable.
+ *  **The two wall clocks a year that are not one instant are refused, not resolved**, matching
+ *  `distribution.resolve` case for case. 02:30 on a spring-forward morning does not happen;
+ *  01:30 on a fall-back morning happens twice. Both would still yield *an* instant from any
+ *  implementation that insists on one — and nothing makes this side's choice agree with the
+ *  server's, so the confirmation could display one instant while the server scheduled another
+ *  an hour away. That is the surprise the confirmation exists to remove, arriving on the one
+ *  morning a reader would least expect it.
  *
- *  Two passes, not one. The offset depends on the instant, and the instant is what is being
- *  solved for: guessing that the wall-clock fields are already UTC gives an offset within a
- *  day of the right one, and applying it lands on the answer. The second pass is what makes
- *  the hour either side of a DST transition come out right, where the first guess falls on the
- *  other side of the jump. ponytail: two passes, no library and no `temporal` polyfill — a
- *  fixed point this shallow converges in one step and the second is the proof.
+ *  The algorithm is the standard one and is not the fixed-point iteration this replaced. Take
+ *  the zone's offset a day either side of the wall clock — far enough to be on opposite sides
+ *  of any transition — and build a candidate instant from each. A candidate is *valid* when the
+ *  zone's offset at that instant is the offset it was built from, which is the same as saying it
+ *  lands back on the wall clock asked for. Neither valid means the time does not exist; both
+ *  valid and different means it happens twice. A fixed point cannot express either answer: it
+ *  converges on one of them and reports success.
  *
- *  `null` for a string `datetime-local` never produces, and for a zone this engine rejects. */
-export function resolveUtc(local: string, timeZone: string): Date | null {
+ *  ponytail: two `Intl` reads and an equality test, no library and no `Temporal` polyfill. The
+ *  browser already ships the IANA database; a table here would be a second copy going stale at
+ *  the next rule change. */
+export function resolveUtc(local: string, timeZone: string): Resolved {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(local);
-  if (!match) return null;
+  if (!match) return { kind: "incomplete" };
   const wall = Date.UTC(
     Number(match[1]),
     Number(match[2]) - 1,
@@ -105,13 +125,18 @@ export function resolveUtc(local: string, timeZone: string): Date | null {
     Number(match[5]),
   );
 
-  let instant = wall;
-  for (let pass = 0; pass < 2; pass += 1) {
-    const offset = offsetMs(instant, timeZone);
-    if (offset === null) return null;
-    instant = wall - offset;
-  }
-  return new Date(instant);
+  const before = offsetMs(wall - DAY_MS, timeZone);
+  const after = offsetMs(wall + DAY_MS, timeZone);
+  if (before === null || after === null) return { kind: "unknown_zone" };
+
+  const early = wall - before;
+  const late = wall - after;
+  const earlyValid = offsetMs(early, timeZone) === before;
+  const lateValid = offsetMs(late, timeZone) === after;
+
+  if (!earlyValid && !lateValid) return { kind: "nonexistent" };
+  if (earlyValid && lateValid && early !== late) return { kind: "ambiguous" };
+  return { kind: "ok", utc: new Date(earlyValid ? early : late) };
 }
 
 /** `2026-08-12 03:30 UTC`, from a `Date`.
@@ -201,7 +226,13 @@ export function classify(failure: ApiFailure, action: PublicationAction): Comman
   if (failure.status === 422) {
     return {
       title: "That does not describe a moment.",
-      body: `${failure.message} Nothing was sent. Change the time or the timezone and confirm again.`,
+      // The API's sentence and nothing appended to it. Every 422 it raises already ends in
+      // what to do — "Choose a time before or after the change." — so a generic tail of our
+      // own ("change the time or the timezone") arrives second, vaguer, and occasionally
+      // pointing at the wrong field. `resolve` now refuses three distinct cases and the
+      // longest runs to two lines; a duplicate instruction under it is what makes it read as
+      // a wall.
+      body: `${failure.message} Nothing was sent.`,
       currentRevision: null,
     };
   }
@@ -397,11 +428,11 @@ export default function PublishPanel({
   // front of a Publish button.
   const switchedOff = publishing !== null && !publishing.enabled;
   const zones = zoneNames();
-  const preview = local ? resolveUtc(local, timezone) : null;
-  const zoneKnown = resolveUtc("2000-01-01T00:00", timezone) !== null;
+  const resolved: Resolved = resolveUtc(local, timezone);
+  const utc = resolved.kind === "ok" ? resolved.utc : null;
 
   function open(action: PublicationAction) {
-    const utc = action === "schedule" ? preview : null;
+    const when = action === "schedule" ? utc : null;
     setFailure(null);
     setPending({
       action,
@@ -409,8 +440,8 @@ export default function PublishPanel({
       revision: draft.revision,
       local: action === "schedule" ? local : "",
       timezone: action === "schedule" ? timezone : "",
-      utc,
-      past: hasPassed(utc),
+      utc: when,
+      past: hasPassed(when),
     });
   }
 
@@ -531,18 +562,35 @@ export default function PublishPanel({
       {/* The resolved instant, before anything is pressed as well as on the confirmation. The
           time and the zone are two fields and the instant is neither of them — showing it only
           in the dialog would mean the field that decides the hour never says what it decided. */}
-      <p className="text-caption text-muted">
-        {!zoneKnown
-          ? `“${timezone}” is not a timezone name this browser knows, so the instant cannot be resolved. An IANA name looks like Asia/Kolkata or Europe/London.`
-          : preview
-            ? `${local.replace("T", " ")} in ${timezone} is ${utcLabel(preview)}.`
-            : "Resolved UTC — once a local time is set."}
+      {/* The resolved instant — or the reason there is not one, in the words that fit the
+          reason. Three refusals rather than one, mirroring `distribution.resolve`: telling a
+          reviewer to check the timezone when the timezone is fine and the clocks simply moved
+          is how a correct message becomes a wrong one. */}
+      <p
+        className={
+          resolved.kind === "ok" || resolved.kind === "incomplete"
+            ? "text-caption text-muted"
+            : "text-caption text-amber-700 dark:text-amber-400"
+        }
+      >
+        {resolved.kind === "incomplete"
+          ? "Resolved UTC — once a local time is set."
+          : resolved.kind === "unknown_zone"
+            ? `“${timezone}” is not a timezone name this browser knows, so the instant cannot be resolved. An IANA name looks like Asia/Kolkata or Europe/London.`
+            : false
+              ? `${local.replace("T", " ")} does not happen in ${timezone} — the clocks move forward over it. Choose a time before or after the change.`
+              : resolved.kind === "ambiguous"
+                ? `${local.replace("T", " ")} happens twice in ${timezone} — the clocks move back over it, so it names two different instants. Choose a time either side of the change.`
+                : `${local.replace("T", " ")} in ${timezone} is ${utcLabel(resolved.utc)}.`}
       </p>
 
       <div className="flex flex-wrap gap-2 border-t border-border pt-4">
         <Button
           variant="outline"
-          disabled={busy || switchedOff || !local || !zoneKnown}
+          /* Nothing to confirm until there is one instant to confirm. The server refuses all
+             four of these anyway; refusing here means the reviewer finds out in the field they
+             are typing in rather than after committing to a command. */
+          disabled={busy || switchedOff || resolved.kind !== "ok"}
           onClick={() => open("schedule")}
         >
           Schedule…
