@@ -279,3 +279,23 @@ def test_a_nested_source_post_id_does_not_cost_its_siblings(session):
     proposals = propose_visuals(session, FakeLLM(malformed))
 
     assert [t.name for t in proposals] == ["malformed", "ranked-bars"]
+
+
+def test_a_nan_slot_value_does_not_cost_its_siblings(session):
+    """`json.loads` accepts NaN; Postgres JSONB does not, and a DataError kills the batch."""
+    add_post(session, "strong", 900, media=(png(), ".png"))
+    malformed = {"visuals": [
+        {
+            **ONE_VISUAL["visuals"][0],
+            "name": "malformed",
+            "slots": [
+                {"name": "kicker", "type": "text", "example": float("nan")},
+                {"name": "headline", "type": "text", "example": "AI did the shopping."},
+            ],
+        },
+        ONE_VISUAL["visuals"][0],
+    ]}
+
+    proposals = propose_visuals(session, FakeLLM(malformed))
+
+    assert [t.name for t in proposals] == ["ranked-bars"]

@@ -1,4 +1,5 @@
 import io
+import json
 import logging
 from enum import StrEnum
 
@@ -281,6 +282,16 @@ def _to_visual(
     slots = proposal.get("slots") or []
     if not isinstance(slots, list) or any(not isinstance(slot, dict) for slot in slots):
         raise _RejectedProposal(f"{name}: slots must be a list of objects, got {slots!r}")
+    try:
+        # Python's `json.loads` accepts NaN, Infinity and -Infinity as an extension to the
+        # spec; Postgres JSONB rejects all three. So a slot value of NaN parses cleanly,
+        # passes every guard above, and only fails at `session.flush()` inside
+        # `create_template` — as a `DataError`, which `except _RejectedProposal` does not
+        # catch, taking every sibling proposal in the batch down with it. Probing here
+        # turns that into an ordinary rejection that names the slot.
+        json.dumps(slots, allow_nan=False)
+    except ValueError as exc:
+        raise _RejectedProposal(f"{name}: slots are not storable as JSONB: {exc}") from exc
     declared = {str(slot.get("name")) for slot in slots}
     used = set(SLOT.findall(markup))
     if used != declared:
