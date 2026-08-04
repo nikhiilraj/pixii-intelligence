@@ -251,3 +251,31 @@ def test_a_non_string_name_does_not_cost_its_siblings(session):
     proposals = propose_visuals(session, FakeLLM(malformed))
 
     assert "ranked-bars" in [t.name for t in proposals]
+
+
+def test_a_non_list_source_post_ids_does_not_cost_its_siblings(session):
+    add_post(session, "strong", 900, media=(png(), ".png"))
+    malformed = {"visuals": [
+        {**ONE_VISUAL["visuals"][0], "name": "malformed", "source_post_ids": 5},
+        ONE_VISUAL["visuals"][0],
+    ]}
+
+    proposals = propose_visuals(session, FakeLLM(malformed))
+
+    assert [t.name for t in proposals] == ["ranked-bars"]
+
+
+def test_a_nested_source_post_id_does_not_cost_its_siblings(session):
+    add_post(session, "strong", 900, media=(png(), ".png"))
+    malformed = {"visuals": [
+        {
+            **ONE_VISUAL["visuals"][0],
+            "name": "malformed",
+            "source_post_ids": ["strong", ["nested"]],
+        },
+        ONE_VISUAL["visuals"][0],
+    ]}
+
+    proposals = propose_visuals(session, FakeLLM(malformed))
+
+    assert [t.name for t in proposals] == ["malformed", "ranked-bars"]
