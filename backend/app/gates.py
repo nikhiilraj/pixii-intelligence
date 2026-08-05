@@ -358,11 +358,15 @@ def _near_duplicate(full_text: str, recent_posts: Sequence[str]) -> list[Finding
     """
     candidate = _normalised(full_text)
     if not candidate:
+        # Not a tidy early return. `SequenceMatcher` scores two empty strings **1.0**, so a
+        # candidate the schema gate has already rejected as empty would be reported as a
+        # perfect duplicate of any empty string in the recent window — a second, false
+        # finding on top of the true one. The mirror guard (skipping an empty *post*) is
+        # not needed: an empty post against real text scores 0.0 and fails the threshold on
+        # its own, and a redundant second guard is one no test could ever distinguish.
         return []
     for post in recent_posts:
         other = _normalised(post)
-        if not other:
-            continue
         # `autojunk=False` is deliberate. The default marks any character appearing in
         # more than 1% of a sequence longer than 200 as junk, which for prose means the
         # ratio depends on the letter frequencies of whichever post it is compared

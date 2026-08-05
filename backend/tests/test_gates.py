@@ -283,6 +283,20 @@ def test_a_picked_asset_wins_over_the_default():
     assert check(a_candidate(), template=visual, recent_posts=[], asset_values={"logo": "9"}) == []
 
 
+def test_an_asset_id_does_not_complete_a_writable_slot():
+    """The mirror of the empty-box test, and the direction a name heuristic escapes.
+
+    `left_image_url` is declared `text`, so the model fills it and an asset id sitting in
+    that slot renders the characters `12` as the headline. Reading the slot by its name
+    finds the asset, calls it complete, and publishes that.
+    """
+    visual = a_visual([{"name": "left_image_url", "type": "text"}])
+    findings = check(
+        a_candidate(), template=visual, recent_posts=[], asset_values={"left_image_url": "12"}
+    )
+    assert gates_of(findings) == ["visual_slot_missing"]
+
+
 def test_written_prose_does_not_complete_an_image_slot():
     """The empty-box failure. A model volunteers a sentence for `hero`; that sentence
     renders as an `<img src>` of prose, reports success, and publishes a blank box."""
@@ -315,10 +329,27 @@ def test_a_slot_typed_with_an_empty_string_is_also_untyped():
 
 
 def test_a_type_this_module_does_not_know_accepts_a_value_from_either_side():
+    """Both sides, or the assertion only covers half of what the branch does.
+
+    Which dict fills an unrecognised type is genuinely unknown, so either counts. The
+    alternative — failing every template that declares a type before this module learns
+    about it — turns a gate into an obstacle to authoring templates.
+    """
     visual = a_visual([{"name": "published_on", "type": "date"}])
-    assert check(
-        a_candidate(visual_values={"published_on": "2026-08-05"}), template=visual, recent_posts=[]
-    ) == []
+    assert (
+        check(
+            a_candidate(visual_values={"published_on": "2026-08-05"}),
+            template=visual,
+            recent_posts=[],
+        )
+        == []
+    )
+    assert (
+        check(
+            a_candidate(), template=visual, recent_posts=[], asset_values={"published_on": "12"}
+        )
+        == []
+    )
     assert gates_of(check(a_candidate(), template=visual, recent_posts=[])) == [
         "visual_slot_missing"
     ]
@@ -400,6 +431,18 @@ def test_an_empty_recent_corpus_is_not_a_duplicate():
     visual = a_visual([])
     assert check(a_candidate(), template=visual, recent_posts=[]) == []
     assert check(a_candidate(), template=visual, recent_posts=["", "   "]) == []
+
+
+def test_an_empty_candidate_is_not_a_duplicate_of_an_empty_post():
+    """`SequenceMatcher` scores two empty strings 1.0.
+
+    Without the guard, a candidate the schema gate has already rejected as empty picks up
+    a second, false near-duplicate finding against any blank row in the recent window.
+    """
+    visual = a_visual([])
+    findings = check({"hook": "", "body": ""}, template=visual, recent_posts=["", BODY])
+    assert "near_duplicate" not in gates_of(findings)
+    assert "schema" in gates_of(findings), "the real problem must still be reported"
 
 
 # --- forbidden claims -----------------------------------------------------------------
