@@ -15,7 +15,7 @@ import pytest
 from sqlmodel import select
 
 from app.autonomous import run_autonomous
-from app.generation import generate_draft, generate_reviewed_draft
+from app.generation import generate_draft, generate_reviewed_draft, retopic
 from app.models.draft import Draft
 from app.models.post import Post
 from app.models.template import TemplateKind
@@ -169,6 +169,29 @@ def test_the_renderer_comes_from_the_recorded_version_not_the_newest_in_the_fami
 
     assert (html.calls, image.calls) == (0, 1)
     assert (draft.visual_family, draft.visual_version) == (visual.family_id, 1)
+
+
+def test_a_retopic_draws_through_the_inherited_version_not_the_newest(session):
+    """The two rules composed, which is where a regression would hide.
+
+    A re-topic inherits the source's exact `(family, version)` and must be *drawn* by that
+    row too. Its renderer used to come from `api_drafts._renderer`, a call site this change
+    removed, so nothing else would notice it going wrong: with an `html` v2 on top of an `ai`
+    v1, resolving either the templates or the renderer by newest silently swaps the picture.
+    """
+    _, _, visual = library(session, visual_body=AI_BODY)
+    source = generate_draft(
+        session, FakeLLM(), HtmlOnly(), ImageOnly(), idea=IDEA, visual_id=visual.id
+    )
+    edit_template(session, visual, body=dict(HTML_BODY))
+    html, image = HtmlOnly(), ImageOnly()
+
+    fresh = retopic(session, FakeLLM(), html, image, source, idea="a different subject")
+
+    assert fresh.id != source.id
+    assert (html.calls, image.calls) == (0, 1)
+    assert (fresh.visual_family, fresh.visual_version) == (visual.family_id, 1)
+    assert fresh.visual_image == b"AI"
 
 
 # --- a renderer that fails must not cost the words -------------------------------------------
