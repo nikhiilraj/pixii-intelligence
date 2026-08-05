@@ -36,6 +36,7 @@ from sqlmodel import Session, col, select
 
 from app import fetching, prompts
 from app.autonomous import SpendMeter
+from app.config import settings
 from app.db import utc
 from app.fetching import Fetched, FetchFailed, UnsafeUrl
 from app.llm import LLM
@@ -227,6 +228,30 @@ class FirecrawlSearchProvider:
 
     def close(self) -> None:
         self._client.close()
+
+
+def search_provider() -> SearchProvider:
+    """The configured search adapter — Firecrawl if it is there, else Brave, else a refusal.
+
+    A plain function rather than only a FastAPI dependency, because there are now two kinds of
+    caller and only one of them is a request. `deps.get_search` wraps this for routes;
+    `scheduler.tick_daily_slot` calls it directly, because an unattended run needs the same
+    provider a directed one gets and building a second selection there is how the two would
+    come to disagree about which engine is preferred.
+
+    `NoSearchProvider` is a real answer and not a fallback: with no key configured, `light`
+    and `deep` stop at a visible failed research state rather than quietly writing from
+    nothing. That is the behaviour README promises, and it is what makes an unattended run
+    honest — a topic that needed facts and could not get them is a failed row a human can see,
+    not a draft that reads as though it were researched.
+    """
+    if settings.firecrawl_api_key:
+        return FirecrawlSearchProvider(
+            settings.firecrawl_api_key, settings.firecrawl_search_endpoint
+        )
+    if settings.brave_search_api_key:
+        return BraveSearchProvider(settings.brave_search_api_key, settings.brave_search_endpoint)
+    return NoSearchProvider()
 
 
 @dataclass(frozen=True)

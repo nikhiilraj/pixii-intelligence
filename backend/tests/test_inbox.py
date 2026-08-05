@@ -20,6 +20,7 @@ from app.db import get_session
 from app.main import INBOX_LABEL_MAX, app
 from app.models.draft import Draft
 from app.models.post import Post, Verdict
+from app.models.stage import GenerationStage
 from app.models.template import TemplateKind, TemplateStatus
 from app.templates import approve, create_template, edit_template
 
@@ -43,9 +44,16 @@ def a_draft(
     created_at: datetime | None = None,
     pushed_at: datetime | None = None,
     went_live_at: datetime | None = None,
+    stage: str = GenerationStage.READY,
 ) -> Draft:
     """A draft placed in an explicit gate. Local to this file — `test_metrics.a_draft` cannot
-    set the timestamps every queue here is defined by."""
+    set the timestamps every queue here is defined by.
+
+    `stage` defaults to `ready` because that is what every queue below is *about*: a draft
+    waiting on a human. The column's own default is `unreviewed`, which is not review-ready,
+    so a fixture that took the default would put every one of these tests on the far side of
+    queue 2's filter and assert against an empty list.
+    """
     hook = create_template(session, kind=TemplateKind.HOOK, name="transformation")
     structure = create_template(session, kind=TemplateKind.STRUCTURE, name="loop")
     approve(session, hook)
@@ -56,6 +64,7 @@ def a_draft(
         hook_version=hook.version,
         structure_family=structure.family_id,
         structure_version=structure.version,
+        generation_stage=stage,
         zernio_post_id=zernio_post_id,
         pushed_at=pushed_at,
         went_live_at=went_live_at,
@@ -541,3 +550,31 @@ def test_status_and_usable_only_together_are_refused(client, session):
 
     assert response.status_code == 422
     assert "usable_only" in str(response.json()["detail"])
+
+
+def test_a_draft_that_failed_review_is_not_in_the_queue_of_things_waiting_on_you(client, session):
+    """Queue 2 counted every unpushed draft regardless of stage.
+
+    A queue whose entire promise is "these are waiting on you" must not hold things you
+    cannot act on — the same rule that took scheduled posts out of queue 3, one queue up. It
+    got worse when the reviewed workflow reached every creation path: a failed variant and a
+    topic whose research could not be done are both rows now, and both would have inflated
+    the number an operator reads as their morning's work.
+
+    The draft is not deleted and does not vanish: Studio lists it with its stage and its
+    reason, and it can be retried. What it leaves is the count.
+    """
+    ready = a_draft(session, idea="this one passed")
+    a_draft(session, idea="this one did not", stage=GenerationStage.FAILED_REVIEW)
+    a_draft(session, idea="this one broke", stage=GenerationStage.FAILED)
+    a_draft(session, idea="this one is still going", stage=GenerationStage.DRAFTING)
+    # The default a row takes when nothing set it — legacy `POST /drafts`. Not review-ready,
+    # and refused at the push boundary, so a queue that offered it would be offering work
+    # that cannot be done.
+    a_draft(session, idea="nothing reviewed this", stage=GenerationStage.UNREVIEWED)
+    session.commit()
+
+    queue = client.get("/inbox").json()["built_awaiting_push"]
+
+    assert ids(queue) == [ready.id]
+    assert queue["count"] == 1

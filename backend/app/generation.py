@@ -929,6 +929,7 @@ def regenerate_visual(
 def retopic(
     session: Session,
     llm: LLM,
+    search: Any,
     html_renderer: HtmlRenderer,
     image_renderer: ImageRenderer,
     source: Draft,
@@ -950,11 +951,18 @@ def retopic(
     is the attribution record, so a retired or superseded version re-topics exactly like a
     live one: nothing is being *chosen* here, it is being inherited.
 
-    `generate_draft` does the rest — it already takes the three templates as parameters, so
-    there is no second generation path to keep in step with this one. It is handed ids of the
-    resolved rows rather than families, so `_resolve` reads back the same versions, and both
-    renderers pass through for `_renderer_for` to choose between off `visual` below. That is
-    the same row this function resolved, so the renderer follows the inherited version too.
+    **The templates are inherited; the editorial work is not.** `generate_reviewed_draft` does
+    the rest, and it is the reviewed workflow rather than `generate_draft` deliberately: a new
+    subject is a new brief, a new angle, new planned claims and its own research floor. Reusing
+    the source's would be re-topicking the *reasoning* as well as the shape, which is not what
+    this route promises and would attach a dossier gathered for one subject to another. It also
+    means what comes back is `unreviewed` only if nothing reviewed it — a re-topic is not
+    pushable merely because a model returned text against a template that once worked.
+
+    It is handed ids of the resolved rows rather than families, so `_resolve` reads back the
+    same versions, and both renderers pass through for `_renderer_for` to choose between off
+    `visual` below. That is the same row this function resolved, so the renderer follows the
+    inherited version too.
 
     ponytail: the source's `asset_values` carry over as the picks. The visual is the *same
     template row*, so `chosen_assets`' image-slot filter is a no-op here rather than a silent
@@ -965,9 +973,10 @@ def retopic(
     hook = generated_from(session, source.hook_family, source.hook_version)
     structure = generated_from(session, source.structure_family, source.structure_version)
     visual = generated_from(session, source.visual_family, source.visual_version)
-    return generate_draft(
+    return generate_reviewed_draft(
         session,
         llm,
+        search,
         html_renderer,
         image_renderer,
         idea=idea,
@@ -975,6 +984,11 @@ def retopic(
         structure_id=structure.id,
         visual_id=visual.id,
         asset_values=source.asset_values,
+        # No `requested_mode`. The floor is detected from the new idea by `resolve_mode`, which
+        # is the point: a re-topic of an opinion piece onto a factual subject needs research
+        # the source never did, and inheriting the source's mode would write the new claims
+        # from nothing.
+        #
         # `mode` stays "directed": a human supplied this idea. A third value would be a new
         # partition of every query that reads the column, for no reader.
     )

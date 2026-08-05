@@ -49,6 +49,8 @@ from app.publishing import lineage_metadata, push_draft
 from app.templates import approve, create_template
 from app.zernio import ZernioClient
 from tests.test_autonomous import FakeImageRenderer
+from tests.test_generation import WorkflowLLM
+from tests.test_renderer_selection import NoSearch
 from tests.test_rendering import renderer_capturing
 
 # `stat-hero` v2 (template 1101) as it really is: two text slots and two `image_url` slots.
@@ -59,7 +61,14 @@ STAT_HERO = (
 
 WRITTEN = {
     "hook": "A 9-figure exit.",
-    "body": "One main image did it.",
+    # Long enough to clear `gates.POST_MIN_CHARS`. `run_autonomous` runs the reviewed
+    # workflow now, so a one-sentence body stops at `failed_review` before a renderer is
+    # ever reached — and this file is about what fills the image slots, not about gates.
+    "body": (
+        "One main image did it. Not a rebrand and not a bigger ad budget: the listing "
+        "was redrawn once and the rest followed from there, which is the cheapest change "
+        "nobody had looked at."
+    ),
     # The model volunteers the image slots too, exactly as it does in production. They are
     # dropped by `_written_values`, and this file exists because something else must fill them.
     "visual_values": {
@@ -82,8 +91,25 @@ class FakeLLM:
         self.written = written or WRITTEN
 
     def complete_json(self, system: str, user: str, images=()) -> dict:
+        # The planning and review answers first. `run_autonomous` is on the reviewed path now,
+        # so a stub answering everything with the written post hands a *post* to the brief
+        # step; the workflow records that as a planning failure and returns rather than
+        # raising, and every assertion below would quietly become an assertion about a
+        # `failed` row. Borrowed from `test_generation.WorkflowLLM` rather than restated, so
+        # there is one description of what a passing workflow says.
+        for marker, answer in WorkflowLLM.PLANNING.items():
+            if system.lower().startswith(marker):
+                return dict(answer)
         if "choose which templates" in system.lower():
-            return {"hook": "transformation", "structure": "case-loop", "visual": "stat-hero"}
+            # `reason` is required by the suggest schema, and the reviewed workflow opts
+            # into `enforce_schema=True` — an incomplete selection is a recoverable
+            # planning failure there rather than a silently different template choice.
+            return {
+                "hook": "transformation",
+                "structure": "case-loop",
+                "visual": "stat-hero",
+                "reason": "the idea leads with a number",
+            }
         return self.written
 
 
@@ -543,6 +569,8 @@ def test_an_unattended_run_renders_a_real_image_from_a_template_default(session,
     result = run_autonomous(
         session,
         FakeLLM({**WRITTEN, "topics": [{"idea": "one"}]}),
+        # The idea resolves to `none`, so no provider is reached; a call here is a finding.
+        NoSearch(),
         renderer_capturing(captured, png=b"REALPNG"),
         FakeImageRenderer(),
         cap=1,
@@ -553,14 +581,31 @@ def test_an_unattended_run_renders_a_real_image_from_a_template_default(session,
     assert captured["html"].count("data:image/png;base64,") == 2
 
 
-def test_the_autonomous_endpoint_reports_a_failed_visual(client, session):
-    """The endpoint's body is the whole of what a caller sees, so the count has to be in it."""
+def test_the_autonomous_endpoint_reports_a_failed_visual(client, session, asset):
+    """The endpoint's body is the whole of what a caller sees, so the count has to be in it.
+
+    Every image slot carries a default, and that is load-bearing now rather than incidental:
+    the run is on the reviewed path, so a slot nothing can fill is a `visual_slot_missing`
+    finding and the draft stops at `failed_review` *before* a renderer is asked for anything.
+    The failure under test is the renderer's, and it can only happen to a candidate that got
+    that far.
+    """
 
     class BrokenRenderer:
         def screenshot(self, html: str, width: int, height: int) -> bytes:
             raise RuntimeError("rendering service unavailable")
 
-    library(session)
+    library(
+        session,
+        slots=[
+            {"name": "big_number", "type": "text"},
+            {"name": "headline", "type": "text"},
+            # Both images, not just the right one: `image_slots` defaults only the right, and
+            # a single unfillable slot is enough to stop the candidate at the gate.
+            {"name": "left_image_url", "type": "image_url", "default_asset_id": asset.id},
+            {"name": "right_image_url", "type": "image_url", "default_asset_id": asset.id},
+        ],
+    )
     session.add(Post(zernio_id="p1", platform="linkedin", content="a previous post"))
     session.flush()
     app.dependency_overrides[get_llm] = lambda: FakeLLM({**WRITTEN, "topics": [{"idea": "one"}]})

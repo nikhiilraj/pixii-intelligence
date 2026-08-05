@@ -11,6 +11,7 @@ from app.llm import AzureChat
 from app.metrics import sync_metrics
 from app.reconcile import reconcile_publications
 from app.rendering import AzureImageRenderer, CloudflareRenderer
+from app.research import search_provider
 from app.zernio import ZernioClient
 
 log = logging.getLogger("pixii.scheduler")
@@ -68,13 +69,22 @@ def tick_daily_slot() -> None:
     know whether today's draft needs it — see `generation._renderer_for`. Constructing it
     costs an `httpx.Client` against whatever `azure_openai_image_*` holds, including the
     empty defaults; it reaches the network only when an `ai` template is actually drawn.
+
+    The search adapter is here for the same reason and a stronger one: the run now generates
+    through the reviewed workflow, and a topic whose research floor is `light` or `deep` needs
+    a provider or it fails visibly. With no key configured that is `NoSearchProvider`, which
+    is a real answer rather than a stub — see `research.search_provider`.
     """
     from sqlmodel import Session
 
     llm, renderer, image_renderer = AzureChat(), CloudflareRenderer(), AzureImageRenderer()
+    # The same adapter a request gets, from the same selection — see `research.search_provider`.
+    # An unattended run that researched differently from a directed one would make "was this
+    # checked" depend on who asked, which is the distinction the review boundary removes.
+    search = search_provider()
     try:
         with Session(engine) as session:
-            run = run_daily_slot(session, llm, renderer, image_renderer)
+            run = run_daily_slot(session, llm, search, renderer, image_renderer)
         if run is not None:
             log.info("daily slot %s finished: %s", run.run_date, run.status)
     except Exception:
@@ -85,6 +95,11 @@ def tick_daily_slot() -> None:
         llm.close()
         renderer.close()
         image_renderer.close()
+        # `NoSearchProvider` has no `close`, and neither will the next adapter that needs
+        # none. Asked for rather than assumed, like `deps.get_search` does.
+        close = getattr(search, "close", None)
+        if close:
+            close()
 
 
 def start() -> None:

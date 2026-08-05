@@ -8,7 +8,7 @@ from sqlmodel import Session, col, select
 from app.api_drafts import DraftOut, _renderer
 from app.config import settings
 from app.db import get_session
-from app.deps import get_html_renderer, get_llm, get_zernio
+from app.deps import get_html_renderer, get_llm, get_search, get_zernio
 from app.generation import (
     LESSON_LIMIT,
     NoUsableTemplates,
@@ -50,6 +50,80 @@ class FakeLLM:
     @property
     def last_user(self) -> str:
         return self.calls[-1][1]
+
+
+class WorkflowLLM(FakeLLM):
+    """`FakeLLM` that also answers the reviewed workflow's planning and review calls.
+
+    `retopic` and `POST /drafts/variants` run `generate_reviewed_draft` now, so a stub that
+    answered every call with the written post would hand a *post* to the brief step. The
+    workflow records that as a planning failure and returns rather than raising, so every
+    assertion about lineage below would quietly become an assertion about a `failed` row —
+    green where it mattered, measuring nothing.
+
+    The write answers still come from `FakeLLM`'s ordered queue, so a test supplying two posts
+    still gets two. The planning and review answers are constant and are deliberately not
+    drawn from that queue: a brief consuming a queued *post* is the bug this exists to avoid.
+    """
+
+    # Matched on the opening of each system prompt rather than on call order — see
+    # `tests/test_autonomous._ANSWERS` for why order is the wrong key here.
+    PLANNING = {
+        "you turn a post idea into an editorial brief": {
+            "objective": "Help operators explain one product decision.",
+            "audience": "operators responsible for the funnel",
+            "desired_action": "review one unnecessary step",
+            "constraints": [],
+        },
+        "you plan the argument of one post": {
+            "thesis": "clearer product writing improves internal decisions",
+            "tension": "teams confuse more detail with more clarity",
+            "audience_stake": "operators spend less time resolving ambiguity",
+            "claims": [{"text": "clearer product writing helps teams decide"}],
+            "beats": ["name the ambiguity", "show the editing principle"],
+            "cta": "remove one sentence that changes no decision",
+        },
+        # No deductions: ready. A test wanting a failed review says so itself.
+        "you review one draft linkedin post": {"deductions": []},
+    }
+
+    def complete_json(self, system: str, user: str, images=()) -> dict:
+        for marker, answer in self.PLANNING.items():
+            if system.lower().startswith(marker):
+                self.calls.append((system, user))
+                return answer
+        return super().complete_json(system, user, images)
+
+    @property
+    def last_write(self) -> str:
+        """The most recent *write* prompt, which is what the lineage assertions are about.
+
+        `last_user` is the last call of any kind, and the workflow's last call is the rubric.
+        Asserting the templates reached the model has to read the prompt that carried them.
+        """
+        for _system, user in reversed(self.calls):
+            if "visual slots" in user.lower() or "approved hook template" in user.lower():
+                return user
+        raise AssertionError("no write prompt was sent")
+
+
+# Completions one reviewed draft buys when its three templates are named: brief, angle, write,
+# rubric. No suggest call — `retopic` and `/drafts/variants` both choose the templates
+# themselves. Named rather than repeated, because it is a property of the workflow and moves
+# with it.
+WORKFLOW_CALLS = 4
+
+
+class NoSearch:
+    """A search adapter the reviewed workflow now carries. Nothing here should reach it.
+
+    Every idea in this file is an opinion, so `resolve_mode` puts it at `none` and `none`
+    never reaches a provider. A call arriving here means the research floor moved under a
+    test that is about template lineage, which is worth failing on rather than absorbing.
+    """
+
+    def search(self, query: str, *, limit: int):
+        raise AssertionError(f"a generation test reached a web search: {query!r}")
 
 
 class FakeRenderer:
@@ -799,7 +873,15 @@ def test_the_redraw_endpoint_reports_a_vanished_version_as_a_conflict(client, se
 
 # --- US-014: re-topic — same templates, new subject ------------------------------------
 
-NEW_IDEA = "a seller swapped their hero shot and lost 4% of their click-through"
+# **An opinion, deliberately.** `resolve_mode` reads a named subject and a number as a factual
+# floor, and the previous subject ("a seller swapped their hero shot and lost 4% of their
+# click-through") resolves to `light` — so once re-topic began running the reviewed workflow,
+# every test below stopped at a failed research state and its lineage assertions became
+# assertions about a `failed` row. The factual case is worth having and has its own test
+# rather than being every test's silent background: see
+# `test_a_factual_retopic_with_no_search_provider_stops_visibly`.
+NEW_IDEA = "why most rebrands are a distraction from the offer"
+FACTUAL_IDEA = "a seller swapped their hero shot and lost 4% of their click-through"
 
 RETOPICKED = {
     "hook": "One swapped hero shot cost 4% of the clicks.",
@@ -885,11 +967,12 @@ def test_a_retopic_inherits_the_sources_own_versions_not_the_newest(session):
     )
     hook_v2, structure_v2, visual_v2 = next_version_of_everything(session, hook, structure, visual)
 
-    llm = FakeLLM(RETOPICKED)
+    llm = WorkflowLLM(RETOPICKED)
     captured: dict = {}
     fresh = retopic(
         session,
         llm,
+        NoSearch(),
         renderer_capturing(captured, png=b"RETOPIC"),
         FakeImageRenderer(),
         source,
@@ -906,14 +989,14 @@ def test_a_retopic_inherits_the_sources_own_versions_not_the_newest(session):
     assert (hook_v2.version, structure_v2.version, visual_v2.version) == (2, 2, 2)
     assert fresh.hook_version == 1
     # The templates that actually built the draft, not merely the columns on it.
-    assert "{small} turned into {large}" in llm.last_user
-    assert "eventually" not in llm.last_user
-    assert "Lead with the dollar outcome." in llm.last_user
-    assert "Bury the lede." not in llm.last_user
+    assert "{small} turned into {large}" in llm.last_write
+    assert "eventually" not in llm.last_write
+    assert "Lead with the dollar outcome." in llm.last_write
+    assert "Bury the lede." not in llm.last_write
     assert "<i>v2</i>" not in captured["html"]
     # And it is a new subject, written new.
     assert fresh.idea == NEW_IDEA
-    assert NEW_IDEA in llm.last_user
+    assert NEW_IDEA in llm.last_write
     assert fresh.hook_text.startswith("One swapped hero shot")
 
 
@@ -937,7 +1020,8 @@ def test_a_retopic_leaves_the_source_untouched(session):
 
     fresh = retopic(
         session,
-        FakeLLM(RETOPICKED),
+        WorkflowLLM(RETOPICKED),
+        NoSearch(),
         FakeRenderer(b"NEW"),
         FakeImageRenderer(),
         source,
@@ -975,11 +1059,12 @@ def test_a_retopic_from_a_retired_version_still_works(session):
         for family in (hook.family_id, structure.family_id, visual.family_id)
     ] == [TemplateStatus.RETIRED] * 3
 
-    llm = FakeLLM(RETOPICKED)
+    llm = WorkflowLLM(RETOPICKED)
     captured: dict = {}
     fresh = retopic(
         session,
         llm,
+        NoSearch(),
         renderer_capturing(captured, png=b"RETIRED"),
         FakeImageRenderer(),
         source,
@@ -987,7 +1072,7 @@ def test_a_retopic_from_a_retired_version_still_works(session):
     )
 
     assert (fresh.hook_version, fresh.structure_version, fresh.visual_version) == (1, 1, 1)
-    assert "{small} turned into {large}" in llm.last_user
+    assert "{small} turned into {large}" in llm.last_write
     assert "<i>v2</i>" not in captured["html"]
     assert fresh.visual_error is None
     assert fresh.visual_image == b"RETIRED"
@@ -999,8 +1084,9 @@ def test_the_retopic_endpoint_creates_a_new_draft_and_says_what_it_spent(client,
         session, FakeLLM(WRITTEN), FakeRenderer(), FakeImageRenderer(), idea=IDEA
     )
     next_version_of_everything(session, hook, structure, visual)
-    app.dependency_overrides[get_llm] = lambda: FakeLLM(RETOPICKED)
+    app.dependency_overrides[get_llm] = lambda: WorkflowLLM(RETOPICKED)
     app.dependency_overrides[get_html_renderer] = FakeRenderer
+    app.dependency_overrides[get_search] = NoSearch
 
     response = client.post("/drafts/retopic", json={"idea": NEW_IDEA, "source_draft_id": source.id})
 
@@ -1016,8 +1102,14 @@ def test_the_retopic_endpoint_creates_a_new_draft_and_says_what_it_spent(client,
     # takes and `regenerate-visual` does not — the visual is what a re-topic is for.
     assert body["visual_png"]
     assert body["visual_error"] is None
-    # Observed spend, through the one meter — not predicted from the request.
-    assert (body["llm_calls"], body["image_calls"]) == (1, 1)
+    # Reviewed, not merely rewritten. The templates are inherited and the editorial work is
+    # not: this row got its own brief, angle, gates and readiness evaluation, which is what
+    # makes it pushable at all — `Draft.generation_stage` defaults to `unreviewed`.
+    assert body["generation_stage"] == GenerationStage.READY
+    # Observed spend, through the one meter — not predicted from the request. Four
+    # completions, because a re-topic is a whole workflow now and not one write.
+    assert (body["llm_calls"], body["image_calls"]) == (WORKFLOW_CALLS, 1)
+    assert body["search_calls"] == 0
 
 
 def test_a_retopic_can_start_from_a_published_post(client, session):
@@ -1035,8 +1127,9 @@ def test_a_retopic_can_start_from_a_published_post(client, session):
     post.late_post_id = "late-xyz"
     session.add_all([source, post])
     session.flush()
-    app.dependency_overrides[get_llm] = lambda: FakeLLM(RETOPICKED)
+    app.dependency_overrides[get_llm] = lambda: WorkflowLLM(RETOPICKED)
     app.dependency_overrides[get_html_renderer] = FakeRenderer
+    app.dependency_overrides[get_search] = NoSearch
 
     response = client.post("/drafts/retopic", json={"idea": NEW_IDEA, "source_post_id": post.id})
 
@@ -1157,8 +1250,9 @@ def test_a_retopic_from_a_vanished_version_is_a_conflict_not_a_redraw_of_another
     edited_visual(session, visual, "v2")
     session.delete(visual)
     session.flush()
-    app.dependency_overrides[get_llm] = lambda: FakeLLM(RETOPICKED)
+    app.dependency_overrides[get_llm] = lambda: WorkflowLLM(RETOPICKED)
     app.dependency_overrides[get_html_renderer] = FakeRenderer
+    app.dependency_overrides[get_search] = NoSearch
 
     response = client.post("/drafts/retopic", json={"idea": NEW_IDEA, "source_draft_id": source.id})
 
@@ -1210,8 +1304,14 @@ def all_drafts(session) -> list[Draft]:
     return list(session.exec(select(Draft).order_by(col(Draft.id))).all())
 
 
-def variants_of(client, count: int | None = None) -> dict:
-    body: dict = {"idea": IDEA}
+# An opinion, for the same reason `NEW_IDEA` is one: a variants batch runs N reviewed
+# workflows, and a factual idea with no search provider would make every count and spend
+# assertion below an assertion about N failed research states. The factual case has its own
+# test.
+VARIANT_IDEA = "why most rebrands are a distraction from the offer"
+
+def variants_of(client, count: int | None = None, idea: str = VARIANT_IDEA) -> dict:
+    body: dict = {"idea": idea}
     if count is not None:
         body["count"] = count
     response = client.post("/drafts/variants", json=body)
@@ -1220,8 +1320,17 @@ def variants_of(client, count: int | None = None) -> dict:
 
 
 def with_fakes():
-    app.dependency_overrides[get_llm] = lambda: FakeLLM(WRITTEN)
+    """The three adapters a variants or re-topic request now takes.
+
+    `WorkflowLLM`, not `FakeLLM`: both routes run the reviewed workflow, and a stub answering
+    the brief with a written post fails planning silently. `get_search` is overridden too —
+    without it these requests build the real provider from settings, which in a test
+    environment is `NoSearchProvider`, and a `none`-mode idea would pass only by never
+    reaching it. Overriding says what is being assumed.
+    """
+    app.dependency_overrides[get_llm] = lambda: WorkflowLLM(WRITTEN)
     app.dependency_overrides[get_html_renderer] = FakeRenderer
+    app.dependency_overrides[get_search] = NoSearch
 
 
 def test_variants_move_all_three_templates_not_only_the_visual(session):
@@ -1256,6 +1365,10 @@ def test_an_over_large_variant_request_is_clamped_to_the_ceiling(client, session
     setting's default nor the template supply can be what makes this pass. Asserted on the
     rows written and on the meter as well as on the list returned: a route that generated 50
     drafts and answered with 2 of them would pass a length check on the response alone.
+
+    The meter is read as a multiple of the workflow's length rather than as one call per
+    variant, which is the point of clamping this route at all: a variant is four completions
+    and a render now, so an unclamped `count` is that much worse than it was.
     """
     monkeypatch.setattr(settings, "variants_max", 2)
     variant_library(session)
@@ -1265,7 +1378,7 @@ def test_an_over_large_variant_request_is_clamped_to_the_ceiling(client, session
 
     assert len(body["variants"]) == settings.variants_max
     assert len(all_drafts(session)) == settings.variants_max
-    assert body["llm_calls"] == settings.variants_max
+    assert body["llm_calls"] == settings.variants_max * WORKFLOW_CALLS
 
 
 def test_a_variant_count_below_the_ceiling_is_still_honoured(client, session, monkeypatch):
@@ -1294,8 +1407,18 @@ def test_the_variants_endpoint_reports_the_spend_for_the_whole_batch(client, ses
 
     body = variants_of(client)
 
-    assert (body["llm_calls"], body["image_calls"]) == (3, 3)
+    # Four completions per variant — brief, angle, write, rubric — and one render each. No
+    # suggest call: this route names all three templates itself. Three renders is what says
+    # every variant reached the end rather than stopping at a failed review.
+    assert (body["llm_calls"], body["image_calls"]) == (12, 3)
+    # Zero searches, honestly: `VARIANT_IDEA` resolves to `none`, which never reaches a
+    # provider. The key is reported rather than omitted because a factual idea here would
+    # buy real searches — which was not true before this route ran the workflow.
+    assert body["search_calls"] == 0
     assert all(v["visual_png"] for v in body["variants"])
+    # Reviewed, not merely written. This is the property the whole change is for: a variant
+    # is keepable because it passed, not because a model returned text.
+    assert all(v["generation_stage"] == GenerationStage.READY for v in body["variants"])
 
 
 def test_nothing_in_the_variants_response_ranks_them(client, session, monkeypatch):
@@ -1315,7 +1438,7 @@ def test_nothing_in_the_variants_response_ranks_them(client, session, monkeypatc
 
     ids = [v["id"] for v in body["variants"]]
     assert ids == sorted(ids)
-    assert set(body) == {"variants", "llm_calls", "image_calls"}
+    assert set(body) == {"variants", "llm_calls", "image_calls", "search_calls"}
     assert set(body["variants"][0]) == set(DraftOut.model_fields)
 
 

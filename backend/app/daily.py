@@ -1,5 +1,6 @@
 import logging
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.dialects.postgresql import insert
@@ -158,6 +159,7 @@ def notify_run(session: Session, run: DailyRun, *, at: datetime | None = None) -
 def run_daily_slot(
     session: Session,
     llm: LLM,
+    search: Any,
     html_renderer: HtmlRenderer,
     image_renderer: ImageRenderer,
     *,
@@ -202,6 +204,7 @@ def run_daily_slot(
         result = run_autonomous(
             session,
             llm,
+            search,
             html_renderer,
             image_renderer,
             cap=settings.autonomous_max_drafts,

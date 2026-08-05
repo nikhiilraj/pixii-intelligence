@@ -608,8 +608,17 @@ function Variants({
         <p className="mt-1 text-muted">
           In the order they were written, and in no other order — nothing here is scored, ranked
           or recommended, because ~3 posts per template cannot support a ranking. Compare the
-          three and choose. This batch spent {calls(batch.llm_calls, "chat completion")} and{" "}
-          {calls(batch.image_calls, "image render")}. Keeping one <strong>deletes</strong> the
+          three and choose.{" "}
+          {/* One expression rather than three JSX children with `{" "}` between them: the
+              spend is a sentence, and split across text nodes it stops being findable as one
+              — which is a real reader problem before it is a test problem. `search_calls` is
+              in it because a variant whose research floor is light or deep buys web searches
+              now, and a receipt that omits a paid call is the silence `SpendMeter` closes. */}
+          {`This batch spent ${calls(batch.llm_calls, "chat completion")}, ${calls(
+            batch.image_calls,
+            "image render",
+          )} and ${calls(batch.search_calls, "search call")}.`}{" "}
+          Keeping one <strong>deletes</strong> the
           rest, so they do not sit in the Inbox as work nobody is waiting on; the kept one is
           still only a draft, and keeping it publishes nothing.
         </p>

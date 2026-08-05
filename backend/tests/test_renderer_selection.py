@@ -20,8 +20,14 @@ from app.models.draft import Draft
 from app.models.post import Post
 from app.models.template import TemplateKind
 from app.templates import approve, create_template, edit_template
+from tests.test_generation import WorkflowLLM
 
-IDEA = "one main image lifted CTR by 17%"
+# An opinion, deliberately. `retopic` and `run_autonomous` run the reviewed workflow now, and
+# `resolve_mode` reads a named subject plus a number as a factual floor — so the previous
+# subject ("one main image lifted CTR by 17%") would stop every test below at a failed
+# research state, where no renderer is reached at all and the question this file asks cannot
+# be answered. Which renderer draws a visual is independent of how deeply it was researched.
+IDEA = "why a plain layout beats a busy one"
 
 # Slotless on both sides, deliberately. `render_visual` fills the prompt skeleton *before*
 # calling `generate`, so an unfilled `{slot}` raises `MissingSlotValue` and the image renderer
@@ -64,17 +70,46 @@ class BrokenImage(ImageOnly):
         raise RuntimeError("image service declined")
 
 
-WRITTEN = {"hook": "One image changed the month.", "body": "Not a rebrand.", "visual_values": {}}
+# Long enough to clear `gates.POST_MIN_CHARS`. The reviewed workflow runs the deterministic
+# gates over what the model returned, so a two-word body stops at `failed_review` and the run
+# never reaches a renderer — which would fail every case in this file for a reason that has
+# nothing to do with renderer selection. The gate is right and the fixture was written before
+# any caller here was on the reviewed path.
+WRITTEN = {
+    "hook": "One image changed the month.",
+    "body": (
+        "Not a rebrand and not a bigger ad budget. One main image, redrawn once, and the "
+        "listing did the rest. The lesson is that the cheapest change is usually the one "
+        "nobody has looked at recently."
+    ),
+    "visual_values": {},
+}
 SUGGESTED = {"hook": "h", "structure": "s", "visual": "v", "reason": "fits the idea"}
 
 
 class FakeLLM:
-    """Answers the suggestion prompt and the write prompt, and nothing else."""
+    """Answers the suggestion and write prompts, plus the reviewed workflow's own calls.
+
+    The planning and review answers are borrowed from `tests/test_generation.WorkflowLLM`
+    rather than restated, so there is one description of what a passing workflow says. Without
+    them `retopic` and `run_autonomous` — both on the reviewed path now — would fail at the
+    brief and never reach a renderer, which is the one thing this file is about.
+    """
 
     def complete_json(self, system: str, user: str, images=()) -> dict:
+        for marker, answer in WorkflowLLM.PLANNING.items():
+            if system.lower().startswith(marker):
+                return dict(answer)
         if "choose which templates" in system.lower():
             return dict(SUGGESTED)
         return dict(WRITTEN)
+
+
+class NoSearch:
+    """`IDEA` resolves to `none`, which never reaches a provider. A call here is a finding."""
+
+    def search(self, query: str, *, limit: int):
+        raise AssertionError(f"a renderer-selection test reached a web search: {query!r}")
 
 
 class TopicLLM(FakeLLM):
@@ -186,7 +221,9 @@ def test_a_retopic_draws_through_the_inherited_version_not_the_newest(session):
     edit_template(session, visual, body=dict(HTML_BODY))
     html, image = HtmlOnly(), ImageOnly()
 
-    fresh = retopic(session, FakeLLM(), html, image, source, idea="a different subject")
+    fresh = retopic(
+        session, FakeLLM(), NoSearch(), html, image, source, idea="a different subject"
+    )
 
     assert fresh.id != source.id
     assert (html.calls, image.calls) == (0, 1)
@@ -333,7 +370,9 @@ def test_an_autonomous_run_draws_a_suggested_ai_visual_with_the_image_renderer(s
     session.flush()
     html, image = HtmlOnly(), ImageOnly()
 
-    result = run_autonomous(session, TopicLLM(), html, image, cap=1, notify=lambda _: None)
+    result = run_autonomous(
+        session, TopicLLM(), NoSearch(), html, image, cap=1, notify=lambda _: None
+    )
 
     assert result.created == 1
     assert result.visuals_failed == 0

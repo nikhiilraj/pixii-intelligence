@@ -1033,9 +1033,13 @@ def test_the_searches_are_counted_on_the_meter_as_well_as_in_the_row(session):
 
     assert meter.search_calls == 2
     assert session.get(ResearchJob, result.job_id).queries_run == 2
-    # And `spend()` is untouched: no draft endpoint can reach a search, so a key there could
-    # only ever say zero.
-    assert set(meter.spend()) == {"llm_calls", "image_calls"}
+    # And `spend()` reports it. This assertion used to be the opposite — the key was omitted
+    # because no draft endpoint could reach a search, so it could only ever have said zero.
+    # `/drafts/variants` and `/drafts/retopic` run the reviewed workflow now, and a floor of
+    # `light` or `deep` buys real searches inside the request, so omitting the key would make
+    # the dict understate what a batch cost. That is the silence `SpendMeter` exists to close.
+    assert set(meter.spend()) == {"llm_calls", "image_calls", "search_calls"}
+    assert meter.spend()["search_calls"] == 2
 
 
 def test_a_search_paid_for_by_a_run_that_died_is_still_counted(session):

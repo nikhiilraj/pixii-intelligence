@@ -271,7 +271,7 @@ def suggest(session: SessionDep, llm: LLMDep, payload: IdeaIn) -> dict:
     }
 
 
-@router.post("", status_code=201)
+@router.post("", status_code=201, deprecated=True)
 def create_draft(
     session: SessionDep,
     llm: LLMDep,
@@ -279,7 +279,23 @@ def create_draft(
     image_renderer: ImageRendererDep,
     payload: IdeaIn,
 ) -> DraftOut:
-    """Legacy direct generation used by variants and existing API clients.
+    """**Deprecated.** Direct generation with no review. Use `POST /drafts/workflow`.
+
+    One completion, no brief, no angle, no research, no gates and no rubric. It is kept
+    reachable because existing API clients call it, and marked `deprecated=True` so OpenAPI
+    and `/docs` say so rather than leaving that fact in a comment.
+
+    **What it produces is not pushable, and that is the arrangement rather than a bug.** It
+    sets no stage, so `Draft.generation_stage` takes its default of `unreviewed`, and
+    `review_ready` is false for that — so the push boundary refuses it and, since Stage C, so
+    do the publication routes. Nothing here needs to enforce anything: the route writes words
+    and declines to vouch for them, and every boundary downstream reads the same predicate.
+    `test_review_boundary.py::test_the_legacy_create_route_produces_a_draft_that_cannot_be_
+    pushed` is what keeps that true, and it is deliberately not weakened by this deprecation.
+
+    It is no longer what `/drafts/variants` calls. That route ran the reviewed workflow as of
+    Stage C, which is what makes this the last unreviewed creation path rather than one of
+    four.
 
     Both renderers go down, and the choice is made below: this route may name no visual at
     all, in which case generation suggests one and only generation knows what it picked.
@@ -400,6 +416,7 @@ class RetopicOut(DraftOut):
 
     llm_calls: int
     image_calls: int
+    search_calls: int
 
 
 def _source_draft(session: SessionDep, payload: RetopicIn) -> Draft:
@@ -437,6 +454,7 @@ def _source_draft(session: SessionDep, payload: RetopicIn) -> Draft:
 def create_retopic(
     session: SessionDep,
     llm: LLMDep,
+    search: SearchDep,
     html_renderer: HtmlRendererDep,
     image_renderer: ImageRendererDep,
     payload: RetopicIn,
@@ -453,6 +471,13 @@ def create_retopic(
     409 for a recorded version that is no longer in the table, exactly as the redraw does:
     the library cannot serve this draft's version, and silently substituting a sibling is
     the mis-attribution this route exists to avoid.
+
+    **The new subject gets its own review.** The templates are inherited and the editorial work
+    is not — a new brief, a new angle, its own planned claims and its own research floor. So
+    what comes back may be `failed_review`, and that is a result rather than an error: a
+    re-topic is not pushable because a model produced text against a template that once worked.
+    The row is returned either way, with its stage and its reason, because a failed attempt
+    that is auditable is worth more than a 502 that leaves nothing behind.
     """
     source = _source_draft(session, payload)
     meter = SpendMeter()
@@ -460,6 +485,7 @@ def create_retopic(
         draft = retopic(
             session,
             meter.watch(llm),
+            meter.watch(search),
             meter.watch(html_renderer),
             meter.watch(image_renderer),
             source,
@@ -472,9 +498,9 @@ def create_retopic(
 
     session.commit()
     session.refresh(draft)
-    # Observed through the same meter the autonomous run uses, never predicted: a re-topic
-    # buys one completion and one render, and a render that failed into `visual_error`
-    # bought its call all the same.
+    # Observed through the same meter the autonomous run uses, never predicted: a re-topic now
+    # buys a whole workflow rather than one completion, and a call that failed bought itself
+    # all the same.
     return RetopicOut(**_out(session, draft).model_dump(), **meter.spend())
 
 
@@ -497,12 +523,17 @@ class VariantsOut(BaseModel):
     variants: list[DraftOut]
     llm_calls: int
     image_calls: int
+    # Web searches the batch bought. Real now that each variant runs the reviewed workflow —
+    # see `SpendMeter.spend`, whose reason for omitting it was that no draft route could reach
+    # one.
+    search_calls: int
 
 
 @router.post("/variants", status_code=201)
 def create_variants(
     session: SessionDep,
     llm: LLMDep,
+    search: SearchDep,
     html_renderer: HtmlRendererDep,
     image_renderer: ImageRendererDep,
     payload: VariantsIn,
@@ -513,11 +544,25 @@ def create_variants(
     concrete drafts a human chooses between is judgement, and judgement is available now, where
     an aggregate over ~3 samples per template is not available at all.
 
+    **Each combination runs the complete reviewed workflow.** A variant used to be one
+    completion, which made "keep this one" a choice between three drafts nothing had checked —
+    and `keep_variant` then left the survivor sitting in a queue that promises reviewed work.
+    Each now gets its own brief, angle, planned claims, research floor, gates, bounded revision
+    and readiness evaluation, so a variant is keepable and pushable because it passed and not
+    because a model returned text.
+
+    A batch may therefore come back with some variants `failed_review` and some `ready`, and
+    all of them are returned. That is the point rather than an inconsistency: a failed variant
+    is a row with its stage and its findings on it, which is what makes the comparison a
+    comparison. `keep_variant` deletes what is discarded, so nothing unreviewed accumulates.
+
     **`settings.variants_max` is the ceiling, not the default**, clamped with the same
-    `min(requested, ceiling)` as the autonomous route above — and here the stakes are the same
-    arithmetic: every variant is another billed completion and another render inside one
-    synchronous request, so an unclamped `count` is `?cap=500` again with a JSON body instead of
-    a query string.
+    `min(requested, ceiling)` as the autonomous route above — and here the stakes are now
+    considerably higher than they were: every variant is a whole workflow inside one
+    synchronous request, several billed completions and a render each, plus web searches for
+    any combination whose research floor is `light` or `deep`. An unclamped `count` was
+    `?cap=500` with a JSON body instead of a query string; it would now be that times the
+    length of the workflow. The response reports what the batch actually bought.
 
     Ignores whatever is selected in the picker on purpose: the point is to vary the templates,
     so pinning one would answer a question nobody asked here — `POST /drafts` is where a chosen
@@ -534,9 +579,10 @@ def create_variants(
     )
     try:
         drafts = [
-            generate_draft(
+            generate_reviewed_draft(
                 session,
                 meter.watch(llm),
+                meter.watch(search),
                 meter.watch(html_renderer),
                 meter.watch(image_renderer),
                 idea=payload.idea,
@@ -914,6 +960,7 @@ def publications(session: SessionDep, draft_id: int) -> list[PublicationOut]:
 def autonomous_run(
     session: SessionDep,
     llm: LLMDep,
+    search: SearchDep,
     html_renderer: HtmlRendererDep,
     image_renderer: ImageRendererDep,
     cap: int | None = None,
@@ -938,6 +985,10 @@ def autonomous_run(
     every visual it draws is suggested, so this route cannot know which renderer the run will
     need. It was given only the HTML one, which made an `ai` suggestion undrawable here and
     counted the resulting `UnsupportedRenderer` as a failed image service.
+
+    A search adapter goes down too, because the run generates through the reviewed workflow
+    now — the same provider a directed generation gets. `created` counts drafts that passed
+    review; a topic whose workflow concluded against it is in `failed` and is still a row.
     """
     # The meter is created here rather than inside `run_autonomous` so the count survives the
     # raise: `AutonomousRunFailed` leaves the run with no result to read, and a failed run is
@@ -947,6 +998,7 @@ def autonomous_run(
         result = run_autonomous(
             session,
             meter.watch(llm),
+            meter.watch(search),
             meter.watch(html_renderer),
             meter.watch(image_renderer),
             # ponytail: clamped silently rather than rejected with a 422. The ceiling is

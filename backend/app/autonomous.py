@@ -6,9 +6,15 @@ from typing import Any, TypeVar, cast
 from sqlmodel import Session, col, select
 
 from app import prompts
-from app.generation import NoUsableTemplates, generate_draft, lesson_lines, verdict_lessons
+from app.generation import (
+    NoUsableTemplates,
+    generate_reviewed_draft,
+    lesson_lines,
+    verdict_lessons,
+)
 from app.llm import LLM
 from app.models.post import Post
+from app.models.stage import review_ready
 from app.rendering import HtmlRenderer, ImageRenderer
 
 log = logging.getLogger("pixii.autonomous")
@@ -39,9 +45,16 @@ class RunResult:
     made "it works" and "it silently didn't" the same output.
 
     Counted separately from `failed` rather than folded into it. They are different events —
-    `failed` is a topic that produced no draft at all, `visuals_failed` is a draft in the
-    queue awaiting a redraw — and `created + failed == topics` is an invariant a reader can
-    check.
+    `visuals_failed` is a reviewed draft in the queue awaiting a redraw — and
+    `created + failed == topics` is an invariant a reader can check.
+
+    **`created` counts drafts that passed review, not drafts that exist.** Once the run moved
+    to `generate_reviewed_draft` the two stopped being the same number: that function records
+    a failure on the draft and returns rather than raising, so every topic produces a row. A
+    `failed_review` row is real, visible in Studio with its stage and its reason, and auditable
+    — and it is not work waiting on a human, which is what `created` is read as everywhere it
+    is reported. `failed` therefore covers both a topic that raised and a topic whose workflow
+    concluded against it; the notifier names which, per topic, because the count cannot.
     """
 
     created: int = 0
@@ -86,18 +99,28 @@ class SpendMeter:
     def spend(self) -> dict[str, int]:
         """What has been bought so far, in the shape both the run response and the 502 use.
 
-        **`search_calls` is counted on the meter and deliberately not reported here.** This
-        dict is the shape `RetopicOut` and `VariantsOut` declare, and no draft endpoint can
-        reach a search: `/drafts/retopic` and `/drafts/variants` wrap an LLM and a renderer
-        and never a search adapter. A `search_calls` key in those responses could therefore
-        only ever say zero — the structurally-always-zero field `_Metered`'s docstring rejects
-        for the mirror-image reason, one field over.
+        **`search_calls` is reported, and it used to be deliberately omitted.** The reason for
+        the omission was that no draft endpoint could reach a search — `/drafts/retopic` and
+        `/drafts/variants` wrapped an LLM and a renderer and never a search adapter — so the
+        key could only ever have said zero, which is the structurally-always-zero field
+        `_Metered`'s docstring rejects one field over.
 
-        A research caller reads `meter.search_calls` directly, and `research_job.queries_run`
-        is where a *job's* searches are recorded. The two are not redundant: this counter is
-        owned by the request and survives a rollback, and that row does not.
+        That reason is gone. Both routes run the reviewed workflow now, and a combination whose
+        research floor is `light` or `deep` buys real web searches inside the request. Leaving
+        the key out would make this dict understate what a batch of variants cost, which is the
+        gap `SpendMeter` was built to close: there was no spend counter anywhere in this app,
+        and a paid call a request makes and does not report is the same silence in a smaller
+        place.
+
+        `research_job.queries_run` is where a *job's* searches are recorded, and the two are
+        not redundant: this counter is owned by the request and survives a rollback, and that
+        row does not.
         """
-        return {"llm_calls": self.llm_calls, "image_calls": self.image_calls}
+        return {
+            "llm_calls": self.llm_calls,
+            "image_calls": self.image_calls,
+            "search_calls": self.search_calls,
+        }
 
 
 class _Metered:
@@ -181,31 +204,51 @@ def propose_topics(session: Session, llm: LLM, count: int) -> list[dict]:
 def run_autonomous(
     session: Session,
     llm: LLM,
+    search: Any,
     html_renderer: HtmlRenderer,
     image_renderer: ImageRenderer,
     *,
     cap: int,
     notify: Notifier = _log_notify,
 ) -> RunResult:
-    """Produce drafts unattended, up to `cap`.
+    """Produce drafts unattended, up to `cap`, through the same review the operator gets.
+
+    **`generate_reviewed_draft`, not `generate_draft`**, and that is the change that matters
+    here. An unattended run is the path with no human anywhere near it, so it is the last
+    place that should have been writing drafts nothing reviewed — a brief, an angle, planned
+    claims, the research floor, the deterministic gates and the readiness rubric all apply,
+    and a topic that cannot satisfy them produces a row saying so rather than a draft that
+    reads as finished.
+
+    **A search adapter, because research is not optional for a factual topic.** The provider
+    is the same one a request gets — `research.search_provider`, shared rather than selected
+    again here — so an unattended run researches exactly as a directed one does. Where no key
+    is configured that provider is `NoSearchProvider`, and `light`/`deep` topics stop at a
+    visible failed research state instead of falling back to `none`. That is the honest
+    outcome and it is meant to stay visible: a run that proposed five factual topics with no
+    search configured should report five failures, not five opinion pieces written as though
+    they had been checked.
 
     Both renderers, and that is a fix rather than plumbing. A run names no templates at all,
     so every visual it draws is one `suggest_templates` chose — and this was handed a single
     HTML renderer, which made an `ai` visual permanently undrawable here: `render_visual`
-    raised `UnsupportedRenderer`, `generate_draft` filed it under `visual_error`, and the run
+    raised `UnsupportedRenderer`, `_draw_visual` filed it under `visual_error`, and the run
     counted the draft in `visuals_failed` as though the image service had declined. See
     `generation._renderer_for`; the choice is made there, off the row actually used.
 
-    Two deliberate limits on what this is allowed to do:
+    Two deliberate limits on what this is allowed to do, both unchanged:
 
     - **It never reaches Zernio.** Drafts land in this system for review; pushing them out
       stays a human act, even though a Zernio draft would not itself publish. An unattended
-      loop that writes to the live account is a different risk from one that does not.
+      loop that writes to the live account is a different risk from one that does not. It is
+      now doubly true: what this writes is not review-ready unless the workflow said so, so
+      even the push boundary would refuse most of it.
     - **`cap` is hard.** A scheduling fault, a retry storm or a runaway loop cannot produce
       more than this many drafts in one run. Both callers bound it by
       `settings.autonomous_max_drafts` — the scheduler passes that setting and
       `POST /drafts/autonomous-run` clamps its query parameter to it — so no caller can ask
-      for more than is configured either.
+      for more than is configured either. The cap is now worth more per unit: one topic buys a
+      whole workflow rather than one completion.
 
     A failure that prevents the run raises; a failure on one topic costs only that topic.
     Either way the notifier is told — a scheduled job that fails in silence is the exact
@@ -228,10 +271,27 @@ def run_autonomous(
     for topic in topics[:cap]:
         idea = str(topic.get("idea", "")).strip()
         try:
-            draft = generate_draft(
-                session, llm, html_renderer, image_renderer, idea=idea, mode="autonomous"
+            draft = generate_reviewed_draft(
+                session, llm, search, html_renderer, image_renderer, idea=idea, mode="autonomous"
             )
-            result.created += 1
+            # **Counted by what the workflow concluded, not by whether a row was written.**
+            # `generate_reviewed_draft` records its failures on the draft and returns rather
+            # than raising, so `created += 1` unconditionally would count a `failed_review`
+            # row as a draft ready for review — and `created` is what the daily card puts in
+            # its title ("N draft(s) ready for review") and what the Inbox queue promises.
+            # A failed attempt is still a row, visible in Studio with its stage and its
+            # reason; what it is not is work waiting on a human.
+            if review_ready(draft.generation_stage):
+                result.created += 1
+            else:
+                result.failed += 1
+                notify(
+                    f"autonomous topic did not pass review ({idea[:60]}): "
+                    f"{draft.generation_stage} — {draft.generation_error}"
+                )
+                # No visual check below: a run that failed before `_draw_visual` has no
+                # picture because it never asked for one, which is not an image failure.
+                continue
             if draft.visual_error:
                 # Named per draft rather than only counted, because the count says a redraw
                 # is needed and the message says whether a redraw could possibly help. An

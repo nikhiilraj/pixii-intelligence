@@ -1123,6 +1123,7 @@ const BATCH = {
   ],
   llm_calls: 3,
   image_calls: 3,
+  search_calls: 0,
 };
 
 /** Answers suggest, variants, keep and the plain generate, by exact path. */
@@ -1211,9 +1212,13 @@ describe("one idea, several drafts", () => {
   it("reports what the batch spent, counted from the response", async () => {
     await generateVariants();
 
-    // Read off `llm_calls`/`image_calls` and off `variants.length` — never assumed to be three.
+    // Read off the response's own counters and off `variants.length` — never assumed to be
+    // three. `search_calls` is here because a variant whose research floor is light or deep
+    // buys real web searches now; a batch reporting only completions and renders understates.
     // The count is clamped server-side, so the number that arrived is the only true one.
-    expect(screen.getByText(/3 chat completions and 3 image renders/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/3 chat completions, 3 image renders and 0 search calls/),
+    ).toBeInTheDocument();
     expect(screen.getByText(/^3 drafts of one idea/)).toBeInTheDocument();
   });
 
@@ -1282,7 +1287,12 @@ describe("a batch of a different size", () => {
     // every assertion above. The count is clamped server-side (`settings.variants_max`) and
     // `variant_combinations` yields at most one per approved combination, so a batch smaller
     // than the ceiling is the ordinary case rather than a contrived one.
-    const two = { variants: [variant(21), variant(22)], llm_calls: 2, image_calls: 2 };
+    const two = {
+      variants: [variant(21), variant(22)],
+      llm_calls: 2,
+      image_calls: 2,
+      search_calls: 4,
+    };
     vi.stubGlobal(
       "fetch",
       vi.fn((url: string) => {
@@ -1298,7 +1308,9 @@ describe("a batch of a different size", () => {
 
     await screen.findByRole("button", { name: /keep draft 21/i });
     expect(screen.getByText(/^2 drafts of one idea/)).toBeInTheDocument();
-    expect(screen.getByText(/2 chat completions and 2 image renders/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/2 chat completions, 2 image renders and 4 search calls/),
+    ).toBeInTheDocument();
   });
 });
 

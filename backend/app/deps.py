@@ -4,16 +4,10 @@ from typing import Annotated
 from fastapi import Depends
 from sqlmodel import Session
 
-from app.config import settings
 from app.db import get_session
 from app.llm import LLM, AzureChat
 from app.rendering import AzureImageRenderer, CloudflareRenderer, HtmlRenderer, ImageRenderer
-from app.research import (
-    BraveSearchProvider,
-    FirecrawlSearchProvider,
-    NoSearchProvider,
-    SearchProvider,
-)
+from app.research import SearchProvider, search_provider
 from app.zernio import ZernioClient
 
 # Every route takes the session this way. Declaring it as an annotated alias rather than
@@ -34,17 +28,13 @@ LLMDep = Annotated[LLM, Depends(get_llm)]
 
 
 def get_search() -> Iterator[SearchProvider]:
-    provider: SearchProvider
-    if settings.firecrawl_api_key:
-        provider = FirecrawlSearchProvider(
-            settings.firecrawl_api_key, settings.firecrawl_search_endpoint
-        )
-    elif settings.brave_search_api_key:
-        provider = BraveSearchProvider(
-            settings.brave_search_api_key, settings.brave_search_endpoint
-        )
-    else:
-        provider = NoSearchProvider()
+    """The configured search adapter, closed after the request.
+
+    The selection itself lives in `research.search_provider` because the scheduler needs the
+    same answer outside a request — see there. This is the request-shaped half: construct,
+    yield, close.
+    """
+    provider: SearchProvider = search_provider()
     try:
         yield provider
     finally:

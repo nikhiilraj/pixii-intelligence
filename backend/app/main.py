@@ -30,6 +30,7 @@ from app.metrics import draft_for_post, sync_metrics, template_performance
 from app.models.draft import Draft
 from app.models.metric import MetricSnapshot
 from app.models.post import Post, PostSource, Verdict
+from app.models.stage import review_ready
 from app.models.template import TemplateStatus
 from app.scheduler import shutdown as stop_scheduler
 from app.scheduler import start as start_scheduler
@@ -504,7 +505,25 @@ def inbox(session: SessionDep) -> Inbox:
         if template.status is TemplateStatus.PROPOSED
     ]
 
-    unpushed = session.exec(select(Draft).where(col(Draft.zernio_post_id).is_(None))).all()
+    # Built, unpushed, **and review-ready**. The last predicate is the one that was missing:
+    # this counted every unpushed draft regardless of stage, so a failed workflow and a run
+    # still in flight both sat in a queue whose entire promise is "these are waiting on you"
+    # — next to nothing a person could do about either. It is the same defect queue 3 had with
+    # scheduled posts, one queue up, and it got worse as the reviewed workflow reached every
+    # creation path: a failed variant or a topic that could not be researched is now a row.
+    #
+    # Filtered in Python off `review_ready` rather than as a `WHERE generation_stage = 'ready'`.
+    # The predicate is the contract — `models/stage.py` exists to stop the set being written
+    # out by hand a fourth time — and a stage set inlined in SQL here is a copy that no longer
+    # tracks it. The queue is 4 rows today, so the read costs nothing.
+    #
+    # Failed drafts do not disappear: they stay in Studio's list with their stage and reason,
+    # where they can be read and retried. What they leave is the count of work waiting.
+    unpushed = [
+        draft
+        for draft in session.exec(select(Draft).where(col(Draft.zernio_post_id).is_(None))).all()
+        if review_ready(draft.generation_stage)
+    ]
 
     # Pushed, not live, and **not scheduled**. The first two predicates alone were right
     # while Pixii could only ever push a draft: everything matching them was waiting on a

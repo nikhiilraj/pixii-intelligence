@@ -536,15 +536,25 @@ export type AutonomousRunResult = {
  *  carries it too, because the drafts roll back with the request and the money does not.
  *
  *  Hoisted here with `calls` when the second consumer arrived: two surfaces report a spend
- *  and both have to word it identically. */
-export type Spend = { llm_calls: number; image_calls: number };
+ *  and both have to word it identically.
+ *
+ *  `search_calls` arrived when variants, retopic and the autonomous run moved onto the
+ *  reviewed workflow. A combination whose research floor is `light` or `deep` buys real web
+ *  searches inside the request, so a surface reporting only completions and renders now
+ *  understates what a batch cost — which is the silence `SpendMeter` exists to close. */
+export type Spend = { llm_calls: number; image_calls: number; search_calls: number };
 
 /** "1 chat completion", "2 chat completions", "0 image renders" — the observed count, in
  *  words, never a price. The meter counts calls; nothing in this app knows what a call cost.
  *
  *  In `lib/api` rather than in either component that says it: it was written twice, in Studio
  *  and in `RetopicForm`, only because a second agent held this file at the time. One wording
- *  of a spend, in one place. */
+ *  of a spend, in one place.
+ *
+ *  **The plural is a bare `s`.** So the unit has to be a word that takes one: "search call",
+ *  never "web search", which would render "web searchs" — quietly, on a receipt. An `-es`
+ *  rule here would be a pluraliser, and a pluraliser is a thing that gets a fourth rule and
+ *  then a library; picking units that take an `s` costs nothing and cannot be wrong. */
 export function calls(n: number, unit: string): string {
   return `${n} ${unit}${n === 1 ? "" : "s"}`;
 }

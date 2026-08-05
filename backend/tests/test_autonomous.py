@@ -15,26 +15,101 @@ from app.models.post import Post, Verdict
 from app.models.template import TemplateKind
 from app.templates import approve, create_template
 
+# The body a written post comes back with. Long enough and plain enough to clear the
+# deterministic gates, because a run whose every draft failed the gates would make every
+# assertion below about `created` an assertion about a failure instead. Borrowed in shape from
+# `test_studio_workflow.BODY`, which is where the gates themselves are exercised.
+BODY = (
+    "Most teams add detail when a decision feels unclear. The better move is often deletion. "
+    "Remove the sentence that changes no choice, then ask whether the next action is obvious."
+)
+
+# Six prompts, and each is answered off a distinctive opening of its own system text rather
+# than off call order. The run makes five model calls per topic now, and a queue would have to
+# be rebuilt every time a topic count changed — and would answer a rubric call with an angle
+# the day the order shifted, which is a green test asserting nothing.
+_ANSWERS: list[tuple[str, str]] = [
+    ("you propose fresh post topics", "topics"),
+    ("you choose which templates", "suggest"),
+    ("you turn a post idea into an editorial brief", "brief"),
+    ("you plan the argument of one post", "angle"),
+    ("you review one draft linkedin post", "rubric"),
+]
+
 
 class FakeLLM:
-    """Returns topics on the first call, then written posts thereafter."""
+    """Answers every step of the reviewed workflow the autonomous run now goes through.
+
+    It used to answer two prompts, because the run called `generate_draft` — one topic call
+    and one write per topic. The run generates through `generate_reviewed_draft` now, so a
+    stub that answered anything else with the written post would hand a *post* back to the
+    brief step and the workflow would fail at planning, quietly, and every test here would be
+    measuring a failed run.
+    """
 
     def __init__(self, topics: dict | None = None, written: dict | None = None):
         self.topics = topics if topics is not None else {"topics": [{"idea": "topic one"}]}
         self.written = written or {
             "hook": "A hook.",
-            "body": "A body.",
+            "body": BODY,
             "visual_values": {"big_number": "40"},
         }
         self.calls: list[str] = []
 
+    def _kind(self, system: str) -> str:
+        opening = system.lower()
+        for marker, kind in _ANSWERS:
+            if opening.startswith(marker):
+                return kind
+        # Both write prompts — `draft.write` 1.0.0 and 2.0.0 — and nothing else reaches here.
+        return "write"
+
     def complete_json(self, system: str, user: str, images=()) -> dict:
         self.calls.append(user)
-        if "topics" in system.lower() and "propose" in system.lower():
+        kind = self._kind(system)
+        if kind == "topics":
             return self.topics
-        if "choose which templates" in system.lower():
-            return {"hook": "h", "structure": "s", "visual": "v"}
+        if kind == "suggest":
+            return {"hook": "h", "structure": "s", "visual": "v", "reason": "they fit"}
+        if kind == "brief":
+            return {
+                "objective": "Help operators explain one useful product decision.",
+                "audience": "product operators responsible for checkout",
+                "desired_action": "review one unnecessary checkout step",
+                "constraints": [],
+            }
+        if kind == "angle":
+            return {
+                "thesis": "clearer product writing improves internal decisions",
+                "tension": "teams confuse more detail with more clarity",
+                "audience_stake": "operators spend less time resolving ambiguity",
+                "claims": [{"text": "clearer product writing helps teams make decisions"}],
+                "beats": ["name the ambiguity", "show the editing principle"],
+                "cta": "remove one sentence that does not change the decision",
+            }
+        if kind == "rubric":
+            # No deductions: the draft is ready. A run of failed-review drafts is asserted
+            # deliberately in the tests that want one, never as everything's background.
+            return {"deductions": []}
         return self.written
+
+
+# How many model calls one topic buys, end to end: suggest, brief, angle, write, rubric.
+# Named rather than written as a literal at each assertion, because the number is a property
+# of the workflow and every test that hardcoded it would have to be found again when it moves.
+CALLS_PER_TOPIC = 5
+
+
+class FakeSearch:
+    """A search adapter the run now carries. Never reached by the topics below.
+
+    `resolve_mode` puts an idea with no named subject at `none`, and `none` never reaches a
+    provider — so a call here would mean the research floor moved, which is worth failing on
+    rather than absorbing.
+    """
+
+    def search(self, query: str, *, limit: int):
+        raise AssertionError(f"an autonomous topic reached a web search: {query!r}")
 
 
 class FakeRenderer:
@@ -97,7 +172,9 @@ def test_a_run_produces_drafts_with_no_operator_involvement(session):
     library(session)
     add_post(session, "p1")
 
-    result = run_autonomous(session, FakeLLM(), FakeRenderer(), FakeImageRenderer(), cap=1)
+    result = run_autonomous(
+        session, FakeLLM(), FakeSearch(), FakeRenderer(), FakeImageRenderer(), cap=1
+    )
 
     assert result.created == 1
     assert len(drafts(session)) == 1
@@ -107,7 +184,7 @@ def test_autonomous_drafts_are_marked_as_such(session):
     library(session)
     add_post(session, "p1")
 
-    run_autonomous(session, FakeLLM(), FakeRenderer(), FakeImageRenderer(), cap=1)
+    run_autonomous(session, FakeLLM(), FakeSearch(), FakeRenderer(), FakeImageRenderer(), cap=1)
 
     assert drafts(session)[0].mode == "autonomous"
 
@@ -116,7 +193,7 @@ def test_an_autonomous_draft_carries_full_lineage(session):
     hook, structure, visual = library(session)
     add_post(session, "p1")
 
-    run_autonomous(session, FakeLLM(), FakeRenderer(), FakeImageRenderer(), cap=1)
+    run_autonomous(session, FakeLLM(), FakeSearch(), FakeRenderer(), FakeImageRenderer(), cap=1)
 
     draft = drafts(session)[0]
     assert draft.hook_family == hook.family_id
@@ -130,7 +207,12 @@ def test_the_per_run_cap_is_enforced(session):
     add_post(session, "p1")
 
     run_autonomous(
-        session, FakeLLM(topics=THREE_TOPICS), FakeRenderer(), FakeImageRenderer(), cap=2
+        session,
+        FakeLLM(topics=THREE_TOPICS),
+        FakeSearch(),
+        FakeRenderer(),
+        FakeImageRenderer(),
+        cap=2,
     )
 
     assert len(drafts(session)) == 2
@@ -141,7 +223,12 @@ def test_a_cap_of_zero_produces_nothing(session):
     add_post(session, "p1")
 
     result = run_autonomous(
-        session, FakeLLM(topics=THREE_TOPICS), FakeRenderer(), FakeImageRenderer(), cap=0
+        session,
+        FakeLLM(topics=THREE_TOPICS),
+        FakeSearch(),
+        FakeRenderer(),
+        FakeImageRenderer(),
+        cap=0,
     )
 
     assert result.created == 0
@@ -153,7 +240,7 @@ def test_a_run_never_pushes_anything_to_zernio(session):
     library(session)
     add_post(session, "p1")
 
-    run_autonomous(session, FakeLLM(), FakeRenderer(), FakeImageRenderer(), cap=1)
+    run_autonomous(session, FakeLLM(), FakeSearch(), FakeRenderer(), FakeImageRenderer(), cap=1)
 
     assert drafts(session)[0].zernio_post_id is None
     assert drafts(session)[0].pushed_at is None
@@ -247,6 +334,7 @@ def test_a_run_with_no_topics_is_reported_not_silently_empty(session):
     result = run_autonomous(
         session,
         FakeLLM(topics={"topics": []}),
+        FakeSearch(),
         FakeRenderer(),
         FakeImageRenderer(),
         cap=2,
@@ -268,14 +356,28 @@ def test_a_failing_run_notifies_rather_than_failing_silently(session):
 
     with pytest.raises(AutonomousRunFailed):
         run_autonomous(
-            session, BrokenLLM(), FakeRenderer(), FakeImageRenderer(), cap=1, notify=notifier
+            session,
+            BrokenLLM(),
+            FakeSearch(),
+            FakeRenderer(),
+            FakeImageRenderer(),
+            cap=1,
+            notify=notifier,
         )
 
     assert any("model unavailable" in m for m in notifier.messages)
 
 
 def test_one_bad_topic_does_not_abandon_the_rest_of_the_run(session):
-    """A single unwritable topic should cost that topic, not the whole run."""
+    """A single unwritable topic should cost that topic, not the whole run.
+
+    **The failed topic is a row now, and that is the change rather than a regression.**
+    `generate_reviewed_draft` records a planning failure on the draft and returns instead of
+    raising, so a run of two topics where one fails leaves two rows: one `ready` and one
+    `failed`, carrying the reason. A failed attempt that leaves nothing behind is not
+    auditable, and the queue it used to inflate is filtered by stage now — see
+    `main.inbox`.
+    """
     calls = {"n": 0}
 
     class FlakyLLM(FakeLLM):
@@ -293,6 +395,7 @@ def test_one_bad_topic_does_not_abandon_the_rest_of_the_run(session):
     result = run_autonomous(
         session,
         FlakyLLM(topics=THREE_TOPICS),
+        FakeSearch(),
         FakeRenderer(),
         FakeImageRenderer(),
         cap=2,
@@ -301,7 +404,10 @@ def test_one_bad_topic_does_not_abandon_the_rest_of_the_run(session):
 
     assert result.created == 1
     assert result.failed == 1
-    assert session.exec(select(func.count()).select_from(Draft)).one() == 1
+    # Two rows for two topics: the failure is recorded, not swallowed.
+    assert session.exec(select(func.count()).select_from(Draft)).one() == 2
+    stages = sorted(d.generation_stage for d in drafts(session))
+    assert stages == ["failed", "ready"]
 
 
 def test_a_run_reports_what_it_did(session):
@@ -312,6 +418,7 @@ def test_a_run_reports_what_it_did(session):
     run_autonomous(
         session,
         FakeLLM(topics=THREE_TOPICS),
+        FakeSearch(),
         FakeRenderer(),
         FakeImageRenderer(),
         cap=2,
@@ -347,7 +454,13 @@ def test_a_draft_whose_visual_failed_is_not_reported_as_a_clean_success(session)
     notifier = RecordingNotifier()
 
     result = run_autonomous(
-        session, FakeLLM(), BrokenRenderer(), FakeImageRenderer(), cap=1, notify=notifier
+        session,
+        FakeLLM(),
+        FakeSearch(),
+        BrokenRenderer(),
+        FakeImageRenderer(),
+        cap=1,
+        notify=notifier,
     )
 
     assert result.created == 1
@@ -368,6 +481,7 @@ def test_the_run_summary_names_the_missing_visuals(session):
     run_autonomous(
         session,
         FakeLLM(topics=THREE_TOPICS),
+        FakeSearch(),
         BrokenRenderer(),
         FakeImageRenderer(),
         cap=2,
@@ -389,7 +503,13 @@ def test_a_clean_run_says_nothing_about_visuals(session):
     notifier = RecordingNotifier()
 
     result = run_autonomous(
-        session, FakeLLM(), FakeRenderer(), FakeImageRenderer(), cap=1, notify=notifier
+        session,
+        FakeLLM(),
+        FakeSearch(),
+        FakeRenderer(),
+        FakeImageRenderer(),
+        cap=1,
+        notify=notifier,
     )
 
     assert result.visuals_failed == 0
@@ -402,7 +522,13 @@ def test_a_run_refuses_when_the_library_is_not_ready(session):
 
     with pytest.raises(AutonomousRunFailed):
         run_autonomous(
-            session, FakeLLM(), FakeRenderer(), FakeImageRenderer(), cap=1, notify=notifier
+            session,
+            FakeLLM(),
+            FakeSearch(),
+            FakeRenderer(),
+            FakeImageRenderer(),
+            cap=1,
+            notify=notifier,
         )
 
     assert notifier.messages
@@ -490,17 +616,22 @@ def test_a_run_reports_the_paid_calls_it_actually_made(client, session):
 
     body = client.post("/drafts/autonomous-run?cap=1").json()
 
-    # One topic call, then a suggest and a write for the single topic.
-    assert body["llm_calls"] == len(llm.calls) == 3
+    # One topic call, then a whole workflow for the single topic — suggest, brief, angle,
+    # write and rubric. Read off `CALLS_PER_TOPIC` rather than a literal, because the number
+    # is a property of the workflow rather than of this test.
+    assert body["llm_calls"] == len(llm.calls) == 1 + CALLS_PER_TOPIC
     assert body["image_calls"] == renderer.calls == 1
+    # Zero, honestly: `none` mode never reaches a provider. Reported rather than omitted now
+    # that a research floor above `none` would make a run buy real searches.
+    assert body["search_calls"] == 0
 
 
 def test_the_count_follows_the_calls_made_and_not_the_drafts_produced(client, session):
     """The discriminator between observed and predicted.
 
-    One topic fails at its write, so two of the five completions bought nothing. A count
-    derived from `created` would report 3, and from `cap` 5 by luck; only counting the
-    calls gives 5 here and 3 for a one-draft run.
+    One topic fails at its *brief* — the first workflow call after the templates are chosen —
+    so it buys two completions and produces nothing publishable. A count derived from
+    `created` would report one topic's worth; only counting the calls reports what was bought.
     """
     calls = {"n": 0}
 
@@ -522,7 +653,9 @@ def test_the_count_follows_the_calls_made_and_not_the_drafts_produced(client, se
 
     assert body["created"] == 1
     assert body["failed"] == 1
-    assert body["llm_calls"] == 5
+    # Topics, then the failed topic's suggest and brief, then the good topic's whole workflow.
+    assert body["llm_calls"] == 1 + 2 + CALLS_PER_TOPIC
+    # One render: the failed topic never reached `_draw_visual`.
     assert body["image_calls"] == renderer.calls == 1
 
 
@@ -566,7 +699,7 @@ def test_metering_does_not_change_which_renderer_a_template_can_reach():
     image.generate("a prompt", 1080, 1350)
     html.screenshot("<b>x</b>", 1080, 1350)
 
-    assert meter.spend() == {"llm_calls": 0, "image_calls": 2}
+    assert meter.spend() == {"llm_calls": 0, "image_calls": 2, "search_calls": 0}
 
 
 def test_a_run_that_could_not_start_still_reports_what_it_spent(client, session):
@@ -592,4 +725,5 @@ def test_a_run_that_could_not_start_still_reports_what_it_spent(client, session)
     detail = response.json()["detail"]
     assert detail["llm_calls"] == 1
     assert detail["image_calls"] == 0
+    assert detail["search_calls"] == 0
     assert "model unavailable" in detail["error"]

@@ -119,7 +119,10 @@ export default function RetopicForm({ postId }: { postId: number }) {
         <div className="mt-3 border-t border-black/10 pt-3 dark:border-white/15">
           <p className="text-xs text-muted">
             Draft {made.id} written through the same three versions, and it spent{" "}
-            {calls(made.llm_calls, "chat completion")} and {calls(made.image_calls, "image render")}.
+            {`${calls(made.llm_calls, "chat completion")}, ${calls(
+              made.image_calls,
+              "image render",
+            )} and ${calls(made.search_calls, "search call")}.`}
             It is a draft: nothing has been pushed or published.
           </p>
           <Link
