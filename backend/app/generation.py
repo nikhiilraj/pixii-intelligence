@@ -420,7 +420,8 @@ def _draw_visual(
 def generate_draft(
     session: Session,
     llm: LLM,
-    renderer: HtmlRenderer | ImageRenderer,
+    html_renderer: HtmlRenderer,
+    image_renderer: ImageRenderer,
     *,
     idea: str,
     hook_id: int | None = None,
@@ -437,6 +438,8 @@ def generate_draft(
     `asset_values` is slot name -> asset id, for the visual's `image_url` slots. Absent keys
     fall back to the slot's `default_asset_id`, which is what lets an unattended run — which
     passes none — still render a visual carrying images.
+
+    Both renderers, because the visual is not known until below — see `_renderer_for`.
     """
     correlation = new_correlation_id()
     hook = _resolve(session, TemplateKind.HOOK, hook_id)
@@ -481,7 +484,7 @@ def generate_draft(
         write_prompt_name=_WRITE.name,
         write_prompt_version=_WRITE.version,
     )
-    _draw_visual(session, draft, visual, renderer)
+    _draw_visual(session, draft, visual, _renderer_for(visual, html_renderer, image_renderer))
 
     session.add(draft)
     session.flush()
@@ -606,7 +609,8 @@ def generate_reviewed_draft(
     session: Session,
     llm: LLM,
     search: Any,
-    renderer: HtmlRenderer | ImageRenderer,
+    html_renderer: HtmlRenderer,
+    image_renderer: ImageRenderer,
     *,
     idea: str,
     hook_id: int | None = None,
@@ -617,7 +621,11 @@ def generate_reviewed_draft(
     mode: str = "directed",
     research_fetcher: Any | None = None,
 ) -> Draft:
-    """Run the complete Studio pipeline and persist every stage on one draft."""
+    """Run the complete Studio pipeline and persist every stage on one draft.
+
+    Both renderers, for the reason `_renderer_for` gives: the visual can be suggested here,
+    and the route calling this cannot know which renderer draws it until that has happened.
+    """
     from app import editorial, research, revision, rubric
 
     correlation = new_correlation_id()
@@ -799,7 +807,7 @@ def generate_reviewed_draft(
             draft.generation_stage = GenerationStage.FAILED_REVIEW
             draft.generation_error = f"evaluating: {type(exc).__name__}: {exc}"
 
-    _draw_visual(session, draft, visual, renderer)
+    _draw_visual(session, draft, visual, _renderer_for(visual, html_renderer, image_renderer))
     session.add(draft)
     session.flush()
     return draft
@@ -880,6 +888,33 @@ def generated_from(session: Session, family: str | None, version: int | None) ->
     return template
 
 
+def _renderer_for(
+    visual: Template, html_renderer: HtmlRenderer, image_renderer: ImageRenderer
+) -> HtmlRenderer | ImageRenderer:
+    """The renderer a *settled* visual declares. Beside `generated_from` because it is the
+    same rule: read it off the exact row that will be used, never off a stand-in.
+
+    This lived at the route, which is where it was wrong — not in what it computed but in
+    when. `POST /drafts/workflow` resolved it from `payload.visual_id`, so a request naming
+    no visual resolved `None` to the HTML renderer and *then* let `suggest_templates` pick an
+    `ai` template. `render_visual` raised `UnsupportedRenderer`, `_draw_visual` swallowed it
+    into `visual_error`, and the draft arrived looking generated with no picture. Every model
+    suggestion was exposed to this; the autonomous run, injected an HTML renderer and naming
+    no templates at all, could never draw an AI visual.
+
+    `api_drafts._renderer` answers a neighbouring question and deliberately stays there:
+    it resolves from a *draft's recorded* `(family, version)` for a redraw, where the row is
+    history rather than a choice. One helper serving both would be wrong for one of them —
+    a redraw must not consult a template nobody chose, and generation has no draft to read.
+
+    Two renderers rather than a resolver callable, and not only for the shorter diff: a
+    callable is a seam a caller could fill with a lookup by "latest", which is precisely the
+    mistake `generated_from` above exists to prevent. Two concrete parameters also keep each
+    adapter's `SpendMeter.watch` visible at the call site, where the billing is.
+    """
+    return image_renderer if visual.body.get("renderer") == "ai" else html_renderer
+
+
 def regenerate_visual(
     session: Session, draft: Draft, renderer: HtmlRenderer | ImageRenderer
 ) -> Draft:
@@ -894,7 +929,8 @@ def regenerate_visual(
 def retopic(
     session: Session,
     llm: LLM,
-    renderer: HtmlRenderer | ImageRenderer,
+    html_renderer: HtmlRenderer,
+    image_renderer: ImageRenderer,
     source: Draft,
     *,
     idea: str,
@@ -916,7 +952,9 @@ def retopic(
 
     `generate_draft` does the rest — it already takes the three templates as parameters, so
     there is no second generation path to keep in step with this one. It is handed ids of the
-    resolved rows rather than families, so `_resolve` reads back the same versions.
+    resolved rows rather than families, so `_resolve` reads back the same versions, and both
+    renderers pass through for `_renderer_for` to choose between off `visual` below. That is
+    the same row this function resolved, so the renderer follows the inherited version too.
 
     ponytail: the source's `asset_values` carry over as the picks. The visual is the *same
     template row*, so `chosen_assets`' image-slot filter is a no-op here rather than a silent
@@ -930,7 +968,8 @@ def retopic(
     return generate_draft(
         session,
         llm,
-        renderer,
+        html_renderer,
+        image_renderer,
         idea=idea,
         hook_id=hook.id,
         structure_id=structure.id,

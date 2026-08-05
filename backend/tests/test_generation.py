@@ -62,6 +62,19 @@ class FakeRenderer:
         return self.image
 
 
+class FakeImageRenderer:
+    """The second renderer generation now takes, for the `ai` templates this file has none of.
+
+    Returns bytes nothing here expects, deliberately: every visual below declares `html`, so a
+    draft coming back with `GENERATED` means the renderer was chosen from something other than
+    the template — which is the defect `generation._renderer_for` exists to prevent. It cannot
+    also carry `screenshot`; `render_visual` dispatches on `hasattr`.
+    """
+
+    def generate(self, prompt: str, width: int, height: int) -> bytes:
+        return b"GENERATED"
+
+
 WRITTEN = {
     "hook": "$450 turned into $19k/mo in recurring revenue.",
     "body": "not a rebrand. not a new ad budget. one Amazon main image.",
@@ -124,7 +137,9 @@ IDEA = "a seller tested one main image and got +17% CTR"
 
 def test_an_idea_produces_a_draft_with_hook_body_and_visual(session):
     library(session)
-    draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    draft = generate_draft(
+        session, FakeLLM(WRITTEN), FakeRenderer(), FakeImageRenderer(), idea=IDEA
+    )
 
     assert draft.hook_text.startswith("$450 turned into")
     assert "not a rebrand" in draft.body_text
@@ -134,7 +149,9 @@ def test_an_idea_produces_a_draft_with_hook_body_and_visual(session):
 def test_the_draft_records_the_family_and_version_of_all_three_templates(session):
     hook, structure, visual = library(session)
 
-    draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    draft = generate_draft(
+        session, FakeLLM(WRITTEN), FakeRenderer(), FakeImageRenderer(), idea=IDEA
+    )
 
     assert (draft.hook_family, draft.hook_version) == (hook.family_id, hook.version)
     assert (draft.structure_family, draft.structure_version) == (
@@ -149,7 +166,9 @@ def test_lineage_survives_a_later_edit_of_the_template(session):
     from app.templates import edit_template
 
     hook, _, _ = library(session)
-    draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    draft = generate_draft(
+        session, FakeLLM(WRITTEN), FakeRenderer(), FakeImageRenderer(), idea=IDEA
+    )
 
     edit_template(session, hook, name="transformation-v2")
 
@@ -160,7 +179,9 @@ def test_lineage_survives_a_later_edit_of_the_template(session):
 def test_a_directed_draft_is_marked_as_directed(session):
     library(session)
 
-    draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    draft = generate_draft(
+        session, FakeLLM(WRITTEN), FakeRenderer(), FakeImageRenderer(), idea=IDEA
+    )
 
     assert draft.mode == "directed"
     assert draft.idea == IDEA
@@ -171,7 +192,7 @@ def test_generation_is_grounded_in_the_posts_the_hook_came_from(session):
     add_post(session, "win-1", 185, "The exemplar post body that proves the pattern.")
 
     llm = FakeLLM(WRITTEN)
-    generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+    generate_draft(session, llm, FakeRenderer(), FakeImageRenderer(), idea=IDEA)
 
     assert "The exemplar post body that proves the pattern." in llm.last_user
 
@@ -197,7 +218,7 @@ def test_a_creator_post_is_never_handed_to_the_model_as_a_voice_to_imitate(sessi
     )
 
     llm = FakeLLM(WRITTEN)
-    generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+    generate_draft(session, llm, FakeRenderer(), FakeImageRenderer(), idea=IDEA)
 
     assert "Monte's own post body." in llm.last_user
     assert "Someone else's writing." not in llm.last_user
@@ -217,7 +238,7 @@ def test_a_regenerated_draft_is_held_to_the_same_voice_line(session):
     )
 
     llm = FakeLLM(WRITTEN)
-    draft = generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+    draft = generate_draft(session, llm, FakeRenderer(), FakeImageRenderer(), idea=IDEA)
     regenerate_text(session, llm, draft)
 
     assert "Someone else's writing." not in llm.last_user
@@ -227,7 +248,7 @@ def test_the_chosen_templates_shape_the_prompt(session):
     library(session)
 
     llm = FakeLLM(WRITTEN)
-    generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+    generate_draft(session, llm, FakeRenderer(), FakeImageRenderer(), idea=IDEA)
 
     assert "{small} turned into {large}" in llm.last_user
     assert "Lead with the dollar outcome." in llm.last_user
@@ -245,7 +266,7 @@ def test_an_explicit_choice_overrides_the_suggestion(session):
     approve(session, other)
 
     draft = generate_draft(
-        session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA, hook_id=other.id
+        session, FakeLLM(WRITTEN), FakeRenderer(), FakeImageRenderer(), idea=IDEA, hook_id=other.id
     )
 
     assert draft.hook_family == other.family_id
@@ -255,7 +276,7 @@ def test_generation_refuses_when_nothing_is_approved(session):
     library(session, approve_all=False)
 
     with pytest.raises(NoUsableTemplates):
-        generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+        generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), FakeImageRenderer(), idea=IDEA)
 
 
 def test_suggestion_picks_from_the_approved_library_and_explains_itself(session):
@@ -279,7 +300,9 @@ def test_a_suggestion_naming_something_unapproved_falls_back_rather_than_failing
 
 def test_regenerating_text_replaces_the_words_and_keeps_the_lineage(session):
     library(session)
-    draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    draft = generate_draft(
+        session, FakeLLM(WRITTEN), FakeRenderer(), FakeImageRenderer(), idea=IDEA
+    )
     original_family = draft.hook_family
 
     rewritten = {**WRITTEN, "hook": "A different opening entirely."}
@@ -292,7 +315,7 @@ def test_regenerating_text_replaces_the_words_and_keeps_the_lineage(session):
 def test_regenerating_the_visual_leaves_the_text_alone(session):
     library(session)
     renderer = FakeRenderer()
-    draft = generate_draft(session, FakeLLM(WRITTEN), renderer, idea=IDEA)
+    draft = generate_draft(session, FakeLLM(WRITTEN), renderer, FakeImageRenderer(), idea=IDEA)
     text_before = draft.body_text
 
     regenerate_visual(session, draft, FakeRenderer(image=b"NEWIMAGE"))
@@ -306,7 +329,9 @@ def test_a_visual_missing_a_slot_value_does_not_lose_the_written_text(session):
     library(session)
     incomplete = {**WRITTEN, "visual_values": {"big_number": "$19k"}}
 
-    draft = generate_draft(session, FakeLLM(incomplete), FakeRenderer(), idea=IDEA)
+    draft = generate_draft(
+        session, FakeLLM(incomplete), FakeRenderer(), FakeImageRenderer(), idea=IDEA
+    )
 
     assert draft.body_text.startswith("not a rebrand")
     assert draft.visual_image is None
@@ -340,7 +365,7 @@ def test_the_model_is_only_asked_to_fill_text_slots(session):
     image_slot_library(session)
 
     llm = FakeLLM(WRITTEN)
-    generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+    generate_draft(session, llm, FakeRenderer(), FakeImageRenderer(), idea=IDEA)
 
     write_prompt = llm.calls[-1][1]
     assert "big_number" in write_prompt
@@ -352,7 +377,9 @@ def test_prose_written_into_an_image_slot_is_discarded(session):
     image_slot_library(session)
     invented = {**WRITTEN, "visual_values": {"big_number": "40", "left_image_url": "image CTR"}}
 
-    draft = generate_draft(session, FakeLLM(invented), FakeRenderer(), idea=IDEA)
+    draft = generate_draft(
+        session, FakeLLM(invented), FakeRenderer(), FakeImageRenderer(), idea=IDEA
+    )
 
     assert "left_image_url" not in draft.visual_values
 
@@ -360,7 +387,9 @@ def test_prose_written_into_an_image_slot_is_discarded(session):
 def test_an_unfilled_image_slot_reports_rather_than_rendering_an_empty_box(session):
     image_slot_library(session)
 
-    draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    draft = generate_draft(
+        session, FakeLLM(WRITTEN), FakeRenderer(), FakeImageRenderer(), idea=IDEA
+    )
 
     assert draft.visual_image is None
     assert "left_image_url" in (draft.visual_error or "")
@@ -412,7 +441,9 @@ def test_an_untyped_template_fails_loudly_instead_of_rendering_empty_boxes(sessi
     untyped_slot_library(session)
     invented = {**WRITTEN, "visual_values": {"big_number": "40", "left_image_url": "image CTR"}}
 
-    draft = generate_draft(session, FakeLLM(invented), FakeRenderer(), idea=IDEA)
+    draft = generate_draft(
+        session, FakeLLM(invented), FakeRenderer(), FakeImageRenderer(), idea=IDEA
+    )
 
     assert "left_image_url" not in draft.visual_values
     assert draft.visual_image is None
@@ -463,7 +494,7 @@ def test_a_recorded_verdict_reaches_the_prompt_as_a_lesson(session):
     rule(session, judged, Verdict.WORKED, "the opening number did the work; the ask fell flat")
 
     llm = FakeLLM(WRITTEN)
-    generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+    generate_draft(session, llm, FakeRenderer(), FakeImageRenderer(), idea=IDEA)
 
     assert "the opening number did the work; the ask fell flat" in llm.last_user
     assert "worked" in llm.last_user
@@ -481,7 +512,7 @@ def test_lessons_survive_a_regeneration(session):
     rule(session, judged, Verdict.DIDNT, "opened on the process, nobody stayed for the result")
 
     llm = FakeLLM(WRITTEN)
-    draft = generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+    draft = generate_draft(session, llm, FakeRenderer(), FakeImageRenderer(), idea=IDEA)
     generated_prompt = llm.last_user
     regenerate_text(session, llm, draft)
     regenerated_prompt = llm.last_user
@@ -498,7 +529,7 @@ def test_with_no_verdicts_recorded_the_prompt_is_byte_identical_to_before(sessio
     add_post(session, "win-1", 185, "The exemplar post body that proves the pattern.")
 
     llm = FakeLLM(WRITTEN)
-    draft = generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+    draft = generate_draft(session, llm, FakeRenderer(), FakeImageRenderer(), idea=IDEA)
 
     assert llm.last_user == PROMPT_BEFORE_LESSONS
 
@@ -520,7 +551,7 @@ def test_a_verdict_with_no_note_changes_the_prompt_not_at_all(session):
     rule(session, judged, Verdict.WORKED, "   ")
 
     llm = FakeLLM(WRITTEN)
-    generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+    generate_draft(session, llm, FakeRenderer(), FakeImageRenderer(), idea=IDEA)
 
     assert llm.last_user == PROMPT_BEFORE_LESSONS
 
@@ -543,7 +574,7 @@ def test_a_lesson_from_a_creator_post_carries_the_note_and_never_the_writing(ses
     rule(session, theirs, Verdict.MIXED, "the contrast opener is worth borrowing")
 
     llm = FakeLLM(WRITTEN)
-    generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+    generate_draft(session, llm, FakeRenderer(), FakeImageRenderer(), idea=IDEA)
 
     assert "the contrast opener is worth borrowing" in llm.last_user
     assert "Someone else's writing." not in llm.last_user
@@ -562,7 +593,7 @@ def test_the_lessons_block_makes_no_claim_about_performance(session):
     rule(session, judged, Verdict.WORKED, "the opening number did the work")
 
     llm = FakeLLM(WRITTEN)
-    generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+    generate_draft(session, llm, FakeRenderer(), FakeImageRenderer(), idea=IDEA)
 
     lowered = llm.last_user.lower()
     for banned in ("best", "rank", "perform", "score", "top-", "average", "win rate"):
@@ -576,7 +607,7 @@ def test_only_the_most_recently_judged_verdicts_are_carried(session):
         rule(session, judged, Verdict.WORKED, f"ruling number {index}")
 
     llm = FakeLLM(WRITTEN)
-    generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+    generate_draft(session, llm, FakeRenderer(), FakeImageRenderer(), idea=IDEA)
 
     assert llm.last_user.count("ruling number") == LESSON_LIMIT
     assert "ruling number 0" not in llm.last_user
@@ -615,7 +646,9 @@ def test_a_redraw_renders_the_version_the_draft_was_generated_from(session):
     _, _, visual = library(session)
     v2 = edited_visual(session, visual, "v2")
     approve(session, v2)
-    draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    draft = generate_draft(
+        session, FakeLLM(WRITTEN), FakeRenderer(), FakeImageRenderer(), idea=IDEA
+    )
     assert draft.visual_version == v2.version
 
     edited_visual(session, v2, "v3")
@@ -643,7 +676,7 @@ def test_a_rewrite_uses_the_hook_the_draft_was_generated_from(session):
     """
     hook, _, _ = library(session)
     llm = FakeLLM(WRITTEN)
-    draft = generate_draft(session, llm, FakeRenderer(), idea=IDEA)
+    draft = generate_draft(session, llm, FakeRenderer(), FakeImageRenderer(), idea=IDEA)
     recorded = draft.hook_version
 
     v2 = edit_template(
@@ -677,7 +710,9 @@ def test_a_retired_recorded_version_still_redraws(session):
     _, _, visual = library(session)
     v2 = edited_visual(session, visual, "v2")
     approve(session, v2)
-    draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    draft = generate_draft(
+        session, FakeLLM(WRITTEN), FakeRenderer(), FakeImageRenderer(), idea=IDEA
+    )
     edited_visual(session, v2, "v3")
     retire(session, v2)
 
@@ -701,7 +736,9 @@ def test_the_renderer_is_chosen_from_the_recorded_version_too(session):
     _, _, visual = library(session)
     v2 = edited_visual(session, visual, "v2")
     approve(session, v2)
-    draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    draft = generate_draft(
+        session, FakeLLM(WRITTEN), FakeRenderer(), FakeImageRenderer(), idea=IDEA
+    )
     edit_template(session, v2, body={"renderer": "ai", "prompt": "a picture of {big_number}"})
 
     html_renderer, image_renderer = object(), object()
@@ -716,7 +753,9 @@ def test_a_draft_recording_no_version_refuses_rather_than_picking_one(session):
     a message about a version the draft never had. The two states are different facts.
     """
     _, _, visual = library(session)
-    draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    draft = generate_draft(
+        session, FakeLLM(WRITTEN), FakeRenderer(), FakeImageRenderer(), idea=IDEA
+    )
     draft.visual_version = None
     session.flush()
 
@@ -730,7 +769,9 @@ def test_a_recorded_version_that_is_gone_refuses_rather_than_redrawing_another(s
     _, _, visual = library(session)
     v2 = edited_visual(session, visual, "v2")
     approve(session, v2)
-    draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    draft = generate_draft(
+        session, FakeLLM(WRITTEN), FakeRenderer(), FakeImageRenderer(), idea=IDEA
+    )
 
     session.delete(v2)
     session.flush()
@@ -744,7 +785,9 @@ def test_the_redraw_endpoint_reports_a_vanished_version_as_a_conflict(client, se
     _, _, visual = library(session)
     v2 = edited_visual(session, visual, "v2")
     approve(session, v2)
-    draft = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    draft = generate_draft(
+        session, FakeLLM(WRITTEN), FakeRenderer(), FakeImageRenderer(), idea=IDEA
+    )
     session.delete(v2)
     session.flush()
 
@@ -832,20 +875,25 @@ def test_a_retopic_inherits_the_sources_own_versions_not_the_newest(session):
     pattern and guidance present, v2's absent, and the visual rendered without v2's marker.
     """
     hook, structure, visual = library(session)
-    source = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    source = generate_draft(
+        session, FakeLLM(WRITTEN), FakeRenderer(), FakeImageRenderer(), idea=IDEA
+    )
     recorded = (
         (source.hook_family, source.hook_version),
         (source.structure_family, source.structure_version),
         (source.visual_family, source.visual_version),
     )
-    hook_v2, structure_v2, visual_v2 = next_version_of_everything(
-        session, hook, structure, visual
-    )
+    hook_v2, structure_v2, visual_v2 = next_version_of_everything(session, hook, structure, visual)
 
     llm = FakeLLM(RETOPICKED)
     captured: dict = {}
     fresh = retopic(
-        session, llm, renderer_capturing(captured, png=b"RETOPIC"), source, idea=NEW_IDEA
+        session,
+        llm,
+        renderer_capturing(captured, png=b"RETOPIC"),
+        FakeImageRenderer(),
+        source,
+        idea=NEW_IDEA,
     )
 
     assert fresh.id != source.id
@@ -877,7 +925,9 @@ def test_a_retopic_leaves_the_source_untouched(session):
     what was wanted.
     """
     library(session)
-    source = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    source = generate_draft(
+        session, FakeLLM(WRITTEN), FakeRenderer(), FakeImageRenderer(), idea=IDEA
+    )
     source.zernio_post_id = "late-abc"
     source.pushed_at = datetime(2026, 7, 1, tzinfo=UTC).replace(tzinfo=None)
     source.went_live_at = datetime(2026, 7, 2, tzinfo=UTC).replace(tzinfo=None)
@@ -885,7 +935,14 @@ def test_a_retopic_leaves_the_source_untouched(session):
     session.flush()
     before = snapshot(source)
 
-    fresh = retopic(session, FakeLLM(RETOPICKED), FakeRenderer(b"NEW"), source, idea=NEW_IDEA)
+    fresh = retopic(
+        session,
+        FakeLLM(RETOPICKED),
+        FakeRenderer(b"NEW"),
+        FakeImageRenderer(),
+        source,
+        idea=NEW_IDEA,
+    )
 
     assert fresh.id != source.id
     assert snapshot(source) == before
@@ -905,7 +962,9 @@ def test_a_retopic_from_a_retired_version_still_works(session):
     `edit_template` refuses a retired row, so v2 is authored before v1 is retired.
     """
     hook, structure, visual = library(session)
-    source = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    source = generate_draft(
+        session, FakeLLM(WRITTEN), FakeRenderer(), FakeImageRenderer(), idea=IDEA
+    )
     next_version_of_everything(session, hook, structure, visual)
     for template in (hook, structure, visual):
         retire(session, template)
@@ -919,7 +978,12 @@ def test_a_retopic_from_a_retired_version_still_works(session):
     llm = FakeLLM(RETOPICKED)
     captured: dict = {}
     fresh = retopic(
-        session, llm, renderer_capturing(captured, png=b"RETIRED"), source, idea=NEW_IDEA
+        session,
+        llm,
+        renderer_capturing(captured, png=b"RETIRED"),
+        FakeImageRenderer(),
+        source,
+        idea=NEW_IDEA,
     )
 
     assert (fresh.hook_version, fresh.structure_version, fresh.visual_version) == (1, 1, 1)
@@ -931,14 +995,14 @@ def test_a_retopic_from_a_retired_version_still_works(session):
 
 def test_the_retopic_endpoint_creates_a_new_draft_and_says_what_it_spent(client, session):
     hook, structure, visual = library(session)
-    source = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    source = generate_draft(
+        session, FakeLLM(WRITTEN), FakeRenderer(), FakeImageRenderer(), idea=IDEA
+    )
     next_version_of_everything(session, hook, structure, visual)
     app.dependency_overrides[get_llm] = lambda: FakeLLM(RETOPICKED)
     app.dependency_overrides[get_html_renderer] = FakeRenderer
 
-    response = client.post(
-        "/drafts/retopic", json={"idea": NEW_IDEA, "source_draft_id": source.id}
-    )
+    response = client.post("/drafts/retopic", json={"idea": NEW_IDEA, "source_draft_id": source.id})
 
     assert response.status_code == 201
     body = response.json()
@@ -957,13 +1021,15 @@ def test_the_retopic_endpoint_creates_a_new_draft_and_says_what_it_spent(client,
 
 
 def test_a_retopic_can_start_from_a_published_post(client, session):
-    """"Take any past post" — the post page's entry point, resolved through its draft.
+    """ "Take any past post" — the post page's entry point, resolved through its draft.
 
     The join is `Draft.zernio_post_id == Post.late_post_id` (`metrics.draft_for_post`), the
     same one the Inbox and the scoreboard use.
     """
     library(session)
-    source = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    source = generate_draft(
+        session, FakeLLM(WRITTEN), FakeRenderer(), FakeImageRenderer(), idea=IDEA
+    )
     source.zernio_post_id = "late-xyz"
     post = add_post(session, "z-retopic", 900, "what went out")
     post.late_post_id = "late-xyz"
@@ -1068,34 +1134,33 @@ def test_the_retopic_endpoint_needs_exactly_one_source(client, session):
     library(session)
 
     assert client.post("/drafts/retopic", json={"idea": NEW_IDEA}).status_code == 422
-    assert client.post(
-        "/drafts/retopic",
-        json={"idea": NEW_IDEA, "source_draft_id": 1, "source_post_id": 1},
-    ).status_code == 422
-    unknown = client.post(
-        "/drafts/retopic", json={"idea": NEW_IDEA, "source_draft_id": 987654}
+    assert (
+        client.post(
+            "/drafts/retopic",
+            json={"idea": NEW_IDEA, "source_draft_id": 1, "source_post_id": 1},
+        ).status_code
+        == 422
     )
+    unknown = client.post("/drafts/retopic", json={"idea": NEW_IDEA, "source_draft_id": 987654})
     assert unknown.status_code == 404
     # The 422s above already prove the route is mounted; this names which id was refused.
     assert unknown.json()["detail"] == "no draft 987654"
 
 
-def test_a_retopic_from_a_vanished_version_is_a_conflict_not_a_redraw_of_another(
-    client, session
-):
+def test_a_retopic_from_a_vanished_version_is_a_conflict_not_a_redraw_of_another(client, session):
     """A 409 like the redraw's: the library cannot serve this draft's version, and falling
     back to a sibling is the mis-attribution the whole slice is about."""
     _, _, visual = library(session)
-    source = generate_draft(session, FakeLLM(WRITTEN), FakeRenderer(), idea=IDEA)
+    source = generate_draft(
+        session, FakeLLM(WRITTEN), FakeRenderer(), FakeImageRenderer(), idea=IDEA
+    )
     edited_visual(session, visual, "v2")
     session.delete(visual)
     session.flush()
     app.dependency_overrides[get_llm] = lambda: FakeLLM(RETOPICKED)
     app.dependency_overrides[get_html_renderer] = FakeRenderer
 
-    response = client.post(
-        "/drafts/retopic", json={"idea": NEW_IDEA, "source_draft_id": source.id}
-    )
+    response = client.post("/drafts/retopic", json={"idea": NEW_IDEA, "source_draft_id": source.id})
 
     assert response.status_code == 409
     assert visual.family_id in response.json()["detail"]

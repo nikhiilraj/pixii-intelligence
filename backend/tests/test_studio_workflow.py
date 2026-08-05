@@ -85,6 +85,16 @@ class Renderer:
         return b"PNG"
 
 
+class ImageRenderer:
+    """The workflow's second renderer. The visual below declares `html`, so nothing here
+    should ever reach this — `b"AI"` arriving on a draft would say the renderer was picked
+    from something other than the template. `tests/test_renderer_selection.py` is where that
+    choice is exercised on purpose."""
+
+    def generate(self, prompt: str, width: int, height: int) -> bytes:
+        return b"AI"
+
+
 def fetched(_: str) -> Fetched:
     text = "Acme changed its checkout flow to remove one field after reviewing support use."
     return Fetched(
@@ -129,6 +139,7 @@ def run(session, llm, *, idea, angle, requested_mode=None, renderer=None):
         llm,
         Search(),
         renderer or Renderer(),
+        ImageRenderer(),
         idea=idea,
         hook_id=hook.id,
         structure_id=structure.id,

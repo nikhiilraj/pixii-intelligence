@@ -181,12 +181,20 @@ def propose_topics(session: Session, llm: LLM, count: int) -> list[dict]:
 def run_autonomous(
     session: Session,
     llm: LLM,
-    renderer: HtmlRenderer | ImageRenderer,
+    html_renderer: HtmlRenderer,
+    image_renderer: ImageRenderer,
     *,
     cap: int,
     notify: Notifier = _log_notify,
 ) -> RunResult:
     """Produce drafts unattended, up to `cap`.
+
+    Both renderers, and that is a fix rather than plumbing. A run names no templates at all,
+    so every visual it draws is one `suggest_templates` chose — and this was handed a single
+    HTML renderer, which made an `ai` visual permanently undrawable here: `render_visual`
+    raised `UnsupportedRenderer`, `generate_draft` filed it under `visual_error`, and the run
+    counted the draft in `visuals_failed` as though the image service had declined. See
+    `generation._renderer_for`; the choice is made there, off the row actually used.
 
     Two deliberate limits on what this is allowed to do:
 
@@ -220,7 +228,9 @@ def run_autonomous(
     for topic in topics[:cap]:
         idea = str(topic.get("idea", "")).strip()
         try:
-            draft = generate_draft(session, llm, renderer, idea=idea, mode="autonomous")
+            draft = generate_draft(
+                session, llm, html_renderer, image_renderer, idea=idea, mode="autonomous"
+            )
             result.created += 1
             if draft.visual_error:
                 # Named per draft rather than only counted, because the count says a redraw

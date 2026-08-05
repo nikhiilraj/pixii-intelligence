@@ -158,7 +158,8 @@ def notify_run(session: Session, run: DailyRun, *, at: datetime | None = None) -
 def run_daily_slot(
     session: Session,
     llm: LLM,
-    renderer: HtmlRenderer | ImageRenderer,
+    html_renderer: HtmlRenderer,
+    image_renderer: ImageRenderer,
     *,
     now: datetime | None = None,
 ) -> DailyRun | None:
@@ -199,7 +200,12 @@ def run_daily_slot(
     lines: list[str] = []
     try:
         result = run_autonomous(
-            session, llm, renderer, cap=settings.autonomous_max_drafts, notify=lines.append
+            session,
+            llm,
+            html_renderer,
+            image_renderer,
+            cap=settings.autonomous_max_drafts,
+            notify=lines.append,
         )
     except Exception as exc:
         # Deliberately broad. Anything that escapes `run_autonomous` — a provider outage, a

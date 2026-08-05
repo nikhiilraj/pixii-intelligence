@@ -10,7 +10,14 @@ from app.daily import run_daily_slot, slot_date
 from app.models.daily_run import DailyRun
 from app.models.draft import Draft
 from app.notify import card
-from tests.test_autonomous import BrokenRenderer, FakeLLM, FakeRenderer, add_post, library
+from tests.test_autonomous import (
+    BrokenRenderer,
+    FakeImageRenderer,
+    FakeLLM,
+    FakeRenderer,
+    add_post,
+    library,
+)
 
 
 class Delivered:
@@ -93,7 +100,9 @@ def test_the_slot_date_is_local_and_can_differ_from_the_utc_date(monkeypatch):
 
 
 def test_a_due_slot_runs_and_records_what_it_did(ready, teams):
-    run = run_daily_slot(ready, FakeLLM(), FakeRenderer(), now=at("2026-08-05 09:05"))
+    run = run_daily_slot(
+        ready, FakeLLM(), FakeRenderer(), FakeImageRenderer(), now=at("2026-08-05 09:05")
+    )
 
     assert run is not None
     assert run.status == "complete"
@@ -103,8 +112,12 @@ def test_a_due_slot_runs_and_records_what_it_did(ready, teams):
 
 
 def test_a_second_tick_the_same_day_does_not_run_again(ready, teams):
-    run_daily_slot(ready, FakeLLM(), FakeRenderer(), now=at("2026-08-05 09:05"))
-    again = run_daily_slot(ready, FakeLLM(), FakeRenderer(), now=at("2026-08-05 17:40"))
+    run_daily_slot(
+        ready, FakeLLM(), FakeRenderer(), FakeImageRenderer(), now=at("2026-08-05 09:05")
+    )
+    again = run_daily_slot(
+        ready, FakeLLM(), FakeRenderer(), FakeImageRenderer(), now=at("2026-08-05 17:40")
+    )
 
     assert again is None
     assert len(runs(ready)) == 1
@@ -113,15 +126,24 @@ def test_a_second_tick_the_same_day_does_not_run_again(ready, teams):
 
 
 def test_the_next_day_runs_again(ready, teams):
-    run_daily_slot(ready, FakeLLM(), FakeRenderer(), now=at("2026-08-05 09:05"))
-    run_daily_slot(ready, FakeLLM(), FakeRenderer(), now=at("2026-08-06 09:05"))
+    run_daily_slot(
+        ready, FakeLLM(), FakeRenderer(), FakeImageRenderer(), now=at("2026-08-05 09:05")
+    )
+    run_daily_slot(
+        ready, FakeLLM(), FakeRenderer(), FakeImageRenderer(), now=at("2026-08-06 09:05")
+    )
 
     assert len(runs(ready)) == 2
     assert len(drafts(ready)) == 2
 
 
 def test_a_tick_before_the_hour_does_nothing_at_all(ready, teams):
-    assert run_daily_slot(ready, FakeLLM(), FakeRenderer(), now=at("2026-08-05 07:00")) is None
+    assert (
+        run_daily_slot(
+            ready, FakeLLM(), FakeRenderer(), FakeImageRenderer(), now=at("2026-08-05 07:00")
+        )
+        is None
+    )
     assert runs(ready) == []
     assert teams.cards == []
 
@@ -135,7 +157,9 @@ class BrokenLLM:
 
 
 def test_a_failed_run_is_recorded_and_still_notified(ready, teams):
-    run = run_daily_slot(ready, BrokenLLM(), FakeRenderer(), now=at("2026-08-05 09:05"))
+    run = run_daily_slot(
+        ready, BrokenLLM(), FakeRenderer(), FakeImageRenderer(), now=at("2026-08-05 09:05")
+    )
 
     assert run is not None
     assert run.status == "failed"
@@ -146,8 +170,12 @@ def test_a_failed_run_is_recorded_and_still_notified(ready, teams):
 def test_a_failed_run_does_not_free_the_day_for_a_retry(ready, teams):
     """A failed run has already spent whatever it spent. Retrying it inside the same day
     is how one outage becomes two batches of drafts."""
-    run_daily_slot(ready, BrokenLLM(), FakeRenderer(), now=at("2026-08-05 09:05"))
-    again = run_daily_slot(ready, FakeLLM(), FakeRenderer(), now=at("2026-08-05 10:05"))
+    run_daily_slot(
+        ready, BrokenLLM(), FakeRenderer(), FakeImageRenderer(), now=at("2026-08-05 09:05")
+    )
+    again = run_daily_slot(
+        ready, FakeLLM(), FakeRenderer(), FakeImageRenderer(), now=at("2026-08-05 10:05")
+    )
 
     assert again is None
     assert len(runs(ready)) == 1
@@ -161,7 +189,9 @@ def test_a_run_killed_mid_flight_is_still_reported(ready, teams):
     the day passed with no drafts and no message. That is a scheduled job failing in
     silence — the precise thing this slice exists to end.
     """
-    run_daily_slot(ready, FakeLLM(), FakeRenderer(), now=at("2026-08-05 09:05"))
+    run_daily_slot(
+        ready, FakeLLM(), FakeRenderer(), FakeImageRenderer(), now=at("2026-08-05 09:05")
+    )
     killed = runs(ready)[0]
     killed.status = "running"
     killed.notified_at = None
@@ -169,7 +199,9 @@ def test_a_run_killed_mid_flight_is_still_reported(ready, teams):
     ready.flush()
     teams.cards.clear()
 
-    run_daily_slot(ready, FakeLLM(), FakeRenderer(), now=at("2026-08-05 12:00"))
+    run_daily_slot(
+        ready, FakeLLM(), FakeRenderer(), FakeImageRenderer(), now=at("2026-08-05 12:00")
+    )
 
     ready.refresh(killed)
     assert killed.status == "failed"
@@ -181,7 +213,9 @@ def test_a_run_killed_mid_flight_is_still_reported(ready, teams):
 
 def test_a_run_still_in_progress_is_left_alone(ready, teams):
     """Twenty minutes in is a run that is working, not one that died."""
-    run_daily_slot(ready, FakeLLM(), FakeRenderer(), now=at("2026-08-05 09:05"))
+    run_daily_slot(
+        ready, FakeLLM(), FakeRenderer(), FakeImageRenderer(), now=at("2026-08-05 09:05")
+    )
     working = runs(ready)[0]
     working.status = "running"
     working.notified_at = None
@@ -189,7 +223,9 @@ def test_a_run_still_in_progress_is_left_alone(ready, teams):
     ready.flush()
     teams.cards.clear()
 
-    run_daily_slot(ready, FakeLLM(), FakeRenderer(), now=at("2026-08-05 09:25"))
+    run_daily_slot(
+        ready, FakeLLM(), FakeRenderer(), FakeImageRenderer(), now=at("2026-08-05 09:25")
+    )
 
     ready.refresh(working)
     assert working.status == "running"
@@ -200,8 +236,12 @@ def test_a_run_still_in_progress_is_left_alone(ready, teams):
 
 
 def test_one_card_per_run(ready, teams):
-    run_daily_slot(ready, FakeLLM(), FakeRenderer(), now=at("2026-08-05 09:05"))
-    run_daily_slot(ready, FakeLLM(), FakeRenderer(), now=at("2026-08-05 12:05"))
+    run_daily_slot(
+        ready, FakeLLM(), FakeRenderer(), FakeImageRenderer(), now=at("2026-08-05 09:05")
+    )
+    run_daily_slot(
+        ready, FakeLLM(), FakeRenderer(), FakeImageRenderer(), now=at("2026-08-05 12:05")
+    )
 
     assert len(teams.cards) == 1
 
@@ -211,11 +251,15 @@ def test_a_refused_card_is_retried_on_the_next_tick(ready, monkeypatch):
     monkeypatch.setattr(daily, "deliver", refused)
     monkeypatch.setattr(settings, "teams_webhook_url", "https://example.invalid/hook")
 
-    run = run_daily_slot(ready, FakeLLM(), FakeRenderer(), now=at("2026-08-05 09:05"))
+    run = run_daily_slot(
+        ready, FakeLLM(), FakeRenderer(), FakeImageRenderer(), now=at("2026-08-05 09:05")
+    )
     assert run is not None and run.notified_at is None
 
     refused.ok = True
-    run_daily_slot(ready, FakeLLM(), FakeRenderer(), now=at("2026-08-05 09:35"))
+    run_daily_slot(
+        ready, FakeLLM(), FakeRenderer(), FakeImageRenderer(), now=at("2026-08-05 09:35")
+    )
 
     assert len(refused.cards) == 2
     ready.refresh(run)
@@ -228,7 +272,9 @@ def test_a_refused_card_is_retried_on_the_next_tick(ready, monkeypatch):
 
 
 def test_the_card_carries_the_counts_and_a_link_out(ready, teams):
-    run_daily_slot(ready, FakeLLM(), FakeRenderer(), now=at("2026-08-05 09:05"))
+    run_daily_slot(
+        ready, FakeLLM(), FakeRenderer(), FakeImageRenderer(), now=at("2026-08-05 09:05")
+    )
 
     facts = {f["title"]: f["value"] for f in teams.cards[0]["body"][1]["facts"]}
     assert facts["Drafts created"] == "1"
@@ -245,7 +291,11 @@ def test_the_card_names_each_failure_and_not_only_the_count(ready, teams):
     """
     topics = {"topics": [{"idea": "one"}, {"idea": "two"}]}
     run_daily_slot(
-        ready, FakeLLM(topics=topics), BrokenRenderer(), now=at("2026-08-05 09:05")
+        ready,
+        FakeLLM(topics=topics),
+        BrokenRenderer(),
+        FakeImageRenderer(),
+        now=at("2026-08-05 09:05"),
     )
 
     facts = {f["title"]: f["value"] for f in teams.cards[0]["body"][1]["facts"]}

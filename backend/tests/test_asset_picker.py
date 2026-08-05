@@ -48,11 +48,12 @@ from app.models.template import Template, TemplateKind
 from app.publishing import lineage_metadata, push_draft
 from app.templates import approve, create_template
 from app.zernio import ZernioClient
+from tests.test_autonomous import FakeImageRenderer
 from tests.test_rendering import renderer_capturing
 
 # `stat-hero` v2 (template 1101) as it really is: two text slots and two `image_url` slots.
 STAT_HERO = (
-    '<div><span>{big_number}</span><h1>{headline}</h1>'
+    "<div><span>{big_number}</span><h1>{headline}</h1>"
     '<img src="{left_image_url}"><img src="{right_image_url}"></div>'
 )
 
@@ -168,6 +169,7 @@ def generated(
         session,
         FakeLLM(),
         renderer_capturing(captured, png=b"REALPNG"),
+        FakeImageRenderer(),
         idea="a nine figure exit",
         hook_id=hook.id,
         structure_id=structure.id,
@@ -296,13 +298,23 @@ def test_a_default_written_as_a_json_number_and_as_a_string_are_one_reference(se
     """US-008's delete guard compares `->> 'default_asset_id'` as text, so both shapes must
     normalise to the same stored value or a template default would be invisible to it."""
     as_number = chosen_assets(
-        Template(family_id="f", kind=TemplateKind.VISUAL, name="v", body={},
-                 slots=image_slots(default_asset_id=asset.id)),
+        Template(
+            family_id="f",
+            kind=TemplateKind.VISUAL,
+            name="v",
+            body={},
+            slots=image_slots(default_asset_id=asset.id),
+        ),
         {},
     )
     as_string = chosen_assets(
-        Template(family_id="f", kind=TemplateKind.VISUAL, name="v", body={},
-                 slots=image_slots(default_asset_id=str(asset.id))),
+        Template(
+            family_id="f",
+            kind=TemplateKind.VISUAL,
+            name="v",
+            body={},
+            slots=image_slots(default_asset_id=str(asset.id)),
+        ),
         {},
     )
 
@@ -370,8 +382,13 @@ def test_a_picked_value_for_a_text_slot_is_dropped(session, asset):
 def test_an_empty_pick_falls_through_to_the_default(session, asset):
     """A picker that sends `""` for an untouched slot must not shadow the template default."""
     values = chosen_assets(
-        Template(family_id="f", kind=TemplateKind.VISUAL, name="v", body={},
-                 slots=image_slots(default_asset_id=asset.id)),
+        Template(
+            family_id="f",
+            kind=TemplateKind.VISUAL,
+            name="v",
+            body={},
+            slots=image_slots(default_asset_id=asset.id),
+        ),
         {"right_image_url": "  "},
     )
 
@@ -527,6 +544,7 @@ def test_an_unattended_run_renders_a_real_image_from_a_template_default(session,
         session,
         FakeLLM({**WRITTEN, "topics": [{"idea": "one"}]}),
         renderer_capturing(captured, png=b"REALPNG"),
+        FakeImageRenderer(),
         cap=1,
     )
 
@@ -545,9 +563,7 @@ def test_the_autonomous_endpoint_reports_a_failed_visual(client, session):
     library(session)
     session.add(Post(zernio_id="p1", platform="linkedin", content="a previous post"))
     session.flush()
-    app.dependency_overrides[get_llm] = lambda: FakeLLM(
-        {**WRITTEN, "topics": [{"idea": "one"}]}
-    )
+    app.dependency_overrides[get_llm] = lambda: FakeLLM({**WRITTEN, "topics": [{"idea": "one"}]})
     app.dependency_overrides[get_html_renderer] = BrokenRenderer
 
     body = client.post("/drafts/autonomous-run?cap=1").json()

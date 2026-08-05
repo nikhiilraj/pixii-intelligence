@@ -42,6 +42,16 @@ class FakeRenderer:
         return b"IMG"
 
 
+class FakeImageRenderer:
+    """The image renderer a run now also carries, because it names no templates: every visual
+    it draws is one the model suggested, so it cannot be known in advance whether an `ai`
+    template is coming. `library()` below builds only `html` visuals, so `GEN` arriving on a
+    draft here would mean the renderer was chosen from something other than the template."""
+
+    def generate(self, prompt: str, width: int, height: int) -> bytes:
+        return b"GEN"
+
+
 class RecordingNotifier:
     def __init__(self):
         self.messages: list[str] = []
@@ -87,7 +97,7 @@ def test_a_run_produces_drafts_with_no_operator_involvement(session):
     library(session)
     add_post(session, "p1")
 
-    result = run_autonomous(session, FakeLLM(), FakeRenderer(), cap=1)
+    result = run_autonomous(session, FakeLLM(), FakeRenderer(), FakeImageRenderer(), cap=1)
 
     assert result.created == 1
     assert len(drafts(session)) == 1
@@ -97,7 +107,7 @@ def test_autonomous_drafts_are_marked_as_such(session):
     library(session)
     add_post(session, "p1")
 
-    run_autonomous(session, FakeLLM(), FakeRenderer(), cap=1)
+    run_autonomous(session, FakeLLM(), FakeRenderer(), FakeImageRenderer(), cap=1)
 
     assert drafts(session)[0].mode == "autonomous"
 
@@ -106,7 +116,7 @@ def test_an_autonomous_draft_carries_full_lineage(session):
     hook, structure, visual = library(session)
     add_post(session, "p1")
 
-    run_autonomous(session, FakeLLM(), FakeRenderer(), cap=1)
+    run_autonomous(session, FakeLLM(), FakeRenderer(), FakeImageRenderer(), cap=1)
 
     draft = drafts(session)[0]
     assert draft.hook_family == hook.family_id
@@ -119,7 +129,9 @@ def test_the_per_run_cap_is_enforced(session):
     library(session)
     add_post(session, "p1")
 
-    run_autonomous(session, FakeLLM(topics=THREE_TOPICS), FakeRenderer(), cap=2)
+    run_autonomous(
+        session, FakeLLM(topics=THREE_TOPICS), FakeRenderer(), FakeImageRenderer(), cap=2
+    )
 
     assert len(drafts(session)) == 2
 
@@ -128,7 +140,9 @@ def test_a_cap_of_zero_produces_nothing(session):
     library(session)
     add_post(session, "p1")
 
-    result = run_autonomous(session, FakeLLM(topics=THREE_TOPICS), FakeRenderer(), cap=0)
+    result = run_autonomous(
+        session, FakeLLM(topics=THREE_TOPICS), FakeRenderer(), FakeImageRenderer(), cap=0
+    )
 
     assert result.created == 0
     assert drafts(session) == []
@@ -139,7 +153,7 @@ def test_a_run_never_pushes_anything_to_zernio(session):
     library(session)
     add_post(session, "p1")
 
-    run_autonomous(session, FakeLLM(), FakeRenderer(), cap=1)
+    run_autonomous(session, FakeLLM(), FakeRenderer(), FakeImageRenderer(), cap=1)
 
     assert drafts(session)[0].zernio_post_id is None
     assert drafts(session)[0].pushed_at is None
@@ -231,7 +245,12 @@ def test_a_run_with_no_topics_is_reported_not_silently_empty(session):
     notifier = RecordingNotifier()
 
     result = run_autonomous(
-        session, FakeLLM(topics={"topics": []}), FakeRenderer(), cap=2, notify=notifier
+        session,
+        FakeLLM(topics={"topics": []}),
+        FakeRenderer(),
+        FakeImageRenderer(),
+        cap=2,
+        notify=notifier,
     )
 
     assert result.created == 0
@@ -248,7 +267,9 @@ def test_a_failing_run_notifies_rather_than_failing_silently(session):
     notifier = RecordingNotifier()
 
     with pytest.raises(AutonomousRunFailed):
-        run_autonomous(session, BrokenLLM(), FakeRenderer(), cap=1, notify=notifier)
+        run_autonomous(
+            session, BrokenLLM(), FakeRenderer(), FakeImageRenderer(), cap=1, notify=notifier
+        )
 
     assert any("model unavailable" in m for m in notifier.messages)
 
@@ -270,7 +291,12 @@ def test_one_bad_topic_does_not_abandon_the_rest_of_the_run(session):
     notifier = RecordingNotifier()
 
     result = run_autonomous(
-        session, FlakyLLM(topics=THREE_TOPICS), FakeRenderer(), cap=2, notify=notifier
+        session,
+        FlakyLLM(topics=THREE_TOPICS),
+        FakeRenderer(),
+        FakeImageRenderer(),
+        cap=2,
+        notify=notifier,
     )
 
     assert result.created == 1
@@ -283,7 +309,14 @@ def test_a_run_reports_what_it_did(session):
     add_post(session, "p1")
     notifier = RecordingNotifier()
 
-    run_autonomous(session, FakeLLM(topics=THREE_TOPICS), FakeRenderer(), cap=2, notify=notifier)
+    run_autonomous(
+        session,
+        FakeLLM(topics=THREE_TOPICS),
+        FakeRenderer(),
+        FakeImageRenderer(),
+        cap=2,
+        notify=notifier,
+    )
 
     assert any("2" in m for m in notifier.messages)
 
@@ -313,7 +346,9 @@ def test_a_draft_whose_visual_failed_is_not_reported_as_a_clean_success(session)
     add_post(session, "p1")
     notifier = RecordingNotifier()
 
-    result = run_autonomous(session, FakeLLM(), BrokenRenderer(), cap=1, notify=notifier)
+    result = run_autonomous(
+        session, FakeLLM(), BrokenRenderer(), FakeImageRenderer(), cap=1, notify=notifier
+    )
 
     assert result.created == 1
     assert result.failed == 0
@@ -330,7 +365,14 @@ def test_the_run_summary_names_the_missing_visuals(session):
     add_post(session, "p1")
     notifier = RecordingNotifier()
 
-    run_autonomous(session, FakeLLM(topics=THREE_TOPICS), BrokenRenderer(), cap=2, notify=notifier)
+    run_autonomous(
+        session,
+        FakeLLM(topics=THREE_TOPICS),
+        BrokenRenderer(),
+        FakeImageRenderer(),
+        cap=2,
+        notify=notifier,
+    )
 
     assert "no visual" in notifier.messages[-1]
     assert "2" in notifier.messages[-1]
@@ -346,7 +388,9 @@ def test_a_clean_run_says_nothing_about_visuals(session):
     add_post(session, "p1")
     notifier = RecordingNotifier()
 
-    result = run_autonomous(session, FakeLLM(), FakeRenderer(), cap=1, notify=notifier)
+    result = run_autonomous(
+        session, FakeLLM(), FakeRenderer(), FakeImageRenderer(), cap=1, notify=notifier
+    )
 
     assert result.visuals_failed == 0
     assert "visual" not in notifier.messages[-1]
@@ -357,7 +401,9 @@ def test_a_run_refuses_when_the_library_is_not_ready(session):
     notifier = RecordingNotifier()
 
     with pytest.raises(AutonomousRunFailed):
-        run_autonomous(session, FakeLLM(), FakeRenderer(), cap=1, notify=notifier)
+        run_autonomous(
+            session, FakeLLM(), FakeRenderer(), FakeImageRenderer(), cap=1, notify=notifier
+        )
 
     assert notifier.messages
 

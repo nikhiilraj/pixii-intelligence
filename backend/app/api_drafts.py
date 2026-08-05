@@ -220,6 +220,10 @@ def _renderer(session: SessionDep, draft: Draft, html_renderer, image_renderer):
     version the draft's lineage names, so reading `renderer` off a newer row would hand an
     HTML template to the image renderer — or the reverse — as soon as one edit changes it.
     Still tolerant of a missing row, because `regenerate_visual` is what refuses that case.
+
+    The generation-time twin is `generation._renderer_for`, which lives over there because it
+    cannot be answered here: generation may suggest the visual, so the row is not settled
+    until it has. Deliberately not merged with this one — see that docstring.
     """
     template = session.exec(
         select(Template).where(
@@ -229,16 +233,6 @@ def _renderer(session: SessionDep, draft: Draft, html_renderer, image_renderer):
     ).first()
     declared = template.body.get("renderer") if template else "html"
     return image_renderer if declared == "ai" else html_renderer
-
-
-def _renderer_for(visual: Template | None, html_renderer, image_renderer):
-    """Which renderer a *chosen* visual declares — the generation-time twin of `_renderer`.
-
-    `_renderer` above resolves the renderer from a draft's recorded `(family, version)`, which
-    is the right question for a redraw and the wrong one here: nothing has been generated yet,
-    so the template row in hand is the one that will be used.
-    """
-    return image_renderer if visual and visual.body.get("renderer") == "ai" else html_renderer
 
 
 @router.get("")
@@ -277,14 +271,17 @@ def create_draft(
     image_renderer: ImageRendererDep,
     payload: IdeaIn,
 ) -> DraftOut:
-    """Legacy direct generation used by variants and existing API clients."""
-    visual = session.get(Template, payload.visual_id) if payload.visual_id else None
-    renderer = _renderer_for(visual, html_renderer, image_renderer)
+    """Legacy direct generation used by variants and existing API clients.
+
+    Both renderers go down, and the choice is made below: this route may name no visual at
+    all, in which case generation suggests one and only generation knows what it picked.
+    """
     try:
         draft = generate_draft(
             session,
             llm,
-            renderer,
+            html_renderer,
+            image_renderer,
             idea=payload.idea,
             hook_id=payload.hook_id,
             structure_id=payload.structure_id,
@@ -310,15 +307,19 @@ def create_workflow_draft(
     image_renderer: ImageRendererDep,
     payload: IdeaIn,
 ) -> DraftOut:
-    """Run the persisted editorial-to-review Studio workflow. Nothing publishes here."""
-    visual = session.get(Template, payload.visual_id) if payload.visual_id else None
-    renderer = _renderer_for(visual, html_renderer, image_renderer)
+    """Run the persisted editorial-to-review Studio workflow. Nothing publishes here.
+
+    Both renderers, chosen from inside once the visual is settled — `payload.visual_id` is
+    optional, and reading the renderer off it here is what handed every suggested `ai`
+    template to the HTML renderer. See `generation._renderer_for`.
+    """
     try:
         draft = generate_reviewed_draft(
             session,
             llm,
             search,
-            renderer,
+            html_renderer,
+            image_renderer,
             idea=payload.idea,
             hook_id=payload.hook_id,
             structure_id=payload.structure_id,
@@ -349,7 +350,6 @@ def retry_draft(
     hook = generated_from(session, source.hook_family, source.hook_version)
     structure = generated_from(session, source.structure_family, source.structure_version)
     visual = generated_from(session, source.visual_family, source.visual_version)
-    renderer = _renderer_for(visual, html_renderer, image_renderer)
     requested_mode = None
     if source.editorial_brief_id is not None:
         brief = session.get(EditorialBrief, source.editorial_brief_id)
@@ -358,7 +358,8 @@ def retry_draft(
         session,
         llm,
         search,
-        renderer,
+        html_renderer,
+        image_renderer,
         idea=source.idea,
         hook_id=hook.id,
         structure_id=structure.id,
@@ -436,10 +437,10 @@ def create_retopic(
 
     The source is read and never written: this is a new row, not `regenerate-text`, which
     rewrites one draft in place and holds its lineage still. Both the templates and the
-    renderer come from the source's own `(family, version)` — see `generation.retopic` and
-    `_renderer` — so a re-topic of a v1 draft is written by v1 even once v4 exists, and a
-    version that has since been retired still works, because the version history is the
-    attribution record.
+    renderer come from the source's own `(family, version)` — see `generation.retopic`, which
+    resolves the row and lets `generation._renderer_for` read the renderer off it — so a
+    re-topic of a v1 draft is written and drawn by v1 even once v4 exists, and a version that
+    has since been retired still works, because the version history is the attribution record.
 
     409 for a recorded version that is no longer in the table, exactly as the redraw does:
     the library cannot serve this draft's version, and silently substituting a sibling is
@@ -451,7 +452,8 @@ def create_retopic(
         draft = retopic(
             session,
             meter.watch(llm),
-            meter.watch(_renderer(session, source, html_renderer, image_renderer)),
+            meter.watch(html_renderer),
+            meter.watch(image_renderer),
             source,
             idea=payload.idea,
         )
@@ -527,7 +529,8 @@ def create_variants(
             generate_draft(
                 session,
                 meter.watch(llm),
-                meter.watch(_renderer_for(visual, html_renderer, image_renderer)),
+                meter.watch(html_renderer),
+                meter.watch(image_renderer),
                 idea=payload.idea,
                 hook_id=hook.id,
                 structure_id=structure.id,
@@ -871,6 +874,7 @@ def autonomous_run(
     session: SessionDep,
     llm: LLMDep,
     html_renderer: HtmlRendererDep,
+    image_renderer: ImageRendererDep,
     cap: int | None = None,
 ) -> dict:
     """Run unattended generation now, capped. Produces drafts here; pushes nothing.
@@ -888,6 +892,11 @@ def autonomous_run(
     click behind the scheduler's switch would put the operator's own button behind a setting
     that is `False` by default and describes a different thing; the control that matters here
     is the cap, which is enforced above.
+
+    An image renderer is injected alongside the HTML one because a run names no templates:
+    every visual it draws is suggested, so this route cannot know which renderer the run will
+    need. It was given only the HTML one, which made an `ai` suggestion undrawable here and
+    counted the resulting `UnsupportedRenderer` as a failed image service.
     """
     # The meter is created here rather than inside `run_autonomous` so the count survives the
     # raise: `AutonomousRunFailed` leaves the run with no result to read, and a failed run is
@@ -898,6 +907,7 @@ def autonomous_run(
             session,
             meter.watch(llm),
             meter.watch(html_renderer),
+            meter.watch(image_renderer),
             # ponytail: clamped silently rather than rejected with a 422. The ceiling is
             # configuration, not part of this endpoint's contract, so "you asked for more
             # than is allowed" has no useful answer for the caller beyond the run it gets.

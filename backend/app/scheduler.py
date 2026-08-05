@@ -10,7 +10,7 @@ from app.db import engine
 from app.llm import AzureChat
 from app.metrics import sync_metrics
 from app.reconcile import reconcile_publications
-from app.rendering import CloudflareRenderer
+from app.rendering import AzureImageRenderer, CloudflareRenderer
 from app.zernio import ZernioClient
 
 log = logging.getLogger("pixii.scheduler")
@@ -60,16 +60,21 @@ def tick_daily_slot() -> None:
     needs delivering — because a guard split between the trigger and the function is a guard
     with two versions of the truth.
 
-    The adapters are constructed before that question is asked, which buys a pair of idle
-    HTTP clients on most ticks and keeps the `finally` that closes them honest. A run is
-    minutes of paid work; the clients are microseconds.
+    The adapters are constructed before that question is asked, which buys three idle HTTP
+    clients on most ticks and keeps the `finally` that closes them honest. A run is minutes
+    of paid work; the clients are microseconds.
+
+    The image renderer is here because the run's visuals are *suggested*, so a tick cannot
+    know whether today's draft needs it — see `generation._renderer_for`. Constructing it
+    costs an `httpx.Client` against whatever `azure_openai_image_*` holds, including the
+    empty defaults; it reaches the network only when an `ai` template is actually drawn.
     """
     from sqlmodel import Session
 
-    llm, renderer = AzureChat(), CloudflareRenderer()
+    llm, renderer, image_renderer = AzureChat(), CloudflareRenderer(), AzureImageRenderer()
     try:
         with Session(engine) as session:
-            run = run_daily_slot(session, llm, renderer)
+            run = run_daily_slot(session, llm, renderer, image_renderer)
         if run is not None:
             log.info("daily slot %s finished: %s", run.run_date, run.status)
     except Exception:
@@ -79,6 +84,7 @@ def tick_daily_slot() -> None:
     finally:
         llm.close()
         renderer.close()
+        image_renderer.close()
 
 
 def start() -> None:
