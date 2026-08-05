@@ -30,7 +30,7 @@ prompt versions and template lineage: a number whose rubric is unknown compares 
 
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
@@ -174,6 +174,8 @@ class Deduction:
 
     def __post_init__(self) -> None:
         if self.criterion not in _BY_KEY:
+            # `!r` on the criterion for the reason `_whole` gives: this sentence is quoted
+            # back to the model on the repair attempt, and it is the model's own string.
             raise ValueError(
                 f"unknown criterion {self.criterion!r}; the rubric has {sorted(_BY_KEY)}"
             )
@@ -261,9 +263,10 @@ class ReadinessReport:
     # names.
     blocking: tuple[Finding, ...] = ()
 
-    # Whatever the caller wants to find the candidate again by. Free-form because this
-    # slice persists nothing; the shape belongs to the slice that adds the table.
-    subject: Mapping[str, Any] = field(default_factory=dict)
+    # There is deliberately no field naming the candidate this report is about. The caller
+    # has the candidate in hand — it just passed it in — and the durable answer to "which
+    # template was this" is the trace row `evaluate` writes, which records the family and
+    # version. A second copy here would be a third place for that pair to be wrong.
 
     def __post_init__(self) -> None:
         if not _SEMVER.match(self.rubric_version):
@@ -402,6 +405,12 @@ def evaluate(
         # permits exactly one, and the way a "max 2 attempts" loop becomes a "max 5"
         # loop is somebody editing a constant. There is no constant. A third attempt
         # requires adding a call, which is visible in review.
+        #
+        # `first` goes into the message *outside* the fence, and what makes that safe is
+        # the `!r` on every model-supplied value in the messages it is built from — see
+        # `_whole` and `Deduction.__post_init__`. `repr` escapes the newlines a model
+        # would need to draw a second instruction block in here; dropping it for
+        # readability puts the model's own text into the un-fenced part of the prompt.
         answer = traced_call(
             session,
             llm,
@@ -428,10 +437,6 @@ def evaluate(
         prompt_version=_READINESS.version,
         criteria=_scored(deductions),
         blocking=blocking,
-        subject={
-            "template_family_id": template.family_id,
-            "template_version": template.version,
-        },
     )
 
 
@@ -518,6 +523,9 @@ def _whole(value: Any, where: str) -> int:
         return value
     if isinstance(value, float) and value.is_integer():
         return int(value)
+    # `!r`, not `!s`. This message is quoted back to the model on the repair attempt and
+    # `value` is whatever the model wrote; `repr` escapes the newlines it would need to
+    # address the model from inside its own error message.
     raise RubricOutputError(f"{where}: points must be a whole number, got {value!r}")
 
 
