@@ -16,33 +16,50 @@ import Studio, { type DraftSummary } from "./Studio";
 
 export const dynamic = "force-dynamic";
 
+/** One query parameter, as typed and as a row id — `["21", "21"]`, or `["abc", null]`.
+ *
+ *  `?draft=<id>` is the whole of US-012's addressability, and it is validated here rather than
+ *  handed to the API. It is not distrust of the backend — `GET /drafts/abc` answers 422 with a
+ *  usable message — it is that a query string has more shapes than a path segment does.
+ *  `?draft=` is empty and would read as a request for `/drafts/`, and `?draft=1&draft=2`
+ *  arrives as an array; both would otherwise become a request nobody meant to make.
+ *
+ *  A function, and not the regex written out twice. `?research=` needs exactly this and both
+ *  copies would have to be corrected together for as long as they both existed — the second
+ *  reader of a rule is where the rule starts to drift.
+ *
+ *  Returns both halves because the caller needs both: the id to fetch with, and the raw text to
+ *  say *"abc" is not a draft id* with. Reconstructing what was typed from a `null` is not
+ *  possible, and reporting nothing is how a mistyped link becomes a blank screen.
+ *
+ *  ponytail: one regex, no parser. Ceiling: a real one the day a screen takes a parameter that
+ *  is not a positive integer. */
+function idParam(
+  params: { [key: string]: string | string[] | undefined },
+  name: string,
+): { typed: string; id: string | null } {
+  const raw = params[name];
+  const typed = (Array.isArray(raw) ? raw[0] : (raw ?? "")).trim();
+  return { typed, id: /^\d+$/.test(typed) ? typed : null };
+}
+
 export default async function StudioPage({
   searchParams,
 }: {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
-  /* `?draft=<id>` — the whole of US-012's addressability, and it is validated here rather than
-     handed to the API.
-     ponytail: one regex, no parser. It is not distrust of the backend — `GET /drafts/abc`
-     answers 422 with a usable message — it is that a query string has more shapes than a path
-     segment does. `?draft=` is empty and would read as `/drafts/`, and `?draft=1&draft=2`
-     arrives as an array; both would otherwise become a request nobody meant to make. */
   const params = await searchParams;
-  const raw = params.draft;
-  const wanted = (Array.isArray(raw) ? raw[0] : (raw ?? "")).trim();
-  const id = /^\d+$/.test(wanted) ? wanted : null;
+  const { typed: wanted, id } = idParam(params, "draft");
 
-  /* `?research=<id>` — which research run to show under the draft, validated the same way and
-     for the same reasons as `?draft=` above.
-
+  /* `?research=<id>` — which research run to show under the draft.
      **This is the whole of the draft→research link, and it is in the address bar because it is
      nowhere else.** `Draft` has no `research_job_id` column: nothing in the schema connects a
-     draft to the research behind it, so there is no id to read off the draft. Resolving it here
-     rather than inside the panel is what makes that a one-line change — the day the column
-     exists, this becomes `requested.data.research_job_id` and the panel is untouched. */
-  const rawResearch = params.research;
-  const wantedResearch = (Array.isArray(rawResearch) ? rawResearch[0] : (rawResearch ?? "")).trim();
-  const researchId = /^\d+$/.test(wantedResearch) ? wantedResearch : null;
+     draft to the research behind it, so there is no id to read off the draft. Nor is that link
+     obviously the right one — the chain is brief → dossier → candidate, so the true foreign key
+     is likely to hang off the editorial brief and a draft would reach research *through* it.
+     Resolving the id here rather than inside the panel is what keeps that an open question: the
+     day the column lands, whichever one it is, this line changes and the panel does not. */
+  const { typed: wantedResearch, id: researchId } = idParam(params, "research");
 
   // The library is read here so the picker has something to offer. A failed read is handed on
   // as `null` rather than as `[]`: only the templates are load-bearing enough to replace the

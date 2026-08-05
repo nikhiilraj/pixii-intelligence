@@ -342,6 +342,11 @@ function Dossierpanel({ dossier }: { dossier: Dossier }) {
       <div>
         <p className="min-w-0 wrap-anywhere text-meta font-medium">{dossier.question}</p>
         <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 text-caption text-muted">
+          {/* Which run this is. On a panel that shows content hashes in full so a reviewer can
+              re-fetch a page and compare, "which run am I looking at" cannot only be answerable
+              by reading the address bar — the number has to travel with the screenshot. */}
+          <dt>Run</dt>
+          <dd className="min-w-0 font-mono">{dossier.job_id}</dd>
           <dt>Mode</dt>
           {/* Both modes, always. One would make "the floor asked for light and the run did
               none" unanswerable, which is the silent downgrade `ResearchJob` stores two

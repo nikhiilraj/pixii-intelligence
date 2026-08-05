@@ -169,10 +169,15 @@ class DossierOut(BaseModel):
 class ResearchJobOut(BaseModel):
     """One row of the index: enough to recognise a run by, and nothing it concluded.
 
-    No claim counts and no source counts. Counting the rows of every job to draw a list is the
-    whole database read to answer "what runs exist", and a count beside a question reads as a
-    score for it — `2 sources` next to `5 sources` invites exactly the comparison the corpus
-    cannot support.
+    No claim counts and no source counts, and the reason is not only cost. Counting the rows of
+    every job to draw a list reads the whole database to answer "what runs exist" — but the
+    stronger reason is that a count beside a question reads as a score for it: `2 sources` next
+    to `5 sources` invites exactly the comparison the corpus cannot support.
+
+    It also sidesteps a NULL that could not survive this shape. `sources_fetched` is `int |
+    None` on the job row, where NULL means no fetch loop ran and `0` means every candidate
+    failed; a count derived by joining `research_source` would answer `0` for both and lose the
+    distinction on the way. The dossier is where those numbers live, with their NULLs intact.
     """
 
     job_id: int
@@ -250,10 +255,16 @@ def list_research(session: SessionDep, limit: int = 100) -> list[ResearchJobOut]
     Newest first is a chronology and not a ranking — the same ordering `GET /drafts` uses, and
     the only ordering over these rows that carries no claim about their quality.
 
-    ponytail: this route exists because nothing links a draft to the research behind it.
-    `Draft` has no `research_job_id` column, so a human on the draft screen has no other way to
-    reach a dossier. Upgrade path: when a draft records its job, the screen resolves the id
-    from the draft and this becomes an index nobody has to use.
+    **This is a route in its own right and not scaffolding for the missing link column.** It
+    was proposed as a stopgap — nothing joins a draft to the research behind it, so the draft
+    screen would otherwise have no way to reach a dossier at all — and that framing was wrong:
+    browsing what research exists is its own need. A run that failed, a run that produced only
+    unknowns, a run whose queries came back empty are all things a person looks for without
+    holding a draft, and a pointer on a draft would not answer any of them.
+
+    Which is why `state` is on every row. An empty list from this route reads as "no research
+    exists"; a `failed` row is the run that died, and collapsing the two would make the failure
+    invisible in the one place a person goes looking for it.
     """
     rows = session.exec(
         select(ResearchJob).order_by(desc(col(ResearchJob.started_at))).limit(limit)

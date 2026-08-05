@@ -575,6 +575,13 @@ describe("the mode", () => {
     expect(valueFor("Mode")).toHaveTextContent("light · floor asked for light (number, law)");
   });
 
+  it("says which run is on screen", () => {
+    // Otherwise the only answer is the address bar, which does not travel with a screenshot.
+    render(<ResearchPanel draftId={7} research={view()} />);
+
+    expect(valueFor("Run")).toHaveTextContent("4");
+  });
+
   it("prints an em dash for a freshness policy nobody stated", () => {
     render(<ResearchPanel draftId={7} research={view()} />);
 
