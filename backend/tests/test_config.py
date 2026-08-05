@@ -20,6 +20,7 @@ SECRET_FIELDS = (
     "azure_openai_image_api_key",
     "cloudflare_browser_rendering_token",
     "teams_webhook_url",
+    "firecrawl_api_key",
     "brave_search_api_key",
 )
 
@@ -72,6 +73,7 @@ def test_configured_reports_presence_without_revealing_anything():
     assert reported == {
         "zernio": True,
         "azure_chat": True,
+        "firecrawl_search": True,
         "azure_image": True,
         "cloudflare_rendering": True,
         "brave_search": True,

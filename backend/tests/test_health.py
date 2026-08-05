@@ -18,6 +18,7 @@ def test_health_reports_status_database_and_credentials():
         "azure_chat",
         "azure_image",
         "cloudflare_rendering",
+        "firecrawl_search",
         "brave_search",
     }
 
@@ -59,5 +60,6 @@ def test_health_reports_the_variants_ceiling_as_a_sibling_of_the_credential_flag
         "azure_chat",
         "azure_image",
         "cloudflare_rendering",
+        "firecrawl_search",
         "brave_search",
     }

@@ -17,8 +17,9 @@ Three rules shape every function here, and each of them is a thing that goes wro
   neutralising anything in it that could close the delimiter. A page that says "ignore your
   instructions" must be unable to say it *to the model*.
 
-`SearchProvider` remains the seam used by tests and orchestration. Production uses the small
-Brave adapter below; when its key is absent `NoSearchProvider` refuses factual research loudly.
+`SearchProvider` remains the seam used by tests and orchestration. Production prefers the small
+Firecrawl adapter below and falls back to Brave; when neither key is present `NoSearchProvider`
+refuses factual research loudly.
 """
 
 import logging
@@ -132,12 +133,11 @@ class SearchProvider(Protocol):
 
 
 class NoSearchProvider:
-    """The only provider that exists in this repository, and it refuses.
+    """An explicit refusal used when neither production search provider is configured.
 
-    There is no search-provider account and no API key, so anything else here would be a
-    guess at an API nobody has called. Refusing loudly at the seam is better than a stub
-    returning `[]`, which would let a `light` run report "searched, found nothing" — the
-    exact `0`-versus-NULL lie the rest of this module is built to avoid.
+    Refusing loudly at the seam is better than a stub returning `[]`, which would let a `light`
+    run report "searched, found nothing" — the exact `0`-versus-NULL lie the rest of this module
+    is built to avoid.
 
     `none` mode never reaches a provider, so this class is a working production adapter for
     the one mode that needs no searching.
@@ -171,6 +171,50 @@ class BraveSearchProvider:
         )
         response.raise_for_status()
         rows = response.json().get("web", {}).get("results", [])
+        return [
+            SearchResult(
+                url=str(row.get("url") or ""),
+                title=str(row.get("title") or "") or None,
+                snippet=str(row.get("description") or "") or None,
+            )
+            for row in rows
+            if str(row.get("url") or "").strip()
+        ]
+
+    def close(self) -> None:
+        self._client.close()
+
+
+class FirecrawlSearchProvider:
+    """Firecrawl v2 web-search adapter returning candidates, never scraped evidence.
+
+    Firecrawl can scrape results in the same request, but this adapter asks only for discovery
+    metadata. The research layer then fetches each URL through its SSRF checks and records the
+    final redirected address, preserving the same evidence boundary as Brave.
+    """
+
+    def __init__(self, api_key: str, endpoint: str, transport: httpx.BaseTransport | None = None):
+        self._client = httpx.Client(
+            headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+            timeout=20.0,
+            transport=transport,
+        )
+        self._endpoint = endpoint
+
+    def search(self, query: str, *, limit: int) -> Sequence[SearchResult]:
+        response = self._client.post(
+            self._endpoint,
+            json={
+                "query": query,
+                "limit": min(max(limit, 1), RESULTS_PER_QUERY),
+                "sources": ["web"],
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not payload.get("success", False):
+            raise SearchUnavailable("Firecrawl search returned an unsuccessful response")
+        rows = payload.get("data", {}).get("web", [])
         return [
             SearchResult(
                 url=str(row.get("url") or ""),
@@ -1100,6 +1144,7 @@ __all__ = [
     "Budget",
     "DossierFinalised",
     "Evidence",
+    "FirecrawlSearchProvider",
     "ModeBelowFloor",
     "NoSearchProvider",
     "ProposedCitation",

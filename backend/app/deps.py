@@ -8,7 +8,12 @@ from app.config import settings
 from app.db import get_session
 from app.llm import LLM, AzureChat
 from app.rendering import AzureImageRenderer, CloudflareRenderer, HtmlRenderer, ImageRenderer
-from app.research import BraveSearchProvider, NoSearchProvider, SearchProvider
+from app.research import (
+    BraveSearchProvider,
+    FirecrawlSearchProvider,
+    NoSearchProvider,
+    SearchProvider,
+)
 from app.zernio import ZernioClient
 
 # Every route takes the session this way. Declaring it as an annotated alias rather than
@@ -30,7 +35,11 @@ LLMDep = Annotated[LLM, Depends(get_llm)]
 
 def get_search() -> Iterator[SearchProvider]:
     provider: SearchProvider
-    if settings.brave_search_api_key:
+    if settings.firecrawl_api_key:
+        provider = FirecrawlSearchProvider(
+            settings.firecrawl_api_key, settings.firecrawl_search_endpoint
+        )
+    elif settings.brave_search_api_key:
         provider = BraveSearchProvider(
             settings.brave_search_api_key, settings.brave_search_endpoint
         )

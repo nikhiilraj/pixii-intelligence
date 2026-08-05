@@ -138,8 +138,11 @@ class Settings(BaseSettings):
     azure_openai_chat_deployment: str = ""
     azure_openai_chat_api_version: str = ""
 
-    # Brave Search backs light/deep research. Empty is a valid configuration for opinion-only
-    # (`none`) flows; factual flows fail explicitly at the research stage when it is absent.
+    # Firecrawl backs light/deep research when configured; Brave is the fallback provider.
+    # Empty is valid for opinion-only (`none`) flows. Factual flows fail explicitly when
+    # neither provider is configured.
+    firecrawl_api_key: str = Field(default="", repr=False)
+    firecrawl_search_endpoint: str = "https://api.firecrawl.dev/v2/search"
     brave_search_api_key: str = Field(default="", repr=False)
     brave_search_endpoint: str = "https://api.search.brave.com/res/v1/web/search"
 
@@ -164,6 +167,7 @@ class Settings(BaseSettings):
         return {
             "zernio": bool(self.zernio_api_key),
             "azure_chat": bool(self.azure_openai_chat_api_key),
+            "firecrawl_search": bool(self.firecrawl_api_key),
             "brave_search": bool(self.brave_search_api_key),
             "azure_image": bool(self.azure_openai_image_api_key),
             "cloudflare_rendering": bool(self.cloudflare_browser_rendering_token),

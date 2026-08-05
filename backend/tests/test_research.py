@@ -5,8 +5,8 @@ recorded state and not a silence; a citation may only name a page this run actua
 fetched text reaches the model as quoted data and cannot address it; and a ceiling refuses
 work rather than counting it afterwards.
 
-**No live search runs anywhere in this file, or anywhere in this application.** There is no
-search-provider key. `FixtureSearch` below is the whole of the search that has ever happened.
+**No live search runs in this file.** `FixtureSearch` below is the whole of the search exercised
+by these dossier tests; production provider contracts have their own isolated adapter tests.
 """
 
 import hashlib
