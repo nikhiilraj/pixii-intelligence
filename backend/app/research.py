@@ -103,7 +103,22 @@ class ModeBelowFloor(ValueError):
     wrong: silently running `none` for a brief full of numbers ships uncited facts, and
     silently upgrading to `light` spends money the caller did not agree to. The caller is told
     which floor applies and asks again.
+
+    **The three facts are attributes, not only words in the message.** What was asked, what the
+    floor is, and what the detector saw are exactly what a refusal has to state — and an HTTP
+    handler composing that body off `str(exc)` would be regexing a sentence this module is free
+    to reword. `api_drafts._below_floor` reads them, and `mode_signals` is the one a reader
+    actually acts on: the detector is a heuristic, so the first question about a surprising
+    floor is "what did it see".
     """
+
+    def __init__(
+        self, message: str, *, requested: str, recommended: str, signals: tuple[str, ...]
+    ) -> None:
+        super().__init__(message)
+        self.requested = requested
+        self.recommended = recommended
+        self.signals = signals
 
 
 class DossierFinalised(RuntimeError):
@@ -403,7 +418,10 @@ def resolve_mode(question: str, requested: str | None = None) -> Resolved:
     if DEPTH[requested] < DEPTH[recommended]:
         raise ModeBelowFloor(
             f"this brief needs at least {recommended!r} research "
-            f"({', '.join(signals)}); {requested!r} was requested"
+            f"({', '.join(signals)}); {requested!r} was requested",
+            requested=requested,
+            recommended=recommended,
+            signals=signals,
         )
     return Resolved(mode=requested, recommended=recommended, signals=signals)
 

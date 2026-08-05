@@ -63,6 +63,14 @@ const DRAFT: Draft = {
   gate_results: [],
   // Null, not an empty review: this fixture is a draft nobody verified.
   verification_result: null,
+  readiness_result: null,
+  // A measured zero: the loop was never entered. `revision_rounds` is required for that
+  // reason — an omitted count and a count of nothing are different facts.
+  revision_rounds: 0,
+  // Null with a `ready` stage and no error, which is exactly what the six drafts in the live
+  // database are: pre-migration. `lineageState` reads all three fields, so a fixture that
+  // omitted this could not say which of the five records it is.
+  editorial: null,
 };
 
 function renderStudio(research: Parameters<typeof Studio>[0]["research"]) {

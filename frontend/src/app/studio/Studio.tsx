@@ -20,15 +20,25 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  modePayload,
+  ResearchDepth,
+  type DepthChoice,
+} from "@/components/research-depth";
+import {
   API_BASE,
   assetSrc,
+  belowFloor,
   calls,
   getJson,
   inFlight,
   postForm,
   postJson,
+  retryable,
+  reviewReady,
+  type ApiFailure,
   type Asset,
   type AssetKind,
+  type BelowFloor,
   type Draft,
   type GenerationStage,
   type Publication,
@@ -39,6 +49,7 @@ import {
 
 import PublishPanel from "./PublishPanel";
 import ResearchPanel, { type ResearchView } from "./ResearchPanel";
+import ReviewPanel from "./ReviewPanel";
 
 type Picked = { hook: number | null; structure: number | null; visual: number | null };
 
@@ -378,14 +389,18 @@ function AssetPicker({
   );
 }
 
-/** The `POST /drafts` body. Lifted out of the component when the five controls moved onto Radix
- *  Select, so that "the default state asks for nothing" is a property of a function a test can
- *  call rather than a claim about a component tree. */
+/** The `POST /drafts/workflow` body. Lifted out of the component when the five controls moved
+ *  onto Radix Select, so that "the default state asks for nothing" is a property of a function a
+ *  test can call rather than a claim about a component tree — and the depth control is held to
+ *  the same standard: at Auto this body carries no `research_mode` key at all.
+ *
+ *  Also sent to `POST /drafts/suggest`, which shares `IdeaIn` and ignores the depth. */
 export function draftPayload(
   idea: string,
   picked: Picked,
   visual: Template | undefined,
   assetValues: Record<string, string>,
+  depth: DepthChoice = "auto",
 ) {
   return {
     idea,
@@ -393,6 +408,7 @@ export function draftPayload(
     structure_id: picked.structure,
     visual_id: picked.visual,
     asset_values: assetPayload(visual, assetValues),
+    ...modePayload(depth),
   };
 }
 
@@ -552,77 +568,56 @@ function RunProgress({ draft }: { draft: Draft }) {
   );
 }
 
-function EditorialWorkflow({ draft }: { draft: Draft }) {
-  const editorial = draft.editorial;
-  // No `?? "historical"`. `generation_stage` is on every `DraftOut` and is required in
-  // `Draft`, so the fallback could only ever fire for a response that does not exist — and
-  // when it did fire it labelled a legacy `POST /drafts` row created a second ago as
-  // historical. Whether a draft is genuinely pre-migration is `editorial === null`, below.
-  const label = draft.generation_stage.replaceAll("_", " ");
+/* `EditorialWorkflow` stood here and is now `ReviewPanel` in its own file. It showed five of the
+ * fields the response carries — objective, audience, action, one line of research and a thesis —
+ * and dropped the rest on the floor: the constraints, the tension, the audience stake, the
+ * beats, the planned claims' provenance, the requested depth, the claim verification, the
+ * rubric's summary and every one of its deductions, the revision count when it was zero, and
+ * every prompt name and version. It also called a draft that failed at planning "historical",
+ * which is the `?? "historical"` conflation in a second costume — see `lineageState`. */
+
+/** What a below-floor refusal is shown as, and the raise it offers.
+ *
+ *  The API answers 409 with the request, the floor and the signals, and the toast every other
+ *  failure on this page goes to could only ever show the sentence. This is one of the two
+ *  failures Studio can answer *with a control* rather than with words — the fix is one click on
+ *  a depth the caller is allowed to ask for — so it renders where the decision is, beside the
+ *  control it is about.
+ *
+ *  Cleared by changing the depth or the idea, because either makes it stale: the floor is a
+ *  function of the idea, so a refusal left standing over an edited one describes a request
+ *  nobody would make now. */
+function BelowFloorNotice({
+  refusal,
+  onRaise,
+}: {
+  refusal: BelowFloor;
+  onRaise: () => void;
+}) {
   return (
-    <Card className="space-y-4 p-4 text-sm">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="font-medium">Editorial workflow</h3>
-        <span className="rounded-full border border-border px-2 py-0.5 text-caption uppercase tracking-label">
-          {label}
-        </span>
-      </div>
-      {draft.generation_error && (
-        <p role="alert" className="text-red-700 dark:text-red-400">
-          {draft.generation_error}
-        </p>
-      )}
-      {editorial ? (
-        <div className="grid gap-4 md:grid-cols-2">
-          <section>
-            <h4 className="font-medium">Brief</h4>
-            <p className="mt-1 text-muted">{editorial.brief.objective}</p>
-            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-caption">
-              <dt className="text-muted">Audience</dt><dd>{editorial.brief.audience}</dd>
-              <dt className="text-muted">Action</dt><dd>{editorial.brief.desired_action}</dd>
-              <dt className="text-muted">Research</dt>
-              <dd>
-                {editorial.brief.research_mode} (floor {editorial.brief.recommended_mode})
-                {editorial.brief.mode_signals.length
-                  ? ` — ${editorial.brief.mode_signals.join(", ")}`
-                  : " — no factual floor signal"}
-              </dd>
-            </dl>
-          </section>
-          <section>
-            <h4 className="font-medium">Angle</h4>
-            <p className="mt-1">{editorial.angle.thesis}</p>
-            <p className="mt-1 text-caption text-muted">{editorial.angle.tension}</p>
-            <p className="mt-2 text-caption">CTA: {editorial.angle.cta}</p>
-          </section>
-          <section>
-            <h4 className="font-medium">Planned claims</h4>
-            <ul className="mt-1 list-disc space-y-1 pl-4 text-caption">
-              {editorial.planned_claims.map((claim) => <li key={claim.id}>{claim.text}</li>)}
-            </ul>
-          </section>
-          <section>
-            <h4 className="font-medium">Quality review</h4>
-            {(draft.gate_results ?? []).length ? (
-              <ul className="mt-1 list-disc space-y-1 pl-4 text-caption text-red-700 dark:text-red-400">
-                {(draft.gate_results ?? []).map((finding, index) => (
-                  <li key={`${finding.gate}-${index}`}>[{finding.gate}] {finding.detail}</li>
-                ))}
-              </ul>
-            ) : <p className="mt-1 text-caption text-muted">Deterministic gates passed.</p>}
-            {draft.readiness_result && (
-              <p className="mt-2 text-caption">
-                {draft.readiness_result.readiness_points}/100 — {draft.readiness_result.decision.replaceAll("_", " ")}
-              </p>
-            )}
-            {(draft.revision_rounds ?? 0) > 0 && (
-              <p className="mt-1 text-caption text-muted">{draft.revision_rounds} bounded revision round(s)</p>
-            )}
-          </section>
-        </div>
-      ) : (
-        <p className="text-muted">Historical draft — editorial lineage was not recorded when it was created.</p>
-      )}
+    <Card role="alert" className="border-danger/40 bg-danger/10 text-meta">
+      <p className="font-medium">
+        That is less research than this idea needs, so nothing was generated.
+      </p>
+      <p className="mt-1 text-muted">
+        You asked for <strong>{refusal.requested}</strong>; the floor detected for this idea is{" "}
+        <strong>{refusal.floor}</strong>.{" "}
+        {refusal.signals.length > 0
+          ? `It read ${refusal.signals.join(", ")} in what you wrote.`
+          : "It recorded no signal for that, which is unusual — the wording above is the API's own."}
+      </p>
+      <p className="mt-1 text-muted">
+        The depth can be raised and never lowered below the floor. Lowering it silently would
+        ship facts nothing looked up; raising it silently would spend money nobody agreed to.
+        Nothing was written and nothing was billed.
+      </p>
+      {/* It sets the control and stops. Generating from here would put a second spending
+          button on the page, inside an alert, which is the one place a click is least
+          deliberate — the rule this column already follows for Write variants is that a press
+          costing several completions is chosen and never arrived at. */}
+      <Button variant="outline" className="mt-3" onClick={onRaise}>
+        Set the depth to {refusal.floor}
+      </Button>
     </Card>
   );
 }
@@ -782,6 +777,15 @@ export default function Studio({
 }) {
   const [idea, setIdea] = useState("");
   const [picked, setPicked] = useState<Picked>({ hook: null, structure: null, visual: null });
+  // How much research to ask for. `IdeaIn.research_mode` has been on the backend since the
+  // workflow existed and this page had never sent it, so every draft ever generated here ran at
+  // whatever floor the detector picked — a depth nobody could raise for a subject they knew was
+  // contested. Auto is the default and sends nothing.
+  const [depth, setDepth] = useState<DepthChoice>("auto");
+  // A refusal the API answered with structured facts, or `null`. Held in state rather than sent
+  // to the toast every other failure goes to, because it is the one this page can answer with a
+  // control — see `BelowFloorNotice`.
+  const [refusal, setRefusal] = useState<BelowFloor | null>(null);
   const [reason, setReason] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(initialDraft);
   // The previous-image URL is stable while its bytes are not: redraw and restore both replace
@@ -878,6 +882,16 @@ export default function Studio({
     const result = await postJson<T>(path, body);
     setBusy(null);
     if (result.ok) return result.data;
+    // A below-floor refusal is answered on the page, not in a toast, and it is the one failure
+    // here that earns the difference: it carries three facts the toast would flatten into one
+    // sentence, and the remedy is a control this page owns. Handled in `call` rather than at
+    // the two buttons so that Generate and Write variants — which both send a depth — cannot
+    // disagree about how it looks. Every other failure keeps the toast.
+    const floor = belowFloor(result as ApiFailure);
+    if (floor) {
+      setRefusal(floor);
+      return null;
+    }
     // The message alone, with no title. `call` is shared by five different mutations, so any
     // title it could compose would either be a URL path — which is not something to show a
     // reader — or invented. The API's `detail` strings are written for a person (US-003), and
@@ -886,7 +900,7 @@ export default function Studio({
     return null;
   }
 
-  const payload = draftPayload(idea, picked, visual, assetValues);
+  const payload = draftPayload(idea, picked, visual, assetValues, depth);
 
   // Dresses the textarea only, now that the five selects on this page draw their own border from
   // the same tokens. It was `border-black/15 rounded-md text-sm`, which is what made the old
@@ -921,11 +935,47 @@ export default function Studio({
         </div>
         <textarea
           value={idea}
-          onChange={(e) => setIdea(e.target.value)}
+          onChange={(e) => {
+            setIdea(e.target.value);
+            // The floor is a function of the idea, so a refusal about the previous wording
+            // describes a request nobody would make now.
+            setRefusal(null);
+          }}
           rows={7}
           placeholder="An idea, a finding, a link — what is this post about?"
           className={field}
         />
+
+        {/* The depth, above the templates: how much of the outside world this post rests on is
+            a decision about the post, and it is taken before which shape it is poured into.
+            One control for the page — Generate, Write variants and Suggest all read the same
+            value, because they are all about the same idea. */}
+        <div className="rounded-card border border-border bg-surface p-3">
+          <p className="mb-3 font-mono text-caption uppercase tracking-[0.12em] text-muted">
+            Research depth
+          </p>
+          <ResearchDepth
+            value={depth}
+            onChange={(next) => {
+              setDepth(next);
+              setRefusal(null);
+            }}
+            // While a run is going, for the same reason Generate is: this depth belongs to the
+            // next request, and a control that moves under a run in flight reads as changing
+            // the one on screen.
+            disabled={running}
+          />
+        </div>
+
+        {refusal && (
+          <BelowFloorNotice
+            refusal={refusal}
+            onRaise={() => {
+              setDepth(refusal.floor);
+              setRefusal(null);
+            }}
+          />
+        )}
 
         <div className="rounded-card border border-border bg-surface p-3">
           <p className="mb-3 font-mono text-caption uppercase tracking-[0.12em] text-muted">Template path</p>
@@ -1144,7 +1194,11 @@ export default function Studio({
             variant="outline"
             disabled={!idea.trim() || busy !== null}
             onClick={async () => {
-              const b = await call<Batch>("/drafts/variants", { idea });
+              // `{ idea }` plus the depth, and still not `payload`: the route varies the
+              // templates itself and ignores a hook_id, but the depth is about the idea rather
+              // than the combination — every variant is the same subject, so a batch run at a
+              // different depth from the one on screen would be a control the page ignored.
+              const b = await call<Batch>("/drafts/variants", { idea, ...modePayload(depth) });
               if (b) {
                 setBatch(b);
                 setDraft(null);
@@ -1235,7 +1289,11 @@ export default function Studio({
         ) : draft ? (
           <>
             <Lineage draft={draft} assets={library} />
-            <EditorialWorkflow draft={draft} />
+            {/* Not gated on `!running`, unlike the research panel below it: the stage badge and
+                the brief are what a reviewer watches during the minute, and the poll re-renders
+                this every second. Its no-lineage branch says "not written yet" for an in-flight
+                run rather than reporting it as historical. */}
+            <ReviewPanel draft={draft} />
             {running && <RunProgress draft={draft} />}
 
             {/* "In Zernio as a draft ({id}). Publishing stays a human act." stood here, under
@@ -1357,14 +1415,24 @@ export default function Studio({
               {/* Identical for a loaded draft and a just-written one, because they are the same
                   value in the same state — `initialDraft` seeds it. Disabled once
                   `zernio_post_id` is set: pushing creates a Zernio DRAFT and nothing here ever
-                  publishes. */}
+                  publishes.
+
+                  `reviewReady`, not `stage === "failed" || stage === "failed_review"` written
+                  out here. That pair is what the predicate's own docstring says it exists to
+                  replace, and it had drifted: `unreviewed` is in neither comparison, so a
+                  legacy `POST /drafts` row — the one state whose whole definition is that
+                  nothing vouched for it — offered a live Push that the server answers 409 to.
+                  A button that is alive and then 409s is a button that looks like it did
+                  something, which is the rule the comment above this block already states.
+                  The delta is exactly `unreviewed`: `running` already covers every in-flight
+                  stage, and `ready` stays enabled, which is what keeps the six pre-migration
+                  drafts in the live database pushable. */}
               <Button
                 disabled={
                   busy !== null ||
                   running ||
                   draft.zernio_post_id !== null ||
-                  draft.generation_stage === "failed" ||
-                  draft.generation_stage === "failed_review"
+                  !reviewReady(draft.generation_stage)
                 }
                 onClick={async () => {
                   const d = await call<Draft>(`/drafts/${draft.id}/push`);
@@ -1373,7 +1441,11 @@ export default function Studio({
               >
                 {draft.zernio_post_id ? "In Zernio" : "Push to Zernio as draft"}
               </Button>
-              {(draft.generation_stage === "failed" || draft.generation_stage === "failed_review") && (
+              {/* `retryable`, the same predicate the backend's retry route composes, and for the
+                  reason the Push gate above just learned: a hand-written pair drifts. It
+                  correctly excludes `unreviewed` — retrying a legacy row would start a workflow
+                  the row never had. */}
+              {retryable(draft.generation_stage) && (
                 <Button
                   variant="outline"
                   disabled={busy !== null}

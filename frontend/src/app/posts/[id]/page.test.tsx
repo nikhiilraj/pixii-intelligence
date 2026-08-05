@@ -101,6 +101,9 @@ function draft(overrides: Partial<Draft> = {}): Draft {
     gate_results: [],
     // Null, not an empty review: this fixture is a draft nobody verified.
     verification_result: null,
+    readiness_result: null,
+    revision_rounds: 0,
+    editorial: null,
     ...overrides,
   };
 }

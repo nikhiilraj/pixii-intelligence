@@ -193,7 +193,14 @@ export type Draft = {
   generation_stage: GenerationStage;
   generation_error: string | null;
   gate_results: { gate: string; detail: string }[];
-  readiness_result?: {
+  /** The editorial-readiness rubric's verdict, or `null` for a run that never reached it.
+   *
+   *  **Required, and `null` is a state.** `DraftOut` sends the key on every response; `?` here
+   *  invited a `?? {}`-shaped fallback that no real response exercises, which is the same
+   *  mistake `generation_stage` documents below. `readiness_points` is a **measured** number:
+   *  `0/100` is a run the rubric scored to nothing, so `{points || "—"}` prints an em dash for
+   *  a real measurement. */
+  readiness_result: {
     rubric_version: string;
     prompt_name: string;
     prompt_version: string;
@@ -225,8 +232,20 @@ export type Draft = {
       blocks: boolean;
     }[];
   } | null;
-  revision_rounds?: number;
-  editorial?: {
+  /** Bounded revision rounds this run spent. **A measured count, so `0` prints `0`** — it means
+   *  the candidate was clean and the loop was never entered, which is a fact about the run and
+   *  not an absence. Required for the same reason the two fields above are. */
+  revision_rounds: number;
+  /** The persisted editorial artifacts behind this draft, or `null`.
+   *
+   *  **Required, because `null` has to mean something here.** With `?` this is three values —
+   *  a lineage, an explicit `null`, and `undefined` for a caller that did not set it — and the
+   *  `editorial === null` test that tells a pre-migration row from a reviewed one silently
+   *  fails for the third. `DraftOut` sends the key on every response.
+   *
+   *  `null` alone does **not** mean "historical": a run that failed before the brief landed has
+   *  no brief either. `lineageState` in `studio/ReviewPanel` is what separates the four cases. */
+  editorial: {
     brief: {
       id: number;
       objective: string;
@@ -253,6 +272,14 @@ export type Draft = {
     research: Dossier | null;
     research_error: string | null;
     write_prompt: { name: string | null; version: string | null };
+    /** Every prompt that ran under this draft's correlation id, distinct by name and version,
+     *  in first-call order — `_prompts_run` in backend/app/api_drafts.py.
+     *
+     *  The only place `research.queries`, `research.claims` and `revision.targeted` are named:
+     *  those three write no artifact that carries a prompt, so the four inline `prompt` fields
+     *  above cannot cover them. `calls` is a **measured** count and never a score; the order is
+     *  the order the run made the calls in and is not a ranking. */
+    prompts: { name: string; version: string; calls: number }[];
     correlation_id: string | null;
   } | null;
 };
@@ -304,6 +331,66 @@ export type Publication = {
 };
 
 /* --- research ---------------------------------------------------------------------------- */
+
+/** How much looking-up a brief gets — `MODES` in backend/app/models/research.py.
+ *
+ *  Written out as a value, not only a union type, for the reason `STAGES` is: a type disappears
+ *  at compile time and proves nothing about what the server accepts.
+ *  `test_research.py::test_the_declared_modes_are_exactly_the_ones_on_the_wire` holds the other
+ *  end, so adding a depth on one side fails on the other.
+ *
+ *  **This array is a declaration order, not a ranking, and nothing may sort or present by it.**
+ *  The backend's `DEPTH` exists for exactly one comparison — is a request below the floor —
+ *  and its own comment refuses any other reading. The control built from this labels each depth
+ *  by what it does, so a reader is choosing a kind of run rather than picking a position off a
+ *  scale. */
+export const RESEARCH_MODES = ["none", "light", "deep"] as const;
+
+export type ResearchMode = (typeof RESEARCH_MODES)[number];
+
+/** A request for a depth the idea's own floor forbids, as the API refuses it.
+ *
+ *  `POST /drafts/workflow`, `/drafts/variants` and `/drafts/retopic` all answer 409 with these
+ *  three fields beside the sentence. They are read off `detail` rather than out of `message`
+ *  for the reason `ApiFailure.detail` exists at all: `messageFrom` flattens the object into
+ *  "…, requested_mode: none, recommended_mode: light", so every fact survives only as prose and
+ *  recovering `mode_signals` from it means regexing a sentence.
+ *
+ *  `null` for any other failure — including a 409 from `NoUsableTemplates`, which is the same
+ *  status with a string detail. The shape is the discriminator, never the status. */
+export type BelowFloor = {
+  /** What was asked for. Never `null` here: a request that expressed no depth cannot be
+   *  below a floor, so this refusal only exists when a mode was named. */
+  requested: ResearchMode;
+  /** The least this idea may be run with, as `research.recommend_mode` detected it. */
+  floor: ResearchMode;
+  /** What the detector saw — `["number", "organisation"]`. `[]` is possible in principle and
+   *  cannot occur with a floor above `none`; it is rendered as a sentence rather than as an
+   *  empty list either way. The first question about a surprising floor is this one. */
+  signals: string[];
+  /** The API's own sentence, already written for a reader. */
+  message: string;
+};
+
+export function belowFloor(failure: ApiFailure): BelowFloor | null {
+  if (failure.kind !== "http" || failure.status !== 409) return null;
+  const detail = failure.detail;
+  if (typeof detail !== "object" || detail === null) return null;
+  const { requested_mode, recommended_mode, mode_signals } = detail as {
+    requested_mode?: unknown;
+    recommended_mode?: unknown;
+    mode_signals?: unknown;
+  };
+  const known = (value: unknown): value is ResearchMode =>
+    RESEARCH_MODES.includes(value as ResearchMode);
+  if (!known(requested_mode) || !known(recommended_mode)) return null;
+  return {
+    requested: requested_mode,
+    floor: recommended_mode,
+    signals: Array.isArray(mode_signals) ? mode_signals.map(String) : [],
+    message: failure.message,
+  };
+}
 
 /** `CLAIM_STATUSES` in backend/app/models/research.py — what the evidence did to one claim.
  *

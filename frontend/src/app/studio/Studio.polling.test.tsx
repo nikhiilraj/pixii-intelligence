@@ -44,6 +44,12 @@ function draft(stage: GenerationStage, overrides: Partial<Draft> = {}): Draft {
     generation_error: null,
     gate_results: [],
     verification_result: null,
+    readiness_result: null,
+    revision_rounds: 0,
+    // Overridable, and the in-flight cases below leave it null on purpose: a run at
+    // `planning` has not written a brief yet, which `lineageState` must not read as
+    // pre-migration.
+    editorial: null,
     ...overrides,
   };
 }

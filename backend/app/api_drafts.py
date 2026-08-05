@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 from sqlmodel import col, desc, select
 
-from app import research, workflow
+from app import editorial, research, workflow
 from app.api_research import _out as research_out
 from app.autonomous import AutonomousRunFailed, SpendMeter, run_autonomous
 from app.config import settings
@@ -34,6 +34,7 @@ from app.llm import LLMResponseError
 from app.metrics import draft_for_post
 from app.models.draft import Draft
 from app.models.editorial import AnglePlan, EditorialBrief, PlannedClaim
+from app.models.generation_trace import GenerationTrace
 from app.models.post import Post
 from app.models.publication import CANCEL_SCHEDULE, PUBLISH_NOW, SCHEDULE, Publication
 from app.models.stage import GenerationStage, retryable, review_ready
@@ -53,6 +54,10 @@ class IdeaIn(BaseModel):
     # (`generation.chosen_assets`), so this is not a second route to writing prose into a
     # template. Absent slots fall back to the slot's own `default_asset_id`.
     asset_values: dict[str, str] = {}
+    # The operator's research depth, or `None` for "none was expressed" — which is not `"none"`
+    # mode. `None` lets the detected floor decide; `"none"` is a request to look nothing up, and
+    # is refused for a brief whose floor is above it. Passed straight to `research.resolve_mode`
+    # and never compared here; see `_refuse_below_floor`.
     research_mode: str | None = None
 
 
@@ -215,8 +220,95 @@ def _editorial_lineage(session: SessionDep, draft: Draft) -> dict | None:
             "name": draft.write_prompt_name,
             "version": draft.write_prompt_version,
         },
+        "prompts": _prompts_run(session, draft.correlation_id),
         "correlation_id": draft.correlation_id,
     }
+
+
+def _prompts_run(session: SessionDep, correlation_id: str | None) -> list[dict]:
+    """Every prompt that ran under this draft's correlation id, in call order.
+
+    **The only way research and revision reach a review screen.** Four stages carry their own
+    prompt on the artifact they wrote — the brief, the angle plan, the write and the rubric —
+    and two do not: `research._QUERIES`/`_CLAIMS` write a `ResearchJob`, which has no prompt
+    columns, and `revision._REVISION` writes nothing but a count. So a reviewer asking "which
+    revision prompt rewrote this" had no answer anywhere, while the row that knows sat in
+    `generation_trace` with no route reading it.
+
+    Distinct `(name, version)` pairs with a count, not one entry per call: a revision loop makes
+    up to three calls against one prompt, and three identical rows say nothing the count does
+    not. Ordered by first call, which is stage order — and by nothing else. It is not a ranking
+    and `calls` is not a score.
+
+    A prompt whose version changed mid-run appears twice, and that is correct rather than
+    untidy: two versions genuinely ran.
+
+    ponytail: one query per draft with lineage, on a route that already reads a whole dossier
+    per draft. Ceiling: a join, or dropping this from the list route, if `GET /drafts` is ever
+    slow enough to measure.
+    """
+    if correlation_id is None:
+        return []
+    rows = session.exec(
+        select(GenerationTrace)
+        .where(GenerationTrace.correlation_id == correlation_id)
+        .order_by(col(GenerationTrace.id))
+    ).all()
+    seen: dict[tuple[str, str], dict] = {}
+    for row in rows:
+        key = (row.prompt_name, row.prompt_version)
+        if key not in seen:
+            seen[key] = {"name": row.prompt_name, "version": row.prompt_version, "calls": 0}
+        seen[key]["calls"] += 1
+    return list(seen.values())
+
+
+def _check_mode(idea: str, requested: str | None) -> None:
+    """Refuse a depth below this idea's floor here, before anything is written.
+
+    **Not a second opinion.** It calls `research.resolve_mode` on
+    `editorial.research_question(idea)` — the same function, on the same text, that
+    `editorial.build_brief` calls a moment later — so this cannot disagree with the run. The
+    answer is thrown away; only the refusal is wanted.
+
+    It is here because of what happens without it, which is *not* a 502. `build_brief` resolves
+    the mode before it calls a model, and `generate_reviewed_draft` stores any planning error as
+    a `failed` draft — so a below-floor request costs nothing and leaves a row per attempt
+    saying `planning: ModeBelowFloor: …`. One press of Write variants leaves `variants_max` of
+    them. Those rows are a user's typo recorded as failed generation attempts, and the reason is
+    knowable before a draft exists; a refusal a caller can act on is worth more here than an
+    audit record of a request that was never run.
+
+    **The floor can still rise after this passes, and that failure stays a stored one.**
+    `plan_angle` re-resolves over the idea *and* the claims the model just planned, which is a
+    fact this request could not have known — see that docstring. So Studio has to render a
+    `failed` draft whose error names `ModeBelowFloor` as well as reading this response; both
+    paths exist and neither replaces the other.
+
+    409 rather than 422: the same register as `NoUsableTemplates` above — the request is
+    well-formed and the system will not serve it in the state it is in — and 422 is the shape
+    FastAPI owns for its own validation errors, which clients parse differently.
+    """
+    try:
+        research.resolve_mode(editorial.research_question(idea), requested)
+    except research.ModeBelowFloor as exc:
+        raise HTTPException(
+            status_code=409,
+            # Structured, not merely the sentence. A reviewer's first question about a
+            # surprising floor is what the detector saw, and `signals` is the only answer;
+            # composing it out of the message would mean parsing prose on the client.
+            detail={
+                "error": str(exc),
+                "requested_mode": exc.requested,
+                "recommended_mode": exc.recommended,
+                "mode_signals": list(exc.signals),
+            },
+        ) from exc
+    except ValueError as exc:
+        # A mode name this version does not know — `resolve_mode`'s other refusal. 422 is right
+        # here and 409 is not: the field's value is wrong, rather than the request conflicting
+        # with anything about the idea.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _load(session: SessionDep, draft_id: int) -> Draft:
@@ -355,7 +447,11 @@ def create_workflow_draft(session: SessionDep, llm: LLMDep, payload: IdeaIn) -> 
 
     A second press returns the running draft rather than a second run. The claim is a UNIQUE
     index, so that holds against a double-click and not merely against a slow one.
+
+    A depth below the idea's floor is refused before the claim, so nothing is written and no
+    thread starts — see `_check_mode`, including what it deliberately cannot catch.
     """
+    _check_mode(payload.idea, payload.research_mode)
     key = workflow.claim_key(
         idea=payload.idea,
         hook_id=payload.hook_id,
@@ -443,6 +539,10 @@ class RetopicIn(BaseModel):
     idea: str
     source_draft_id: int | None = None
     source_post_id: int | None = None
+    # The depth for the *new* subject, never inherited from the source — see `generation.retopic`,
+    # which explains why a re-topic's floor is detected from the new idea. This is the operator
+    # raising that floor deliberately, which is the one thing the detector cannot do for them.
+    research_mode: str | None = None
 
 
 class RetopicOut(DraftOut):
@@ -513,7 +613,11 @@ def create_retopic(
     re-topic is not pushable because a model produced text against a template that once worked.
     The row is returned either way, with its stage and its reason, because a failed attempt
     that is auditable is worth more than a 502 that leaves nothing behind.
+
+    `research_mode` raises that new floor and can never lower it, and a request below it is
+    refused before the source is even resolved — see `_check_mode`.
     """
+    _check_mode(payload.idea, payload.research_mode)
     source = _source_draft(session, payload)
     meter = SpendMeter()
     try:
@@ -525,6 +629,7 @@ def create_retopic(
             meter.watch(image_renderer),
             source,
             idea=payload.idea,
+            requested_mode=payload.research_mode,
         )
     except NoUsableTemplates as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -544,6 +649,9 @@ class VariantsIn(BaseModel):
 
     idea: str
     count: int | None = None
+    # One depth for the whole batch. The idea is the same across every combination and the floor
+    # is detected from the idea, so a per-variant depth would be N answers to one question.
+    research_mode: str | None = None
 
 
 class VariantsOut(BaseModel):
@@ -603,6 +711,10 @@ def create_variants(
     so pinning one would answer a question nobody asked here — `POST /drafts` is where a chosen
     combination is written. Assets come from each visual's own `default_asset_id`.
     """
+    # Before the clamp and before a single combination is resolved. Without it a below-floor
+    # request writes one `failed` draft per variant, all with the same planning error, and
+    # `keep_variant` is then the only way to clear them.
+    _check_mode(payload.idea, payload.research_mode)
     meter = SpendMeter()
     # ponytail: clamped silently rather than 422'd, matching the autonomous route — the ceiling
     # is configuration, and "you asked for more than is allowed" has no answer for the caller
@@ -624,6 +736,7 @@ def create_variants(
                 hook_id=hook.id,
                 structure_id=structure.id,
                 visual_id=visual.id,
+                requested_mode=payload.research_mode,
             )
             for hook, structure, visual in variant_combinations(session, count)
         ]

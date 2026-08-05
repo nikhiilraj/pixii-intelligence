@@ -24,8 +24,10 @@ from app.models.research import (
     COMPLETED,
     CONTRADICTS,
     DEEP,
+    DEPTH,
     DISPUTED,
     LIGHT,
+    MODES,
     NONE,
     REFUTED,
     RUNNING,
@@ -258,6 +260,45 @@ def test_a_mode_below_the_floor_is_refused_rather_than_quietly_raised():
     with pytest.raises(ModeBelowFloor) as raised:
         resolve_mode(FACTUAL, NONE)
     assert LIGHT in str(raised.value)
+
+
+def test_the_refusal_carries_what_was_asked_the_floor_and_what_the_detector_saw():
+    """As fields, not only as a sentence.
+
+    `api_drafts` composes an HTTP body out of these three and Studio renders them separately —
+    `mode_signals` most of all, because the detector is a heuristic and "what did it see" is the
+    first question about a surprising floor. Off `str(exc)` that body would be a regex over
+    wording this module is free to change.
+    """
+    with pytest.raises(ModeBelowFloor) as raised:
+        resolve_mode(FACTUAL, NONE)
+
+    assert raised.value.requested == NONE
+    assert raised.value.recommended == LIGHT
+    assert raised.value.signals
+    assert all(isinstance(signal, str) for signal in raised.value.signals)
+
+
+# The three depths, written out independently of `MODES` — comparing the tuple to itself proves
+# nothing. This list is one half of the backend/frontend contract and its twin is
+# `RESEARCH_MODES` in frontend/src/lib/api.ts, which the Studio control is built from; adding a
+# depth on one side and not the other fails here or there. Same arrangement, and same reason, as
+# `test_stage.py`'s `DECLARED`.
+DECLARED_MODES = ["none", "light", "deep"]
+
+
+def test_the_declared_modes_are_exactly_the_ones_on_the_wire():
+    assert list(MODES) == DECLARED_MODES
+
+
+def test_depth_orders_the_modes_and_nothing_else_may_read_it():
+    """`DEPTH` exists for one comparison: is a request below the floor.
+
+    Pinned as a mapping over exactly the three modes so that it stays usable for that and
+    unusable as a ranking — it is explicitly not an ordering anything may sort or present by,
+    which is the never-rank rule applied to a place it would look reasonable.
+    """
+    assert sorted(DEPTH, key=lambda mode: DEPTH[mode]) == DECLARED_MODES
 
 
 def test_the_floor_is_a_floor_and_not_a_setting():

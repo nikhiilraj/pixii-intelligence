@@ -54,6 +54,11 @@ const DRAFT: Draft = {
   gate_results: [],
   // Null, not an empty review: this fixture is a draft nobody verified.
   verification_result: null,
+  readiness_result: null,
+  revision_rounds: 0,
+  // Pre-migration: `ready`, no lineage, nothing failed. Required rather than optional so a
+  // fixture has to say which of the five editorial records it is.
+  editorial: null,
 };
 
 function publication(overrides: Partial<Publication> = {}): Publication {

@@ -5,10 +5,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import ScoreboardPage from "@/app/scoreboard/page";
 import {
+  belowFloor,
   calls,
   getJson,
   inFlight,
   postJson,
+  RESEARCH_MODES,
   retryable,
   reviewReady,
   STAGES,
@@ -342,5 +344,72 @@ describe("the generation stage contract", () => {
       "evaluating",
       "rendering",
     ]);
+  });
+});
+
+/* The other half of this pair is
+ * `backend/tests/test_research.py::test_the_declared_modes_are_exactly_the_ones_on_the_wire`.
+ * Same arrangement as the stage contract above and for the same reason: both sides compare
+ * against an independently written list, so a depth added on one side fails on that side. */
+describe("the research mode contract", () => {
+  it("declares exactly the modes backend/app/models/research.py declares", () => {
+    expect([...RESEARCH_MODES]).toEqual(["none", "light", "deep"]);
+  });
+});
+
+/* Reading a below-floor refusal off the response, which cannot be done off `message`.
+ *
+ * `messageFrom` flattens the 409's object detail into "…, requested_mode: none,
+ * recommended_mode: light", so every fact survives only as prose and `mode_signals` — an array
+ * — does not survive at all. This is the same reason `PublishPanel.classify` reads
+ * `current_revision` off `detail` rather than regexing a sentence. */
+describe("belowFloor", () => {
+  const refusal: ApiFailure = {
+    ok: false,
+    kind: "http",
+    status: 409,
+    message: "this brief needs at least 'light' research (number, organisation)",
+    detail: {
+      error: "this brief needs at least 'light' research (number, organisation)",
+      requested_mode: "none",
+      recommended_mode: "light",
+      mode_signals: ["number", "organisation"],
+    },
+  };
+
+  it("reads the request, the floor and the signals off the structured detail", () => {
+    expect(belowFloor(refusal)).toEqual({
+      requested: "none",
+      floor: "light",
+      signals: ["number", "organisation"],
+      message: refusal.kind === "http" ? refusal.message : "",
+    });
+  });
+
+  it("is the shape that discriminates, never the status", () => {
+    // `NoUsableTemplates` is a 409 too, with a plain string detail. Reading this one off the
+    // status alone would turn "approve a template first" into a depth refusal offering to
+    // raise the research depth, which fixes nothing.
+    expect(
+      belowFloor({
+        ok: false,
+        kind: "http",
+        status: 409,
+        message: "approve at least one hook, structure and visual",
+        detail: "approve at least one hook, structure and visual",
+      }),
+    ).toBeNull();
+  });
+
+  it("refuses a mode name this version cannot read rather than passing it through", () => {
+    // A refusal naming a depth the control has no option for would render a raise button that
+    // sets an impossible value.
+    expect(
+      belowFloor({ ...refusal, detail: { ...(refusal as { detail: object }).detail, recommended_mode: "exhaustive" } } as ApiFailure),
+    ).toBeNull();
+  });
+
+  it("is null for a network failure, which carries no detail at all", () => {
+    expect(belowFloor({ ok: false, kind: "network", message: "fetch failed" })).toBeNull();
   });
 });

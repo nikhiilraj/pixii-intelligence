@@ -4,8 +4,9 @@ import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
 
+import { modePayload, ResearchDepth, type DepthChoice } from "@/components/research-depth";
 import { Button } from "@/components/ui/button";
-import { calls, postJson, type Draft, type Spend } from "@/lib/api";
+import { belowFloor, calls, postJson, type Draft, type Spend } from "@/lib/api";
 
 /* US-014, the post half, and Nikhil's own words for why it exists: "have the template and hooks
  * and visuals as kind of template so that we can easily recreate them using another topic."
@@ -30,6 +31,11 @@ type RetopicResult = Draft & Spend;
 
 export default function RetopicForm({ postId }: { postId: number }) {
   const [idea, setIdea] = useState("");
+  // The depth for the **new** subject. Never the source's: `generation.retopic` detects the
+  // floor from the new idea precisely because a re-topic of an opinion piece onto a factual
+  // subject needs research the source never did. This is the operator raising that floor, which
+  // is the one thing the detector cannot do for them.
+  const [depth, setDepth] = useState<DepthChoice>("auto");
   const [busy, setBusy] = useState(false);
   // The draft that came back, kept on screen: it holds the only copy of the spend the route
   // reported, and the id needed to go and read the draft.
@@ -52,6 +58,7 @@ export default function RetopicForm({ postId }: { postId: number }) {
     const result = await postJson<RetopicResult>("/drafts/retopic", {
       idea: subject,
       source_post_id: postId,
+      ...modePayload(depth),
     });
     setBusy(false);
 
@@ -61,15 +68,26 @@ export default function RetopicForm({ postId }: { postId: number }) {
       // recorded template version that has since left the table. Telling a user their post does
       // not exist because its templates are unavailable is the conflation being avoided; the
       // API's own detail rides underneath, which is what keeps the two 409 sources apart.
-      const headline =
-        result.kind !== "http"
+      // 409 has two sources on this route now, and they have nothing to do with each other:
+      // the templates cannot be served, or the depth asked for is below the new subject's
+      // floor. `belowFloor` tells them apart by the *shape* of `detail` rather than by the
+      // status — telling someone their post records no templates because they asked for `none`
+      // research would send them to fix the wrong thing entirely.
+      const refusal = belowFloor(result);
+      const headline = refusal
+        ? `This subject needs at least ${refusal.floor} research`
+        : result.kind !== "http"
           ? "Could not write the new draft"
           : result.status === 409
             ? "The templates behind this post could not be re-topicked from"
             : result.status === 404
               ? "This post is no longer in the database"
               : "Could not write the new draft";
-      toast.error(headline, { description: result.message });
+      toast.error(headline, {
+        description: refusal
+          ? `${refusal.message}. The floor is detected from the new subject, not inherited from this post.`
+          : result.message,
+      });
       return;
     }
 
@@ -101,6 +119,14 @@ export default function RetopicForm({ postId }: { postId: number }) {
         placeholder="What should this one be about?"
         className="mt-1 w-full rounded-md border border-black/20 bg-transparent px-3 py-2 text-sm dark:border-white/25"
       />
+
+      <p className="mt-3 text-xs text-muted">Research depth for the new subject</p>
+      {/* The same control Studio uses, from the same module: `IdeaIn.research_mode` is one
+          contract, and a second spelling of it here would drift silently — a control that never
+          sends the key looks exactly like one whose default is Auto. */}
+      <div className="mt-1">
+        <ResearchDepth value={depth} onChange={setDepth} disabled={busy} />
+      </div>
 
       {/* Disabled without a subject and while one is in flight. Both matter and for the same
           reason: a press is a chat completion and a render, so a stray click and a double click

@@ -228,6 +228,35 @@ describe("a refused re-topic", () => {
     expect(screen.queryByRole("link", { name: /open draft/i })).not.toBeInTheDocument();
   });
 
+  it("does not blame the templates when the conflict is the research depth", async () => {
+    /* 409 has two unrelated sources on this route now. Reading the depth refusal off the
+       status would tell someone their post records no templates because they asked for less
+       research than the new subject needs, and send them to fix a thing that is not wrong.
+       `belowFloor` discriminates on the shape of `detail`, never on the status. */
+    stubFetch(
+      jsonResponse(409, {
+        detail: {
+          error: "this brief needs at least 'light' research (number, organisation)",
+          requested_mode: "none",
+          recommended_mode: "light",
+          mode_signals: ["number", "organisation"],
+        },
+      }),
+    );
+    render(<RetopicForm postId={95} />);
+
+    type("What changed in Acme checkout?");
+    fireEvent.click(startButton());
+
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    const [headline, options] = toastError.mock.calls[0];
+    expect(headline).toMatch(/at least light research/i);
+    expect(headline).not.toMatch(/templates/i);
+    // The floor belongs to the new subject. Saying otherwise would suggest the source post
+    // decides it, which is the inheritance `generation.retopic` deliberately refuses.
+    expect(options.description).toMatch(/detected from the new subject/);
+  });
+
   it("says the post itself is gone only on a 404", async () => {
     stubFetch(jsonResponse(404, { detail: "no post 95" }));
     render(<RetopicForm postId={95} />);

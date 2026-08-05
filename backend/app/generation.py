@@ -1092,6 +1092,7 @@ def retopic(
     source: Draft,
     *,
     idea: str,
+    requested_mode: str | None = None,
 ) -> Draft:
     """A new draft on a new subject, written through the source's exact templates.
 
@@ -1115,6 +1116,8 @@ def retopic(
     this route promises and would attach a dossier gathered for one subject to another. It also
     means what comes back is `unreviewed` only if nothing reviewed it — a re-topic is not
     pushable merely because a model returned text against a template that once worked.
+    `requested_mode` is the operator's depth **for the new subject**, not the source's; see the
+    call below.
 
     It is handed ids of the resolved rows rather than families, so `_resolve` reads back the
     same versions, and both renderers pass through for `_renderer_for` to choose between off
@@ -1141,10 +1144,14 @@ def retopic(
         structure_id=structure.id,
         visual_id=visual.id,
         asset_values=source.asset_values,
-        # No `requested_mode`. The floor is detected from the new idea by `resolve_mode`, which
-        # is the point: a re-topic of an opinion piece onto a factual subject needs research
-        # the source never did, and inheriting the source's mode would write the new claims
-        # from nothing.
+        # The caller's depth, and **never the source's**. The floor is detected from the new
+        # idea by `resolve_mode`, which is the point: a re-topic of an opinion piece onto a
+        # factual subject needs research the source never did, and inheriting the source's mode
+        # would write the new claims from nothing. `None` — the default, and what every caller
+        # but the route passes — leaves the new idea's own floor to decide; a value here is an
+        # operator raising it, which `resolve_mode` allows and is the one thing the detector
+        # cannot do for them. It can still only go up: below the floor is refused.
+        requested_mode=requested_mode,
         #
         # `mode` stays "directed": a human supplied this idea. A third value would be a new
         # partition of every query that reads the column, for no reader.

@@ -74,14 +74,23 @@ The normal workflow is:
 4. Generate a draft. Studio answers immediately with a draft id and then reports each stage as
    it happens — planning, researching, drafting, verifying, evaluating, rendering — because the
    run itself happens in the background and commits every stage as it enters it. The run
-   creates an editorial brief and angle/claim plan, selects the research depth, completes any
-   required research, writes from that dossier, runs deterministic gates and the
+   creates an editorial brief and angle/claim plan, settles the research depth — **Auto**, which
+   is the detected floor, or a depth you raised above it in the control beside the idea —
+   completes any required research, writes from that dossier, runs deterministic gates and the
    editorial-readiness rubric, and only then renders the visual. Leaving the page or reloading
    it does not lose the attempt: the address carries the draft id and the stages are already
    in the database. Pressing Generate twice buys one run, not two.
 5. Inspect the brief, angle, research-floor reason, planned claims, sources, gate findings,
    readiness decision, prompt versions, image, and exact template versions under **Lineage**.
+   The Editorial workflow block holds the rest: the constraints, the beats, the depth three ways
+   with the signals that produced the floor, every claim the finished post asserts and what
+   stands behind it, every rubric deduction with its evidence, the revision rounds spent, and
+   every prompt that ran — including research and revision, which write no row of their own.
    A failed workflow remains visible with its reason and can be retried as a new auditable attempt.
+   Five kinds of draft read differently there and are not conflated: one with the complete
+   lineage, one written by the deprecated unreviewed path, one still planning, one whose run
+   stopped before the brief was written, and one that genuinely predates the migration. The
+   unreviewed one cannot be pushed and its button says so rather than waiting to be refused.
 6. Regenerate individual parts or create variants if the first result is not right. Rewritten
    editorial drafts return to `failed_review` until the complete review flow is retried.
 7. Push the chosen result to Zernio. Pixii sends a draft. Failed and failed-review candidates
@@ -111,7 +120,10 @@ idea → editorial brief → angle + planned claims → research-depth floor
 ```
 
 - `none` still builds the brief and plan, but makes no web request. `light` and `deep` must
-  finish research before writing. An explicit mode below the detected floor is refused.
+  finish research before writing. An explicit mode below the detected floor is refused — with
+  what was asked, what the floor is and which signals produced it, before a draft row exists.
+  The depth may always be raised and never lowered, and it is never silently changed in either
+  direction. Studio, Write variants and Re-topic all send the same field.
 - `FIRECRAWL_API_KEY` enables factual research and is preferred when configured;
   `BRAVE_SEARCH_API_KEY` is the fallback. Without either, `light`/`deep` stop at a visible failed
   research state; they never fall back to `none`.
@@ -445,7 +457,7 @@ published, awaiting verdict:  0
 corpus:      107 posts (69 Monte, 15 creator inspiration, 13 pixii.creates, 10 Pixii_ai)
 templates:   11 approved · 50 proposed · 2 retired
 verdicts:    0
-tests:       1181 backend · 412 frontend
+tests:       1191 backend · 447 frontend
 ```
 
 Visual templates can now be **extracted** rather than hand-authored. `POST /templates/extract/visuals`
