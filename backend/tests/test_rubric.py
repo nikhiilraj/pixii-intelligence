@@ -785,3 +785,22 @@ def test_the_prompt_sent_is_the_registered_text(session):
 def test_a_prompt_object_is_still_a_prompt():
     """Guards the import in `app/prompts/rubric.py` against becoming a plain dict."""
     assert all(isinstance(prompt, Prompt) for prompt in PROMPTS)
+
+
+def test_the_disclaimer_actually_says_what_it_is_for():
+    """`DISCLAIMER in report.summary` passes against an empty disclaimer.
+
+    `"" in anything` is True, so blanking the constant satisfied every assertion about it
+    while the summary rendered a bare grade with nothing saying what the grade is not — the
+    exact reading blueprint invariant 6 and CLAUDE.md's no-ranking rule exist to prevent.
+    Found by mutating the constant to `''` and watching 80 tests pass.
+
+    Asserting the substance rather than the presence, for the same reason the project audits
+    for tests that pass because a route is absent: an assertion that cannot fail is not
+    evidence.
+    """
+    assert DISCLAIMER.strip(), "the disclaimer must have content to disclaim anything"
+    lowered = DISCLAIMER.lower()
+    assert "not a prediction" in lowered
+    assert "engagement" in lowered
+    assert "rank" in lowered
