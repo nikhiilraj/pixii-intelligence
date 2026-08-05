@@ -40,6 +40,11 @@ const DRAFT: Draft = {
   has_previous_visual: false,
   zernio_post_id: "6a695286ead2fabfa56f3c27",
   revision: 3,
+  // Equal to `revision`, so the default fixture is a draft Zernio is holding the current
+  // version of. Every test below that is not about drift depends on that: a fixture where the
+  // two differ would disable the controls and quietly turn each of those tests into an
+  // assertion about a disabled button.
+  pushed_revision: 3,
   lineage: { hook: null, structure: null, visual: null },
   // Present on every `DraftOut`, so present on every fixture. These are required rather
   // than optional in `Draft`: a fixture that may omit them lets a component ship a
@@ -703,6 +708,60 @@ describe("the kill switch, before a command is composed", () => {
     render(panel());
     expect(screen.queryByText(/switched off/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/could not be read/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^publish now…$/i })).toBeEnabled();
+  });
+});
+
+describe("a draft the server would refuse, said before a command is composed", () => {
+  /* The two states `distribution.submit` refuses schedule and publish for. Both were
+   * discoverable only by firing a command and reading a 409 — which is a bad way to learn
+   * that the words in Zernio are not the words on the screen. */
+
+  it("disables schedule and publish when the draft has not passed review", () => {
+    render(panel({ draft: { ...DRAFT, generation_stage: "failed_review" } }));
+
+    expect(screen.getByText(/has not passed review/i)).toBeInTheDocument();
+    // The stage itself, not a paraphrase: it is what the reviewer has to act on.
+    expect(screen.getByText(/failed_review/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^publish now…$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^schedule…$/i })).toBeDisabled();
+  });
+
+  it("disables schedule and publish when Zernio holds an older revision", () => {
+    render(panel({ draft: { ...DRAFT, revision: 5, pushed_revision: 3 } }));
+
+    expect(screen.getByText(/holding an older version/i)).toBeInTheDocument();
+    // Both numbers, in one match rather than two. "This draft has drifted" without them is a
+    // sentence a reviewer cannot act on; the pair is what says how far behind the post is.
+    // Matched together because `revision 5` also appears in the paragraph at the top of the
+    // panel, and two loose assertions would pass on that one while the card said nothing.
+    expect(
+      screen.getByText(/carries revision 3 and this draft is now at revision 5/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^publish now…$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^schedule…$/i })).toBeDisabled();
+  });
+
+  it("leaves cancel schedule enabled in both states", () => {
+    /* The panel's half of the exemption `submit`'s docstring records. A draft scheduled while
+     * ready and rewritten since is exactly this state, and withdrawing the appointment is the
+     * remedy for it — disabling the one control that reduces the exposure would leave the post
+     * to fire on its own schedule. */
+    const { unmount } = render(
+      panel({ draft: { ...DRAFT, generation_stage: "failed_review" } }),
+    );
+    expect(screen.getByRole("button", { name: /^cancel schedule…$/i })).toBeEnabled();
+    unmount();
+
+    render(panel({ draft: { ...DRAFT, revision: 5, pushed_revision: 3 } }));
+    expect(screen.getByRole("button", { name: /^cancel schedule…$/i })).toBeEnabled();
+  });
+
+  it("says nothing when the draft is ready and Zernio holds the current revision", () => {
+    render(panel());
+
+    expect(screen.queryByText(/has not passed review/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/holding an older version/i)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^publish now…$/i })).toBeEnabled();
   });
 });

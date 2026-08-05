@@ -53,6 +53,7 @@ const DRAFT: Draft = {
   has_previous_visual: false,
   zernio_post_id: null,
   revision: 1,
+  pushed_revision: null,
   lineage: { hook: null, structure: null, visual: null },
   // Present on every `DraftOut`, so present on every fixture — these are required, not
   // optional: a fixture free to omit them lets a component ship a `?? "historical"`

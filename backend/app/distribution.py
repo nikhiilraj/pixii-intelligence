@@ -17,6 +17,7 @@ from app.models.publication import (
     SCHEDULE,
     Publication,
 )
+from app.models.stage import review_ready
 from app.publishing import media_items_for
 from app.zernio import ZernioClient, ZernioRefused, ZernioResponseError
 
@@ -39,6 +40,45 @@ class StaleRevision(RuntimeError):
 
 class NotPushed(RuntimeError):
     """There is no remote post to act on yet."""
+
+
+class NotReviewReady(RuntimeError):
+    """The draft's stage does not permit a human's review to act on it. Carries the stage.
+
+    The push route guarded this and the publication routes did not, which left the more
+    consequential half of the boundary open: a draft pushed while `ready` and since rewritten
+    into `failed_review` could still be scheduled or published, because nothing after the
+    push looked at the stage again.
+    """
+
+    def __init__(self, stage: str, error: str | None) -> None:
+        super().__init__(
+            f"draft is not review-ready ({stage})"
+            + (f": {error}" if error else "")
+            + ". Complete the review flow before commanding a publication."
+        )
+        self.stage = stage
+
+
+class RevisionDrift(RuntimeError):
+    """The local draft has moved since it was pushed. Carries both numbers.
+
+    Distinct from `StaleRevision`, and the two are easy to confuse. `StaleRevision` compares
+    what the *reviewer* confirmed against what the draft is now — a person reading a stale
+    screen. This compares what the draft is now against what *Zernio* is holding, which no
+    reload fixes: the remote post is carrying words and a picture from an older revision, and
+    the reviewer looking at the current ones has no way to see that from here.
+    """
+
+    def __init__(self, local: int, pushed: int | None) -> None:
+        held = f"revision {pushed}" if pushed is not None else "an unrecorded revision"
+        super().__init__(
+            f"Zernio holds {held} of this draft and it is now at revision {local}, so the "
+            f"post says something nobody has confirmed. Re-review this draft and push it "
+            f"again before scheduling or publishing it."
+        )
+        self.local = local
+        self.pushed = pushed
 
 
 class CommandRefused(RuntimeError):
@@ -182,13 +222,36 @@ def _payload(
     Now Pixii schedules, so a date more than a week out would publish text with a dead image.
     Unconditional rather than "re-upload if older than N days": one extra upload per command
     — a rare, deliberate act — removes the arithmetic and the class of bug that hides in it.
+
+    **`content` is sent, and its absence was the defect.** This payload carried `isDraft`, the
+    time and the media and never the words, so a draft that was pushed, rewritten locally and
+    then scheduled left the confirmation screen showing the new words while Zernio kept the
+    old ones — with nothing anywhere reporting the difference. Sending the draft's current
+    `full_text` is what makes the command say what the reviewer read.
+
+    **This field is unverified against the live API and is deliberately not what the guarantee
+    rests on.** `docs/research/2026-08-04-platform-api-research.md` documents
+    `PUT /v1/posts/{postId}` for `isDraft`, `scheduledFor` and `timezone`; it does not confirm
+    that the endpoint accepts `content` on update, and nothing here exercises it against a
+    real account. So the invariant — the exact revision a human confirmed is the exact words
+    that go out — is held by the *local* refusal in `submit`: a draft whose revision has
+    drifted from `pushed_revision` is rejected before anything is sent. That holds whether or
+    not Zernio honours this field. Sending it can only help, and if it is ignored the drift
+    guard has already ensured the words being ignored are the same ones.
     """
     if action == CANCEL_SCHEDULE:
         # Back to a draft. The schedule is what is being withdrawn; the post and its words
         # stay exactly where they are.
+        #
+        # **No `content` here, and that is not an oversight to tidy up.** Cancelling withdraws
+        # an appointment; it is the one command that must not touch the words. Folding this
+        # branch into the payload built below — the obvious refactor, since it differs by two
+        # keys — would make every cancel a silent rewrite of the remote post, which is exactly
+        # the class of change a reviewer cancelling a schedule is not consenting to.
+        # `test_the_cancel_payload_carries_no_content` is what stops that refactor landing.
         return {"isDraft": True}
 
-    payload: dict[str, object] = {"isDraft": False}
+    payload: dict[str, object] = {"isDraft": False, "content": draft.full_text}
     if action == PUBLISH_NOW:
         payload["publishNow"] = True
     elif when is not None:
@@ -217,11 +280,31 @@ def submit(
     1. **The kill switch.** `publishing_enabled` is off by default. It stops external
        commands and nothing else — generation, review and pushing drafts continue — which is
        what makes it usable in an incident rather than a code rollback.
-    2. **The revision.** The reviewer confirmed against a specific version of the words. If
+    2. **The stage.** `models.stage.review_ready`, the same predicate the push route uses,
+       called rather than restated — three hand-written copies of one rule is what
+       `models/stage.py` was created to end, and the copy that was missing was this one.
+       **Above the revision check deliberately**: a draft that is both `failed_review` and
+       moved is fixed by re-review, not by reloading the page, so telling the operator to
+       reload first would send them round a loop that ends in the same refusal.
+    3. **The revision.** The reviewer confirmed against a specific version of the words. If
        the draft moved since, the command refers to something nobody approved.
-    3. **A remote post to act on.** This updates an existing Zernio post; it never creates
+    4. **A remote post to act on.** This updates an existing Zernio post; it never creates
        one. Push first.
-    4. **A complete instant for a schedule.** A time without a zone is not a moment.
+    5. **What Zernio is actually holding.** `pushed_revision` against `revision`. **Below the
+       push check, necessarily**: `pushed_revision` is NULL for a draft that was never pushed,
+       so a drift check placed any earlier would fire on that NULL and tell an operator that
+       Zernio holds unconfirmed words about a post that does not exist.
+    6. **A complete instant for a schedule.** A time without a zone is not a moment.
+
+    **Guards 2 and 5 exempt `cancel_schedule`, and that is the interesting decision.** Take
+    the state they exist for: a draft scheduled while `ready`, then rewritten — now
+    `failed_review`, revision bumped, and Zernio holding a scheduled post whose words failed
+    review. Cancel is the only command that reduces that exposure; it withdraws the
+    appointment and touches nothing else (see `_payload`). Applying these two guards uniformly
+    would lock the operator out of the one action that helps and leave the post to fire on its
+    own schedule — a refusal that causes the publication it was written to prevent. Cancel is
+    still guarded by the kill switch, by the confirmed revision and by there being a post at
+    all; what it is not guarded by is a state that cancelling is the remedy for.
 
     Then the command is written down and committed *before* the call, so a response lost in
     flight leaves a record that the command was sent. A repeat of the same command finds the
@@ -234,6 +317,9 @@ def submit(
         )
     if action not in ACTIONS:
         raise ValueError(f"unknown publication action: {action}")
+    withdrawing = action == CANCEL_SCHEDULE
+    if not withdrawing and not review_ready(draft.generation_stage):
+        raise NotReviewReady(draft.generation_stage, draft.generation_error)
     if revision != draft.revision:
         raise StaleRevision(revision, draft.revision)
     if not draft.zernio_post_id:
@@ -241,6 +327,8 @@ def submit(
             f"draft {draft.id} has not been pushed to Zernio, so there is no post to "
             f"{action.replace('_', ' ')}."
         )
+    if not withdrawing and draft.pushed_revision != draft.revision:
+        raise RevisionDrift(draft.revision, draft.pushed_revision)
 
     when: datetime | None = None
     if action == SCHEDULE:

@@ -135,6 +135,22 @@ class Draft(SQLModel, table=True):
     # for the same reason.
     revision: int = Field(default=1, nullable=False)
 
+    # The revision whose words and picture were actually sent to Zernio, or NULL for a draft
+    # that never left the building.
+    #
+    # **Without this, "the local draft has drifted from the remote post" was unanswerable.**
+    # `revision` says what this row is on now and `zernio_post_id` says a post exists; neither
+    # says which version that post is holding. Push a draft, redraw its visual, and the two
+    # differ with nothing anywhere reporting it — `distribution.submit` would then command a
+    # post carrying words and a picture nobody confirmed.
+    #
+    # Written by `publishing.push_draft` only, and only when the create actually succeeded.
+    # Not on its already-pushed early return: nothing is sent there, so Zernio still holds
+    # whatever it held, and recording otherwise would assert the very thing this column exists
+    # to check. Deliberately **not** touched by `edited()` either — that counts local changes,
+    # and the point of the pair is that they can disagree.
+    pushed_revision: int | None = None
+
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @property

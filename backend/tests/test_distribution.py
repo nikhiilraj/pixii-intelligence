@@ -13,7 +13,9 @@ from app.deps import get_html_renderer, get_image_renderer, get_llm, get_zernio
 from app.distribution import (
     CommandRefused,
     NotPushed,
+    NotReviewReady,
     PublishingDisabled,
+    RevisionDrift,
     StaleRevision,
     _record,
     idempotency_key,
@@ -31,6 +33,7 @@ from app.models.publication import (
     SCHEDULE,
     Publication,
 )
+from app.models.stage import GenerationStage
 from app.publishing import push_draft
 from app.zernio import ZernioClient
 from tests.test_autonomous import FakeLLM, FakeRenderer
@@ -115,8 +118,18 @@ def api(session, zernio_double: Zernio) -> Iterator[TestClient]:
 
 
 def pushed(session):
+    """A draft in the state a real push leaves behind — not a `Draft` with an id typed in.
+
+    `generation_stage` and `pushed_revision` are part of that state and both are load-bearing
+    here. `POST /drafts/{id}/push` refuses anything that is not `ready`, so a pushed draft was
+    review-ready when it went; and `push_draft` records the revision it sent. A fixture that
+    set only `zernio_post_id` would describe a row no push could have produced, and every test
+    below would then be asserting against a state the application cannot reach.
+    """
     draft = a_draft(session)
+    draft.generation_stage = GenerationStage.READY
     draft.zernio_post_id = "zpost-1"
+    draft.pushed_revision = draft.revision
     draft.visual_image = b"IMG"
     session.add(draft)
     session.flush()
@@ -235,6 +248,11 @@ def test_a_stale_revision_is_refused_and_says_what_is_current(session, enabled):
 
 def test_a_draft_that_was_never_pushed_has_nothing_to_command(session, enabled):
     draft = a_draft(session)
+    # Review-ready, so the stage guard above it passes and this test reaches the guard it is
+    # actually about. `a_draft` is `unreviewed` by default — leaving it that way would make
+    # this pass on `NotReviewReady` and stop saying anything about `NotPushed` at all.
+    draft.generation_stage = GenerationStage.READY
+    session.flush()
     zernio = Zernio()
 
     with pytest.raises(NotPushed):
@@ -716,3 +734,285 @@ def test_a_skipped_wall_clock_answers_422_and_says_why(api, session, enabled):
 
     assert response.status_code == 422
     assert "does not exist" in response.json()["detail"]
+
+
+# --- the exact words a human confirmed are the exact words that go out --------------------
+
+
+def test_the_rewritten_words_are_what_is_sent_not_the_ones_zernio_already_had(session, enabled):
+    """The defect this section exists for.
+
+    `_payload` sent `isDraft`, the time and the media and never `content`. So a draft pushed,
+    rewritten locally and then commanded left the confirmation screen showing the new words
+    while Zernio kept the old ones, with nothing anywhere reporting the difference.
+    """
+    draft = pushed(session)
+    draft.hook_text = "The rewritten hook."
+    draft.body_text = "The rewritten body."
+    # Both halves of the pair move together, which is what a real re-push does. Without this
+    # the drift guard refuses first and the payload is never built — a different property.
+    draft.edited()
+    draft.pushed_revision = draft.revision
+    session.flush()
+    zernio = Zernio()
+
+    submit(session, draft, zernio.client(), action=PUBLISH_NOW, revision=draft.revision)
+
+    assert zernio.puts[0]["body"]["content"] == draft.full_text
+    assert "The rewritten hook." in zernio.puts[0]["body"]["content"]
+
+
+def test_a_schedule_carries_the_words_too(session, enabled):
+    """Not only publish. A schedule fires later against whatever the post is holding then."""
+    zernio = Zernio()
+    draft = pushed(session)
+
+    submit(
+        session,
+        draft,
+        zernio.client(),
+        action=SCHEDULE,
+        revision=1,
+        local=soon(),
+        timezone="Asia/Kolkata",
+    )
+
+    assert zernio.puts[0]["body"]["content"] == draft.full_text
+
+
+def test_the_cancel_payload_carries_no_content(session, enabled):
+    """Cancelling withdraws an appointment. It must not rewrite the post while doing it.
+
+    Precisely the property a tidy refactor breaks: the cancel branch differs from the one
+    below it by two keys, so folding them together looks like a simplification and turns
+    every cancel into a silent rewrite of the remote post.
+    """
+    zernio = Zernio()
+
+    submit(session, pushed(session), zernio.client(), action=CANCEL_SCHEDULE, revision=1)
+
+    assert "content" not in zernio.puts[0]["body"]
+
+
+def test_the_exact_confirmed_revision_is_the_one_recorded_and_sent(session, enabled):
+    """One number ties the screen, the audit row and the idempotency key together."""
+    draft = pushed(session)
+    draft.hook_text = "Second version."
+    draft.edited()
+    draft.pushed_revision = draft.revision
+    session.flush()
+    zernio = Zernio()
+
+    publication = submit(session, draft, zernio.client(), action=PUBLISH_NOW, revision=2)
+
+    assert publication.draft_revision == 2
+    assert publication.idempotency_key == idempotency_key(draft.id or 0, 2, PUBLISH_NOW, None)
+    assert zernio.puts[0]["body"]["content"] == draft.full_text
+
+
+# --- the stage guard the publication routes did not have ---------------------------------
+
+
+def test_a_failed_review_draft_cannot_be_published(session, enabled):
+    """Pushed while healthy, rewritten since. The push route guarded this; this did not."""
+    draft = pushed(session)
+    draft.generation_stage = GenerationStage.FAILED_REVIEW
+    draft.generation_error = "editorial-readiness evaluation requires revision"
+    session.flush()
+    zernio = Zernio()
+
+    with pytest.raises(NotReviewReady) as caught:
+        submit(session, draft, zernio.client(), action=PUBLISH_NOW, revision=1)
+
+    assert caught.value.stage == GenerationStage.FAILED_REVIEW
+    assert zernio.puts == []
+    assert rows(session) == []
+
+
+def test_a_failed_review_draft_cannot_be_scheduled(session, enabled):
+    draft = pushed(session)
+    draft.generation_stage = GenerationStage.FAILED_REVIEW
+    session.flush()
+    zernio = Zernio()
+
+    with pytest.raises(NotReviewReady):
+        submit(
+            session,
+            draft,
+            zernio.client(),
+            action=SCHEDULE,
+            revision=1,
+            local=soon(),
+            timezone="Asia/Kolkata",
+        )
+
+    assert zernio.puts == []
+    # Refused before the media upload, like every other guard here.
+    assert zernio.uploads == 0
+
+
+def test_an_unreviewed_draft_cannot_be_published(session, enabled):
+    """The default stage. Legacy `POST /drafts` produces it and reviews nothing."""
+    draft = pushed(session)
+    draft.generation_stage = GenerationStage.UNREVIEWED
+    session.flush()
+
+    with pytest.raises(NotReviewReady):
+        submit(session, draft, Zernio().client(), action=PUBLISH_NOW, revision=1)
+
+
+def test_a_failed_review_draft_may_still_be_cancelled(session, enabled):
+    """The decision recorded in `submit`'s docstring, pinned so it is not tidied away.
+
+    A draft scheduled while ready and rewritten since is the state the stage guard exists
+    for — and cancelling is the remedy, not another way to reach an audience. Refusing it
+    would leave the schedule standing and cause the publication the guard was written to
+    prevent.
+    """
+    draft = pushed(session)
+    draft.generation_stage = GenerationStage.FAILED_REVIEW
+    draft.edited()
+    session.flush()
+    zernio = Zernio()
+
+    publication = submit(
+        session, draft, zernio.client(), action=CANCEL_SCHEDULE, revision=draft.revision
+    )
+
+    assert publication.state == ACCEPTED
+    assert zernio.puts[0]["body"] == {"isDraft": True}
+
+
+# --- what Zernio is holding, against what this draft now says ----------------------------
+
+
+def test_a_draft_whose_revision_drifted_from_the_push_is_refused(session, enabled):
+    """Zernio holds revision 1; the draft is on 3. Nothing recorded that before this column.
+
+    Distinct from a stale command: the reviewer here is looking at the current words and
+    confirming the current number. It is the *remote post* that is behind, which no reload
+    fixes and nothing on the screen could otherwise reveal.
+    """
+    draft = pushed(session)
+    draft.edited()
+    draft.edited()
+    session.flush()
+    assert draft.pushed_revision == 1 and draft.revision == 3
+    zernio = Zernio()
+
+    with pytest.raises(RevisionDrift) as caught:
+        submit(session, draft, zernio.client(), action=PUBLISH_NOW, revision=3)
+
+    assert (caught.value.local, caught.value.pushed) == (3, 1)
+    assert zernio.puts == []
+    assert rows(session) == []
+
+
+def test_a_drifted_draft_may_still_be_cancelled(session, enabled):
+    """Same reasoning as the stage guard: cancel is the de-escalation, not an escalation."""
+    draft = pushed(session)
+    draft.edited()
+    session.flush()
+    zernio = Zernio()
+
+    publication = submit(session, draft, zernio.client(), action=CANCEL_SCHEDULE, revision=2)
+
+    assert publication.state == ACCEPTED
+
+
+def test_a_push_records_the_revision_it_sent(session, enabled):
+    draft = a_draft(session)
+    draft.visual_image = b"IMG"
+    draft.edited()
+    session.flush()
+
+    push_draft(session, draft, Zernio().client(), account_id="acct-1")
+
+    assert draft.pushed_revision == draft.revision == 2
+
+
+def test_an_already_pushed_draft_that_drifted_cannot_clear_it_by_pushing_again(session):
+    """**A finding, pinned rather than hidden.** There is no route out of drift today.
+
+    `push_draft` returns early once `zernio_post_id` is set, so a second push sends nothing
+    and — correctly — records nothing: claiming `pushed_revision` on a path where no words
+    left the building would assert the very thing the drift guard checks. The consequence is
+    that a `ready` draft which is pushed and then redrawn is refused for schedule and publish
+    with no way back short of `push_draft(force=True)`, which no HTTP route exposes and which
+    mints a *second* Zernio post.
+
+    This test states the dead end rather than working around it. If a repair path is added
+    later it belongs in `push_draft` as an in-place `update_post`, and this test is what will
+    fail when it lands.
+    """
+    draft = pushed(session)
+    draft.edited()
+    session.flush()
+
+    push_draft(session, draft, Zernio().client(), account_id="acct-1")
+
+    assert draft.pushed_revision == 1
+    assert draft.revision == 2
+
+
+# --- the same refusals over HTTP, each saying which one it is ----------------------------
+
+
+def test_a_failed_review_draft_answers_409_and_names_the_stage(api, session, enabled):
+    draft = pushed(session)
+    draft.generation_stage = GenerationStage.FAILED_REVIEW
+    session.commit()
+
+    response = api.post(f"/drafts/{draft.id}/publish", json={"revision": draft.revision})
+
+    assert response.status_code == 409
+    # The substring, not just the status. Four different refusals answer 409 here, and a test
+    # that checks only the number passes for any of them — including one that fired for the
+    # wrong reason, which is the failure mode the README's mutation audit found.
+    assert "not review-ready" in response.json()["detail"]
+
+
+def test_a_drifted_draft_answers_409_and_names_both_revisions(api, session, enabled):
+    draft = pushed(session)
+    draft.edited()
+    session.commit()
+
+    response = api.post(f"/drafts/{draft.id}/publish", json={"revision": draft.revision})
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert "Zernio holds revision 1" in detail
+    assert "revision 2" in detail
+
+
+def test_the_pushed_revision_reaches_the_api(api, session):
+    """`DraftOut` is hand-mapped. Without this the panel cannot see a drift at all."""
+    draft = pushed(session)
+    draft.edited()
+    session.commit()
+
+    body = api.get(f"/drafts/{draft.id}").json()
+    assert (body["revision"], body["pushed_revision"]) == (2, 1)
+
+
+def test_retrying_a_command_against_a_healthy_draft_is_still_one_post(session, enabled):
+    """The idempotency guarantee, re-checked with the two new guards in front of it.
+
+    Both refuse before `_record`, so a guard that let one command through and stopped its
+    retry would turn `ON CONFLICT DO NOTHING` into a second schedule rather than a no-op.
+    """
+    draft = pushed(session)
+    zernio = Zernio()
+    client = zernio.client()
+    when = soon()
+
+    first = submit(
+        session, draft, client, action=SCHEDULE, revision=1, local=when, timezone="Asia/Kolkata"
+    )
+    second = submit(
+        session, draft, client, action=SCHEDULE, revision=1, local=when, timezone="Asia/Kolkata"
+    )
+
+    assert first.id == second.id
+    assert len(rows(session)) == 1
+    assert len(zernio.puts) == 1

@@ -14,6 +14,7 @@ import {
 import {
   getJson,
   postJson,
+  reviewReady,
   type ApiFailure,
   type Draft,
   type Publication,
@@ -427,6 +428,25 @@ export default function PublishPanel({
   // not know" and "it is switched off" are two different things to tell someone standing in
   // front of a Publish button.
   const switchedOff = publishing !== null && !publishing.enabled;
+
+  // The two states `distribution.submit` refuses schedule and publish for, said here before a
+  // command is composed — the same trade the kill-switch card above makes. Discovering that a
+  // draft failed review by pressing Publish and reading a 409 is a bad way to find out that
+  // the post in Zernio does not say what this page says.
+  //
+  // **Computed, never trusted.** The server is still the only thing that enforces either, and
+  // the 409 branches in `classify` stay: this is a read taken when the page rendered.
+  const notReviewReady = !reviewReady(draft.generation_stage);
+  // `pushed_revision` is null only for a draft that was never pushed, and this panel is not
+  // rendered for one — Studio shows it against `zernio_post_id`. So a null here is a drift
+  // rather than a "not applicable", and refusing on it is the safe direction: we do not know
+  // what the post is carrying.
+  const drifted = draft.pushed_revision !== draft.revision;
+  // **Cancel is deliberately not in this.** It mirrors the exemption in `submit`'s docstring:
+  // a draft scheduled while ready and rewritten since is exactly the state these two flags
+  // describe, and withdrawing the schedule is the remedy for it. Disabling the one control
+  // that reduces the exposure would leave the post to fire on its own schedule.
+  const blocked = notReviewReady || drifted;
   const zones = zoneNames();
   const resolved: Resolved = resolveUtc(local, timezone);
   const utc = resolved.kind === "ok" ? resolved.utc : null;
@@ -506,6 +526,28 @@ export default function PublishPanel({
             `PUBLISHING_ENABLED` is false, so schedule, publish and cancel commands are
             refused. Nothing else is affected — generating, reviewing and pushing a draft to
             Zernio all continue. Turning it on is a decision; see ADR 0002.
+          </p>
+        </Card>
+      )}
+      {/* Why the two controls that reach an audience are off, in the words of whichever
+          state turned them off. One card and not two: a draft that was rewritten after being
+          pushed is usually both — the rewrite set `failed_review` and moved the revision — and
+          two stacked warnings saying the same thing twice is how a reader stops reading them.
+          The stage is named first because it is what has to be fixed first. */}
+      {blocked && (
+        <Card className="bg-surface-2 text-meta">
+          <p className="font-medium">
+            {notReviewReady
+              ? "This draft has not passed review."
+              : "Zernio is holding an older version of this draft."}
+          </p>
+          <p className="mt-1 text-muted">
+            {notReviewReady
+              ? `Its workflow state is “${draft.generation_stage}”, so scheduling and publishing are refused. Complete the review flow — retry the workflow — before commanding a publication.`
+              : `Post ${draft.zernio_post_id} carries revision ${draft.pushed_revision ?? "—"} and this draft is now at revision ${draft.revision}, so publishing it would put out words and a picture nobody confirmed. Push the draft again before scheduling or publishing it.`}{" "}
+            Cancel schedule is still available: it withdraws an appointment without touching
+            the words, which is the remedy for this state rather than another way to reach an
+            audience.
           </p>
         </Card>
       )}
@@ -590,7 +632,7 @@ export default function PublishPanel({
           /* Nothing to confirm until there is one instant to confirm. The server refuses all
              four of these anyway; refusing here means the reviewer finds out in the field they
              are typing in rather than after committing to a command. */
-          disabled={busy || switchedOff || resolved.kind !== "ok"}
+          disabled={busy || switchedOff || blocked || resolved.kind !== "ok"}
           onClick={() => open("schedule")}
         >
           Schedule…
@@ -598,9 +640,14 @@ export default function PublishPanel({
         {/* Not the primary variant, and that is not a style choice: the primary button on this
             page is Push, which creates a draft, and giving the one irreversible action on the
             screen the loudest treatment is how it gets pressed on the way past. */}
-        <Button variant="outline" disabled={busy || switchedOff} onClick={() => open("publish_now")}>
+        <Button
+          variant="outline"
+          disabled={busy || switchedOff || blocked}
+          onClick={() => open("publish_now")}
+        >
           Publish now…
         </Button>
+        {/* Not `blocked`. See the flag's own comment: this is the de-escalation. */}
         <Button variant="outline" disabled={busy || switchedOff} onClick={() => open("cancel_schedule")}>
           Cancel schedule…
         </Button>

@@ -48,7 +48,7 @@ reaches it and the last column says whether that is a decision or a finding.
 | Preview an unsaved template body | `POST /templates/preview` | `/templates` — TemplatePreview | PNG, or the 502 the renderer's own refusal carries | Retry | `test_template_preview.py`, `TemplatePreview.test.tsx` | — |
 | Preview a saved template | `POST /templates/{id}/preview` | `/templates` — row preview | PNG or refusal | Retry | `test_template_preview.py` | — |
 | **Every version of a template family** | `GET /templates/{id}/versions` | **API-only** | — | — | `test_api_templates.py` | **Decision: documented as internal API support, not connected this pass.** It is the `(family_id, version)` attribution trail the whole project rests on, and a version-history disclosure on `/templates` is the obvious home — but it is a *display* of lineage next to controls that already work, and the four operations above it were the gap. Named as unfixed, not as fine. See findings. |
-| **Hooks a structure declares it pairs with** | `GET /templates/{id}/compatible-hooks` | **API-only** | — | — | `test_structures.py` (4 tests, at the function) | **Decision: API-only for now, with one real consumer named.** Extraction records `compatible_hook_families` on every structure and the route resolves it to *usable* hooks. Its only sensible reader is Studio's template picker, which would narrow the hook list when a structure is chosen — and `studio/Studio.tsx` is held by another agent this session. Surfacing it anywhere else (a read-only list on `/templates`) would be a second surface built to avoid an endpoint count, which is what the README's refusals section warns against. See findings. |
+| **Hooks a structure declares it pairs with** | `GET /templates/{id}/compatible-hooks` | **API-only** | — | — | **The route has none.** `test_structures.py` covers `extraction.compatible_hooks` 4 times, always at the function; nothing calls the handler, so its 400 branch is unexercised | **Decision: API-only for now, with one real consumer named.** Extraction records `compatible_hook_families` on every structure and the route resolves it to *usable* hooks. Its only sensible reader is Studio's template picker, which would narrow the hook list when a structure is chosen — and `studio/Studio.tsx` is held by another agent this session. Surfacing it anywhere else (a read-only list on `/templates`) would be a second surface built to avoid an endpoint count, which is what the README's refusals section warns against. See findings. |
 
 ## Generation — templates to drafts
 
@@ -149,6 +149,12 @@ because a matrix whose only purpose is to make itself look complete is worth not
    used. `studio/Studio.tsx` was held by another agent this session, so this is named rather
    than done — and the fix belongs in that picker, not in a second read-only surface built
    somewhere easier to reach.
+
+   **The route also has no HTTP test.** Every assertion about pairings is against
+   `extraction.compatible_hooks` directly; nothing exercises the handler, so its 400 for a
+   non-structure is unexercised. This is the same class of gap the README's 204-mutation audit
+   found twice ("two routes had no HTTP coverage whatsoever") and is why this cell says so
+   rather than naming the file that happens to contain the word.
 6. **`GET /templates/{id}/versions` is unread.** Lineage resolves through `(family_id,
    version)` everywhere in this system, and the one route that shows a family's history has no
    reader. A disclosure on the `/templates` review row is the natural home. Left for the same

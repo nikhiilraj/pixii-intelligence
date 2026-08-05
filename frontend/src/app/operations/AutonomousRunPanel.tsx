@@ -104,6 +104,17 @@ export default function AutonomousRunPanel({
       consequence="This makes paid calls to the chat model and the renderer. It produces drafts in this system and reaches Zernio not at all: an unattended run cannot push, schedule or publish, and there is no control here that would let it."
       rerun="Safe to run again, and it generates again — this is not an upsert. A second run proposes fresh topics and writes a second batch, at the same cost as the first. Drafts you do not want are deleted in Studio."
       prerequisites={prerequisites}
+      /* `min={1}` on a number input is a hint, not a guard: clearing the field gives `""`,
+         `Number("")` is `0`, and `Math.min(0, ceiling)` is `0`. Without this the button stays
+         enabled and the confirmation promises "at most 0 drafts" beside "at most 1 chat
+         completion" — a call `run_autonomous` cannot make, because it returns an empty result
+         before `propose_topics` when `cap <= 0`. A confirmation that describes a request the
+         code will not issue is worse than no confirmation. */
+      blockedReason={
+        effective < 1
+          ? "Set a cap of at least 1 — a run of zero drafts proposes no topics and does nothing."
+          : null
+      }
       compose={() => ({
         facts: [
           { label: "Drafts", value: `at most ${effective}` },

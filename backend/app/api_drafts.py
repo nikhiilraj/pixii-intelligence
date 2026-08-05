@@ -13,7 +13,9 @@ from app.deps import HtmlRendererDep, ImageRendererDep, LLMDep, SearchDep, Sessi
 from app.distribution import (
     CommandRefused,
     NotPushed,
+    NotReviewReady,
     PublishingDisabled,
+    RevisionDrift,
     StaleRevision,
     submit,
 )
@@ -91,6 +93,11 @@ class DraftOut(BaseModel):
     # What a publication command must be confirmed against. Without it on the wire the
     # review screen has nothing to submit and the stale-revision guard cannot fire.
     revision: int
+    # Which revision Zernio is holding, or null for a draft that never left. On the wire for
+    # the same reason `revision` is: the panel cannot say "Zernio holds revision 1, this draft
+    # is revision 3" — and cannot disable the three controls when they differ — from a number
+    # it does not have. Without it the drift is only ever discovered by attempting a command.
+    pushed_revision: int | None
     lineage: dict
     generation_stage: str
     generation_error: str | None
@@ -140,6 +147,7 @@ def _out(session: SessionDep, draft: Draft) -> DraftOut:
         went_live_at=draft.went_live_at,
         created_at=draft.created_at,
         revision=draft.revision,
+        pushed_revision=draft.pushed_revision,
         lineage=_lineage(session, draft),
         generation_stage=draft.generation_stage,
         generation_error=draft.generation_error,
@@ -603,7 +611,36 @@ def keep_variant(session: SessionDep, payload: KeepIn) -> DraftOut:
 
 @router.post("/{draft_id}/regenerate-text")
 def rewrite(session: SessionDep, llm: LLMDep, draft_id: int) -> DraftOut:
-    """Rewrite the words against the same templates. Lineage does not move."""
+    """Rewrite the words against the same templates. Lineage does not move.
+
+    **Rewriting a draft that is already in Zernio does not touch the remote post, and nothing
+    auto-syncs it.** That is a decision rather than an omission, and the state it leaves is
+    made legible instead of hidden: `revision` moves and `pushed_revision` does not, so
+    `GET /drafts/{id}` reports both and the publication panel can say "Zernio holds revision
+    N, this draft is revision M" without attempting a command to find out. Syncing here
+    silently would mean a rewrite — an editing action — quietly changed what an audience-facing
+    post says, which is the authority ADR 0002 reserves for an explicit human command.
+
+    The two routes forward from that state:
+
+    - **Re-review, then push again.** A draft with editorial lineage is set to
+      `failed_review` below, so the complete flow has to be retried before it is pushable at
+      all. `POST /drafts/{id}/retry` starts that attempt as a *new* row, preserving this one
+      for audit, and the new row pushes cleanly because it has never been pushed.
+    - **Publish from Pixii**, which re-sends the words: `distribution._payload` now carries
+      `content`, and every command re-uploads the visual unconditionally.
+
+    **The second route is currently unreachable for this draft, and that is a known gap.**
+    `distribution.submit` refuses a drifted draft precisely because Zernio's acceptance of
+    `content` on update is unverified, and `publishing.push_draft` returns early once
+    `zernio_post_id` is set — so a second push sends nothing and correctly records nothing.
+    A `ready` draft that is pushed and then *redrawn* (a visual change bumps the revision
+    without changing the stage) therefore has no way back short of
+    `push_draft(force=True)`, which no route exposes and which mints a second Zernio post.
+    `test_an_already_pushed_draft_that_drifted_cannot_clear_it_by_pushing_again` pins the dead
+    end rather than hiding it; the repair, when someone wants it, is an in-place `update_post`
+    in `push_draft`.
+    """
     draft = _load(session, draft_id)
     try:
         regenerate_text(session, llm, draft)
@@ -780,9 +817,13 @@ def _command(
 
     - **403** the kill switch is off. Not 503: nothing is broken, the capability is turned
       off deliberately and turning it on is a decision, not a retry.
-    - **409** the draft moved under the reviewer, or has never been pushed. Both are "the
-      thing you are commanding is not in the state you think", and both are fixed by looking
-      again rather than by trying again.
+    - **409** the draft is not in the state the command assumes. Four distinct cases now, and
+      they are one status because the fix for all four is to look at the draft rather than to
+      try again: it moved under the reviewer, it has never been pushed, it is not review-ready,
+      or what Zernio holds is no longer what this draft says. Only the first carries a
+      structured body (`current_revision`), because it is the only one a reload resolves — the
+      other three are sentences naming what to do, and `PublishPanel.classify` reads the
+      parsed detail rather than the message text for exactly that reason.
     - **422** the command itself does not describe a moment — a past time, a missing zone.
     - **502** Zernio refused. Its own words are passed through so the operator sees the
       reason and not a shrug. **Never retried here**: a validation refusal is not a timeout,
@@ -799,7 +840,7 @@ def _command(
         raise HTTPException(
             status_code=409, detail={"error": str(exc), "current_revision": exc.current}
         ) from exc
-    except NotPushed as exc:
+    except (NotReviewReady, RevisionDrift, NotPushed) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

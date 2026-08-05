@@ -107,7 +107,16 @@ def list_templates(
 
 @router.get("/{template_id}/versions")
 def list_versions(session: SessionDep, template_id: int) -> list[Template]:
-    """Every version of this template's family, oldest first — the attribution trail."""
+    """Every version of this template's family, oldest first — the attribution trail.
+
+    **No screen reads this, and that is recorded rather than fixed.** Lineage resolves through
+    `(family_id, version)` everywhere in this system, and this is the one route that shows a
+    family's history; the natural consumer is a version-history disclosure on the `/templates`
+    review row. It was left unwired in the operator-controls pass because it is a *display* of
+    lineage beside controls that already work, where four operations had no entry point at
+    all. See `docs/capability-matrix.md`. Anyone connecting it should put it there, not on a
+    screen of its own.
+    """
     template = _load(session, template_id)
     statement = (
         select(Template)
@@ -285,7 +294,24 @@ def _rendered(
 
 @router.get("/{template_id}/compatible-hooks")
 def get_compatible_hooks(session: SessionDep, template_id: int) -> list[Template]:
-    """The usable hooks a structure declares it pairs with."""
+    """The usable hooks a structure declares it pairs with.
+
+    **API-only, with exactly one sensible consumer, and it is not built.** Structure extraction
+    asks the model for `compatible_hooks` and stores the resolved families on the row; this
+    route turns them back into approved hooks. The reader that would matter is Studio's
+    template picker — choosing a structure should narrow the hook list to the ones it pairs
+    with — and today the picker offers every approved hook regardless, so the pairing a model
+    was asked to record is discarded at the point it would be used.
+
+    Not wired in the operator-controls pass because `frontend/src/app/studio/Studio.tsx` was
+    held by another agent, and because the alternative — a read-only pairing list on
+    `/templates` — would be a second surface built to make an endpoint look connected rather
+    than to answer a question anyone has. See `docs/capability-matrix.md`.
+
+    Note also that this *route* has no HTTP test: `test_structures.py` covers
+    `extraction.compatible_hooks` four times and never this handler, so the 400 below is
+    unexercised. That is the class of gap the README's mutation audit found twice before.
+    """
     structure = _load(session, template_id)
     if structure.kind is not TemplateKind.STRUCTURE:
         raise HTTPException(status_code=400, detail="only a structure declares hook pairings")

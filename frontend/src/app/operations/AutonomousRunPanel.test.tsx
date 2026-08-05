@@ -54,9 +54,28 @@ describe("what a run is said to cost", () => {
   });
 
   it("says calls, never a price, and gets the singular right", () => {
-    expect(estimate(0)).toEqual({ completions: "1 chat completion", renders: "0 image renders" });
+    // Pure arithmetic and never displayed: `estimate(0)` is unreachable through the panel,
+    // which blocks a cap below 1. It is asserted here for the singular form only —
+    // `run_autonomous` returns an empty result before `propose_topics` when `cap <= 0`, so
+    // "1 chat completion" is not a claim about a run of zero.
+    expect(estimate(1)).toEqual({ completions: "3 chat completions", renders: "1 image render" });
     // Nothing in this application knows what a call cost, so nothing may print one.
     expect(JSON.stringify(estimate(3))).not.toMatch(/[$£€]/);
+  });
+});
+
+describe("a cap below one", () => {
+  it("is blocked rather than confirmed as a run that does nothing", () => {
+    render(<AutonomousRunPanel credentials={{ azure_chat: true, cloudflare_rendering: true }} ceiling={2} />);
+
+    // `min={1}` on a number input is a hint: clearing the field yields `""`, and `Number("")`
+    // is 0. Without the block the confirmation would promise "at most 0 drafts" beside "at
+    // most 1 chat completion" and post `?cap=0`, which the backend answers with an empty
+    // result before making any call at all.
+    fireEvent.change(screen.getByLabelText("draft cap"), { target: { value: "" } });
+
+    expect(screen.getByRole("button", { name: "Run generation…" })).toBeDisabled();
+    expect(screen.getByText(/Set a cap of at least 1/)).toBeInTheDocument();
   });
 });
 

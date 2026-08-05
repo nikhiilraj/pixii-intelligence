@@ -198,6 +198,17 @@ def push_draft(
 
     draft.zernio_post_id = str(post_id)
     draft.pushed_at = datetime.now(UTC)
+    # What Zernio is now holding, so `distribution.submit` can tell a draft that has since
+    # been redrawn or rewritten from one that has not. Written here and nowhere else, and
+    # only on the path where a create actually succeeded — the early return above sends
+    # nothing, so the remote post still holds whatever it held.
+    #
+    # **`edited()` is deliberately not called**, here or anywhere in this function. See the
+    # comment on `Draft.revision`: this writes `zernio_post_id`, `pushed_at` and now this
+    # column, none of which change what a person would publish, and bumping the revision here
+    # would make every push invalidate the command it exists to enable — including this one,
+    # which would then record a revision the draft had already left.
+    draft.pushed_revision = draft.revision
     session.add(draft)
     session.flush()
     return draft

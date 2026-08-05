@@ -138,6 +138,9 @@ const DRAFT: Draft = {
   // What a publication command is confirmed against. On the wire for every draft, so it is on
   // the fixture too — `DraftOut.revision` has no default and neither does this.
   revision: 1,
+  // Null: this fixture has never been pushed (`zernio_post_id` is null above), and a
+  // revision Zernio is holding is not a thing a draft that never left has.
+  pushed_revision: null,
   lineage: { hook: null, structure: null, visual: null },
   // Present on every `DraftOut`, so present on every fixture — these are required, not
   // optional: a fixture free to omit them lets a component ship a `?? "historical"`

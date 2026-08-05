@@ -174,6 +174,14 @@ export type Draft = {
   // default anywhere in this file for the reason `ScheduleIn` gives on the backend: a client
   // that may omit it can publish words nobody approved.
   revision: number;
+  /** Which revision Zernio is actually holding, or `null` for a draft that never left.
+   *
+   *  The pair is the point: `revision` says what this draft is now and this says what the
+   *  remote post is carrying, and when they differ the post says something nobody confirmed.
+   *  Before this reached the wire that difference could only be discovered by attempting a
+   *  command and reading the 409 — which is a bad way to learn that the words in Zernio are
+   *  not the words on the screen. `PublishPanel` disables its three controls on it. */
+  pushed_revision: number | null;
   lineage: { hook: LineageEntry; structure: LineageEntry; visual: LineageEntry };
   /** Where the draft is in the review workflow — `GenerationStage` in
    *  backend/app/models/stage.py, and `STAGES` below is this file's half of that contract.
