@@ -317,8 +317,14 @@ def test_transport_failures_arrive_as_fetch_failed(raised, public_dns):
 
 
 def test_an_unparseable_redirect_target_is_refused(public_dns):
-    """A `Location` is attacker-controlled, and httpx rejects some strings outright."""
-    with pytest.raises(UnsafeUrl):
+    """A `Location` is attacker-controlled and does not have to be a url.
+
+    `FetchFailed` rather than `UnsafeUrl` because httpx rejects the header itself, as a
+    `RemoteProtocolError`, before this module ever reads it — which is only visible by
+    running it. The `_parse` around the join stays as insurance against that changing; it
+    is not what catches this case today.
+    """
+    with pytest.raises(FetchFailed):
         fetch(PAGE, transport=serving(redirect("https://research\n.test/x")))
 
 

@@ -577,7 +577,7 @@ export default function PublishPanel({
           ? "Resolved UTC — once a local time is set."
           : resolved.kind === "unknown_zone"
             ? `“${timezone}” is not a timezone name this browser knows, so the instant cannot be resolved. An IANA name looks like Asia/Kolkata or Europe/London.`
-            : false
+            : resolved.kind === "nonexistent"
               ? `${local.replace("T", " ")} does not happen in ${timezone} — the clocks move forward over it. Choose a time before or after the change.`
               : resolved.kind === "ambiguous"
                 ? `${local.replace("T", " ")} happens twice in ${timezone} — the clocks move back over it, so it names two different instants. Choose a time either side of the change.`
