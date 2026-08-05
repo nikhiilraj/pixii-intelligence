@@ -15,7 +15,9 @@ import {
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -171,6 +173,77 @@ export function nextIndex(key: string, index: number, count: number): number | n
   if (key === "End") return count - 1;
   return null;
 }
+
+/** One template version as a pairing names it — `(family_id, version)`, never the name.
+ *
+ *  Never the name because the live library holds three pairs of hooks that share one:
+ *  `small-input-big-recurring-result` is family `7073134a…` (approved) *and* family `b8b3ec31…`
+ *  (proposed), and `ai-or-human-quiz` and `dismissive-objection-examples` are the other two. A
+ *  name match would group a family the structure never named, which is the "latest version"
+ *  mistake wearing different clothes: it credits the wrong template and says nothing while it
+ *  does. The row id is equally exact and this spells out why it is.
+ *
+ *  Read off the route's own rows rather than off `compatible_hook_families`, which names
+ *  families only — resolving a family to a version is the server's job, and doing it here would
+ *  be the browser deciding which version a pairing meant. */
+export const pairKey = (template: Template) => `${template.family_id}/${template.version}`;
+
+/** A run of hooks in the picker, and the heading over it. `label: null` is one ungrouped list. */
+export type HookGroup = { label: string | null; hooks: Template[] };
+
+/** The approved hooks, grouped by whether the chosen structure records pairing with them.
+ *
+ *  **A grouping, and deliberately not a filter.** Extraction records `compatible_hook_families`
+ *  against families, so a pairing outlives the versions it named and resolves to fewer hooks
+ *  than were recorded — against the live library each of the two approved structures resolves
+ *  to exactly *one* of six approved hooks. Filtering would hide five of six on every use, so
+ *  the "show me all of them" escape hatch would be the state a reader was in permanently, which
+ *  is a filter nobody wanted plus a control to undo it. Grouping narrows what a reader reads
+ *  first and traps them at nothing: every approved hook is still an option, one click away, in
+ *  the same list.
+ *
+ *  **And not a ranking.** Compatibility is a structural fact extraction recorded from the
+ *  corpus, not a claim that a hook performs better — 40 of the 61 templates in this library
+ *  cite a single source post and no template version has one lineage-attributed published post
+ *  behind it, so there is nothing here that could support "better". Order inside each group is
+ *  the order it arrived in, which is by name, and the group headings say what was recorded
+ *  rather than what to choose.
+ *
+ *  A pure function because it is the half of this control a jsdom test can hold honestly: the
+ *  options live in a Radix portal that is detached while the Select is closed, and a trigger
+ *  cannot be opened in jsdom at all. "Which hook is offered, and under which heading" is a
+ *  claim about this list, and this is where it can be made.
+ *
+ *  `pairing` is `null` for every state that is not a read pairing — nothing chosen, the read
+ *  still out, the read failed. All three mean *do not group*, and none of them means "no hook
+ *  is compatible"; the caption beside the control is what tells them apart. */
+export function hookGroups(
+  hooks: Template[],
+  pairing: Template[] | null,
+  structureName: string,
+): HookGroup[] {
+  const recorded = new Set((pairing ?? []).map(pairKey));
+  // Partitioned, never concatenated. A hook the route names that is not in this list — a stale
+  // prop, or a route resolving against a library this page has not re-read — must not be added
+  // as an option, because the id would be sent for a template the page cannot show. The
+  // invariant a test pins is that the groups are a permutation of `hooks` in every state.
+  const paired = hooks.filter((hook) => recorded.has(pairKey(hook)));
+  if (paired.length === 0) return [{ label: null, hooks }];
+  return [
+    { label: `Recorded as pairing with ${structureName}`, hooks: paired },
+    { label: "Every other approved hook", hooks: hooks.filter((h) => !recorded.has(pairKey(h))) },
+  ].filter((group) => group.hooks.length > 0);
+}
+
+/** What a 200 carrying something other than a list of hooks is reported as. `status: 200`
+ *  because that is what arrived — the response was accepted and its body was not what the route
+ *  promises, which is the same shape `lib/api`'s `request` reports for a body it cannot read. */
+const MALFORMED_PAIRING: ApiFailure = {
+  ok: false,
+  kind: "http",
+  status: 200,
+  message: "the pairing came back as something other than a list of hooks",
+};
 
 /* ponytail: the five kinds re-declared rather than imported from `assets/AssetLibrary`, for the
  * reason `assetSrc` was lifted into `lib/api` instead — importing that module here would pull a
@@ -814,6 +887,18 @@ export default function Studio({
   // fiber above the boundary, so holding the slot across a close keeps the previous search
   // string on screen the next time the dialog opens. Measured, not assumed.
   const [picking, setPicking] = useState<ImageSlot | null>(null);
+  // What `GET /templates/{id}/compatible-hooks` answered, and **which structure it answered
+  // about**. The id is in the state rather than beside it because without it a chosen structure
+  // whose request is still out is indistinguishable from one that records no pairing, and the
+  // caption would state the second while the first is true — a wrong sentence on screen, which
+  // is this page's recurring defect. `hooks: null` with a `failure` is the third state: a failed
+  // read is not an empty pairing, and this page has the `ApiFailure` union precisely so the two
+  // cannot be flattened into one.
+  const [pairing, setPairing] = useState<{
+    structure: number;
+    hooks: Template[] | null;
+    failure: ApiFailure | null;
+  } | null>(null);
 
   // Whether a run is going on right now, which is what disables Generate and what the poll
   // below runs against. The client half of duplicate protection only — the server holds the
@@ -853,8 +938,58 @@ export default function Studio({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft?.id, draft?.generation_stage]);
 
+  /* Ask which hooks the chosen structure records pairing with.
+   *
+   * An effect and not the `onValueChange` handler, unlike `chooseVisual` — the rule this file
+   * follows is that React 19 forbids syncing *derived state* through an effect, and this is not
+   * derived state, it is a request to another process. Two things make the effect the better
+   * shape here rather than merely a permitted one: the structure is set from two places (the
+   * Select and Suggest) and a handler would need the fetch in both, and switching structures
+   * while a request is out leaves a response that must not be applied. The cleanup is that
+   * guard — a stale answer landing under a different structure would be the wrong pairing shown
+   * with no sign that it is wrong.
+   *
+   * A failure is kept, not toasted: it changes what the control below is allowed to claim, and
+   * it is answered where the decision is. */
+  const chosenStructure = picked.structure;
+  useEffect(() => {
+    // Nothing chosen: nothing to ask, and deliberately nothing to clear either. A pairing left
+    // in state describes the structure it names, and `settled` below only ever reads the one
+    // whose id matches what is chosen now — so clearing here would be a `setState` in an effect
+    // body (which the lint rule forbids, and rightly) to erase a value nothing can read.
+    if (chosenStructure === null) return;
+    let live = true;
+    getJson<Template[]>(`/templates/${chosenStructure}/compatible-hooks`).then((result) => {
+      if (!live) return;
+      // A 200 whose body is not a list is a broken response and not an empty pairing — the
+      // distinction `request()` already makes in `lib/api` for a body it cannot read. Reported
+      // as a failed read rather than allowed to reach `hookGroups`, where it would throw on
+      // `.map` and take the whole page down: the picker is one control on a page also holding
+      // an idea, three picks and possibly a draft mid-run, and none of that is worth losing.
+      const hooks = result.ok && Array.isArray(result.data) ? result.data : null;
+      setPairing({
+        structure: chosenStructure,
+        hooks,
+        failure: result.ok ? (hooks ? null : MALFORMED_PAIRING) : result,
+      });
+    });
+    return () => {
+      live = false;
+    };
+  }, [chosenStructure]);
+
   const approved = templates.filter((t) => t.status === "approved");
   const of = (kind: Template["kind"]) => approved.filter((t) => t.kind === kind);
+
+  // The pairing for the structure that is chosen *now*. A pairing left over from the previous
+  // structure is not it, and is not shown while the new one is being read.
+  const settled = pairing?.structure === chosenStructure ? pairing : null;
+  const structure = templates.find((t) => t.id === chosenStructure);
+  const groups = hookGroups(
+    of("hook"),
+    settled?.hooks ?? null,
+    structure?.name ?? "the chosen structure",
+  );
 
   const visual = templates.find((t) => t.id === picked.visual);
   const slots = imageSlots(visual);
@@ -993,14 +1128,61 @@ export default function Studio({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={NONE}>{kind} — let it suggest</SelectItem>
-              {of(kind).map((t) => (
-                <SelectItem key={t.id} value={String(t.id)}>
-                  {t.name} (v{t.version})
-                </SelectItem>
+              {/* The hook list is the one that groups, and it groups the same array the other
+                  two render flat — `hookGroups` partitions `of("hook")` rather than building a
+                  list of its own, so the options cannot differ between the two branches. */}
+              {(kind === "hook" ? groups : [{ label: null, hooks: of(kind) }]).map((group) => (
+                <SelectGroup key={group.label ?? kind}>
+                  {group.label && <SelectLabel>{group.label}</SelectLabel>}
+                  {group.hooks.map((t) => (
+                    <SelectItem key={t.id} value={String(t.id)}>
+                      {t.name} (v{t.version})
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
               ))}
             </SelectContent>
           </Select>
         ))}
+
+        {/* What the hook list is doing, said outside the dropdown.
+
+            Outside because the headings are inside a Radix portal that does not exist while the
+            Select is closed, so a reader who has not opened it would otherwise get no account of
+            why the list changed when they chose a structure — and the three states that are not
+            a grouping have no heading to live in at all.
+
+            Branched on `groups`, which is the array actually rendered above, so this sentence
+            cannot describe a list that is not on screen. The order is the four states in the
+            order they occur: reading, failed, nothing to group by, grouped. */}
+        {chosenStructure !== null &&
+          (settled === null ? (
+            <p className="mt-3 text-caption text-muted">
+              Reading which hooks this structure records pairing with…
+            </p>
+          ) : settled.hooks === null ? (
+            /* The amber this column already uses for a read that failed — not
+               `ApiFailureNotice`, whose Reload button would throw away the typed idea and all
+               three picks, none of which is in the address bar. */
+            <p className="mt-3 text-caption text-amber-700 dark:text-amber-400">
+              The hooks this structure records pairing with could not be read (
+              {settled.failure?.message ?? "unknown error"}). That is a failed request and not a
+              structure that records none — every approved hook is listed below, ungrouped.
+            </p>
+          ) : groups.length < 2 ? (
+            <p className="mt-3 text-caption text-muted">
+              This structure records no pairing that resolves to an approved hook — either
+              extraction recorded none, or the hooks it named have since been retired. All{" "}
+              {of("hook").length} approved hooks are listed, ungrouped.
+            </p>
+          ) : (
+            <p className="mt-3 text-caption text-muted">
+              The hook list is grouped by what extraction recorded this structure pairing with in
+              the corpus. That is a record of what was read, not a judgement about which hook
+              performs better — every approved hook stays selectable in the same list, and
+              choosing a structure never changes a hook already chosen.
+            </p>
+          ))}
         </div>
 
         {slots.length > 0 && (

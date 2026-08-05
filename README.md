@@ -48,6 +48,8 @@ API assumptions are backed by the companion
 - Check every factual assertion the finished post makes against the sources actually read, and
   refuse the ones nothing backs.
 - Suggest templates while allowing every choice to be overridden.
+- Group the hook list by what extraction recorded a chosen structure pairing with — a grouping
+  and never a filter, so every approved hook stays selectable.
 - Create several variants of one idea, then keep the preferred draft.
 - Regenerate text and visuals independently without changing their lineage.
 - Render deterministic HTML visuals or use AI-generated imagery.
@@ -77,6 +79,12 @@ The normal workflow is:
 2. Review proposals in **Templates**. Approve at least one hook, structure, and visual; retire
    patterns you do not want to reuse. Retiring preserves the historical record.
 3. Open **Studio**, enter an idea, and choose templates or ask the application to suggest them.
+   Choosing a structure groups the hook list under what extraction recorded that structure
+   pairing with; it narrows nothing away, because the pairing names *families* and resolves to
+   whichever of their versions are still approved — against the library today each approved
+   structure resolves to one hook out of six, so hiding the rest would leave you with one
+   option. Grouped, not ranked: it is a record of what the corpus showed, not a claim that one
+   hook does better.
 4. Generate a draft. Studio answers immediately with a draft id and then reports each stage as
    it happens — planning, researching, drafting, verifying, evaluating, rendering — because the
    run itself happens in the background and commits every stage as it enters it. The run
@@ -445,7 +453,11 @@ This pass stays local except for generation or rendering calls and does not push
 
 1. Visit every screen and confirm an API failure is distinguishable from an honestly empty list.
 2. Approve one hook, one structure, and one visual template. Start with a text-only visual such as
-   `stat-card`; an `image_url` slot needs an asset selected.
+   `stat-card`; an `image_url` slot needs an asset selected. Then, in Studio, choose that
+   structure and open the hook list: it should be grouped under a heading naming the structure,
+   with every other approved hook still in the list under its own heading, and the line beneath
+   the selects should say which of the four states it is in — reading, unreadable, nothing
+   recorded, or grouped.
 3. Generate an opinion-only draft. Studio should answer at once with a draft id in the address
    bar and then name each stage as the run enters it, and finish showing `none`, a floor reason,
    a brief, an angle, planned claims, what the finished post asserts, passed gates, a readiness
@@ -601,7 +613,7 @@ drafts:      6, every one `ready` and every one `editorial: null`
 research:    0 jobs
 daily runs:  0
 verdicts:    0
-tests:       1191 backend · 447 frontend
+tests:       1196 backend · 470 frontend
 ```
 
 The two zeros in the middle are the ones worth reading. **The reviewed workflow has never
@@ -668,6 +680,11 @@ Written plainly because the alternative is discovering it in production.
   exercised with fixtures. No verdict has ever been recorded.
 - **Radix keyboard behaviour** — dialogs opening, focus traps, Escape, typeahead. jsdom only
   approximates focus, so these were checked by hand in a browser, not by tests.
+- **The hook list's group headings have never been seen.** `SelectContent` is a Radix portal
+  that does not exist while the select is closed, and a Radix trigger cannot be opened in jsdom
+  at all — so the headings are asserted where they are decided (`hookGroups`) and the sentence
+  beside the control is what a test can read on the page. Whether the heading aligns with the
+  item text under it, and whether it is legible in dark mode, is unproven by any test here.
 - **Chart rendering.** Recharts is 0×0 in jsdom; the charts were verified by looking at
   screenshots, not asserted.
 - **Skeleton geometry.** Tests compare the declared container classes between a page and its

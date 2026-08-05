@@ -231,3 +231,114 @@ def test_a_failing_render_service_is_reported_as_upstream_not_as_our_crash(sessi
     assert response.status_code == 502
     assert "429" in response.json()["detail"]
     app.dependency_overrides.clear()
+
+
+# `GET /templates/{id}/compatible-hooks` — the handler, not the function underneath it.
+#
+# `test_structures.py` covers `extraction.compatible_hooks` four times and never calls the
+# route, which is the gap the README's 204-mutation audit found twice ("two routes had no HTTP
+# coverage whatsoever"): a handler nothing exercises is a handler nobody has proven answers,
+# and its 400 branch below was unreachable by any test in the suite. Every assertion here reads
+# the status *and* the body — an unrouted path is a 404 as well, which is how six assertions in
+# that audit passed against routes that did not exist.
+
+
+def _paired(session, *, families: list[str]):
+    """A structure declaring `families`, approved, the way extraction leaves one."""
+    from app.models.template import TemplateKind
+    from app.templates import approve, create_template
+
+    structure = create_template(
+        session,
+        kind=TemplateKind.STRUCTURE,
+        name="offer-reward",
+        body={"sections": [{"name": "hook"}], "compatible_hook_families": families},
+    )
+    return approve(session, structure)
+
+
+def _hook(session, name: str, *, approved: bool = True):
+    from app.models.template import TemplateKind
+    from app.templates import approve, create_template
+
+    hook = create_template(session, kind=TemplateKind.HOOK, name=name, body={"pattern": "{a}"})
+    return approve(session, hook) if approved else hook
+
+
+def test_a_structures_pairings_resolve_to_the_newest_approved_version(session):
+    """The route answers with `(family, newest approved version)` — never every version.
+
+    The family is edited to v2 before the read, so a handler that resolved the pairing to the
+    row it was recorded against would answer with v1, and one that resolved it to the family
+    would answer with both. Lineage in this system is `(family_id, version)`; a pairing names
+    only the family, so which version it means is the route's decision and it is worth pinning.
+    """
+    from app.templates import edit_template
+
+    hook = _hook(session, "ai-time-value-equation")
+    edit_template(session, hook, name="ai-time-value-equation-v2")
+    structure = _paired(session, families=[hook.family_id])
+
+    body = client_with(session).get(f"/templates/{structure.id}/compatible-hooks").json()
+
+    assert [(t["name"], t["version"]) for t in body] == [("ai-time-value-equation-v2", 2)]
+    app.dependency_overrides.clear()
+
+
+def test_a_pairing_naming_only_unapproved_hooks_answers_with_an_empty_list(session):
+    """200 and `[]` — a real state, and not the same answer as a failed read.
+
+    This is the stale pairing the picker has to survive: extraction recorded a family, a human
+    has since retired every version of it, and the structure still names it. The route drops
+    it rather than offering generation a hook nobody approved.
+    """
+    from app.templates import retire
+
+    retired = _hook(session, "transformation")
+    retire(session, retired)
+    proposed = _hook(session, "not-reviewed-yet", approved=False)
+    structure = _paired(session, families=[retired.family_id, proposed.family_id])
+
+    response = client_with(session).get(f"/templates/{structure.id}/compatible-hooks")
+
+    assert response.status_code == 200
+    assert response.json() == []
+    # And the hooks themselves are still there — this is a pairing that resolves to nothing,
+    # not a library that is empty.
+    assert len(client_with(session).get("/templates?kind=hook").json()) == 2
+    app.dependency_overrides.clear()
+
+
+def test_a_structure_recording_no_pairing_answers_with_an_empty_list(session):
+    structure = _paired(session, families=[])
+
+    response = client_with(session).get(f"/templates/{structure.id}/compatible-hooks")
+
+    assert response.status_code == 200
+    assert response.json() == []
+    app.dependency_overrides.clear()
+
+
+def test_asking_a_hook_what_it_pairs_with_is_refused(session):
+    """The 400 branch, which nothing exercised until this test.
+
+    Only a structure carries `compatible_hook_families`; a hook or a visual would answer with
+    an empty list forever, which reads as "nothing pairs with this" rather than as "that is not
+    a question about this kind of template". The detail is asserted because the status alone is
+    what a missing route also returns.
+    """
+    hook = _hook(session, "transformation")
+
+    response = client_with(session).get(f"/templates/{hook.id}/compatible-hooks")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "only a structure declares hook pairings"
+    app.dependency_overrides.clear()
+
+
+def test_asking_about_a_template_that_does_not_exist_is_not_found(session):
+    response = client_with(session).get("/templates/999999/compatible-hooks")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "no template 999999"
+    app.dependency_overrides.clear()

@@ -296,21 +296,22 @@ def _rendered(
 def get_compatible_hooks(session: SessionDep, template_id: int) -> list[Template]:
     """The usable hooks a structure declares it pairs with.
 
-    **API-only, with exactly one sensible consumer, and it is not built.** Structure extraction
-    asks the model for `compatible_hooks` and stores the resolved families on the row; this
-    route turns them back into approved hooks. The reader that would matter is Studio's
-    template picker — choosing a structure should narrow the hook list to the ones it pairs
-    with — and today the picker offers every approved hook regardless, so the pairing a model
-    was asked to record is discarded at the point it would be used.
+    Structure extraction asks the model for `compatible_hooks` and stores the resolved families
+    on the row; this route turns them back into approved hooks. Its reader is Studio's template
+    picker, which groups the hook list under the structure that was chosen — see
+    `frontend/src/app/studio/Studio.tsx`.
 
-    Not wired in the operator-controls pass because `frontend/src/app/studio/Studio.tsx` was
-    held by another agent, and because the alternative — a read-only pairing list on
-    `/templates` — would be a second surface built to make an endpoint look connected rather
-    than to answer a question anyone has. See `docs/capability-matrix.md`.
+    **What it answers with is a grouping and never a shortlist**, which is why the picker groups
+    rather than filters: `compatible_hook_families` names families, so a pairing survives its
+    hooks being retired and resolves here to fewer rows than were recorded — against the live
+    library each of the two approved structures resolves to exactly one of six approved hooks.
+    An empty list is therefore a routine answer, and a caller treating it as "these are the only
+    hooks that may be used" would leave an operator with one option out of six.
 
-    Note also that this *route* has no HTTP test: `test_structures.py` covers
-    `extraction.compatible_hooks` four times and never this handler, so the 400 below is
-    unexercised. That is the class of gap the README's mutation audit found twice before.
+    Both of the states above are HTTP-tested in `test_api_templates.py`, along with the 400
+    below: `test_structures.py` covers `extraction.compatible_hooks` at the function and this
+    handler was, until then, exercised by nothing — the class of gap the README's mutation audit
+    found twice before.
     """
     structure = _load(session, template_id)
     if structure.kind is not TemplateKind.STRUCTURE:

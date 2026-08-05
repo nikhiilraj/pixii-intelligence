@@ -117,6 +117,36 @@ export function SelectContent({
   );
 }
 
+/* A heading over a run of items, and the run it heads.
+ *
+ * `SelectPrimitive.Group` + `Label` rather than a disabled `SelectItem` styled to look like a
+ * heading: a disabled item is still an option in the accessibility tree and Radix's typeahead
+ * can still land on it, so a reader arrowing through would stop on a word that cannot be
+ * chosen. `Group` renders `role="group"` and `Label` is wired to it by `aria-labelledby`, which
+ * is the same relationship a native `<optgroup>` has.
+ *
+ * `pl-6` matches `SelectItem`'s, so the heading aligns with the item *text* rather than with
+ * the check-indicator gutter. Every page's content being misaligned with the nav is one of the
+ * three defects this project found by looking rather than by testing; a heading sitting six
+ * pixels left of the words under it is the same mistake at a smaller scale.
+ */
+export const SelectGroup = SelectPrimitive.Group;
+
+export function SelectLabel({
+  className,
+  ...props
+}: React.ComponentProps<typeof SelectPrimitive.Label>) {
+  return (
+    <SelectPrimitive.Label
+      className={cn(
+        "px-2 py-1.5 pl-6 font-mono text-caption uppercase tracking-label text-muted",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
 export function SelectItem({
   className,
   children,

@@ -104,18 +104,28 @@ function jsonResponse(status: number, body: unknown): Response {
   });
 }
 
-/** Answers the two endpoints this page calls, by path. */
+/* Every stub below answers `/templates/{id}/compatible-hooks` with `[]`, because the page reads
+ * it the moment a structure is chosen and Suggest chooses one. `[]` is the honest answer for
+ * these fixtures — their structure declares no pairing — and it is not a detail these tests can
+ * skip: a stub falling through to its default would hand the picker a draft object where a list
+ * belongs, which is a *different* state (a malformed response) from the one they are about. */
+function noPairing(url: string): Response | null {
+  return String(url).includes("/compatible-hooks") ? jsonResponse(200, []) : null;
+}
+
+/** Answers the endpoints this page calls, by path. */
 function stubApi() {
   const fetchStub = vi.fn((url: string) =>
     Promise.resolve(
-      String(url).endsWith("/drafts/suggest")
+      noPairing(url) ??
+      (String(url).endsWith("/drafts/suggest")
         ? jsonResponse(200, {
             hook: { id: 1 },
             structure: { id: 2 },
             visual: { id: 3 },
             reason: "stat-hero, because the idea is a number",
           })
-        : jsonResponse(201, DRAFT),
+        : jsonResponse(201, DRAFT)),
     ),
   );
   vi.stubGlobal("fetch", fetchStub);
@@ -202,6 +212,8 @@ const openPicker = (slot: string) => within(openPickerElement(slot));
 function stubSuggest(...visualIds: number[]) {
   const queue = [...visualIds];
   const fetchStub = vi.fn((url: string) => {
+    const pairing = noPairing(url);
+    if (pairing) return Promise.resolve(pairing);
     if (!String(url).endsWith("/drafts/suggest")) return Promise.resolve(jsonResponse(201, DRAFT));
     const visual = queue.shift() ?? visualIds[visualIds.length - 1];
     return Promise.resolve(
@@ -220,6 +232,8 @@ function stubSuggest(...visualIds: number[]) {
 /** `POST /assets` answers with whatever this is given; suggest and generate answer as usual. */
 function stubUpload(assetResponse: Response) {
   const fetchStub = vi.fn((url: string) => {
+    const pairing = noPairing(url);
+    if (pairing) return Promise.resolve(pairing);
     const path = String(url).replace(/^https?:\/\/[^/]+/, "");
     if (path === "/assets") return Promise.resolve(assetResponse);
     if (path === "/drafts/suggest")

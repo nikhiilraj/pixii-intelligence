@@ -55,7 +55,7 @@ reaches it and the last column says whether that is a decision or a finding.
 | Preview an unsaved template body | `POST /templates/preview` | `/templates` — TemplatePreview | PNG, or the 502 the renderer's own refusal carries | Retry | `test_template_preview.py`, `TemplatePreview.test.tsx` | — |
 | Preview a saved template | `POST /templates/{id}/preview` | `/templates` — row preview | PNG or refusal | Retry | `test_template_preview.py` | — |
 | **Every version of a template family** | `GET /templates/{id}/versions` | **API-only** | — | — | `test_api_templates.py` | **Decision: documented as internal API support, not connected this pass.** It is the `(family_id, version)` attribution trail the whole project rests on, and a version-history disclosure on `/templates` is the obvious home — but it is a *display* of lineage next to controls that already work, and the four operations above it were the gap. Named as unfixed, not as fine. See findings. |
-| **Hooks a structure declares it pairs with** | `GET /templates/{id}/compatible-hooks` | **API-only** | — | — | **The route has none.** `test_structures.py` covers `extraction.compatible_hooks` 4 times, always at the function; nothing calls the handler, so its 400 branch is unexercised | **Decision: API-only for now, with one real consumer named.** Extraction records `compatible_hook_families` on every structure and the route resolves it to *usable* hooks. Its only sensible reader is Studio's template picker, which would narrow the hook list when a structure is chosen — and `studio/Studio.tsx` is held by another agent this session. Surfacing it anywhere else (a read-only list on `/templates`) would be a second surface built to avoid an endpoint count, which is what the README's refusals section warns against. See findings. |
+| Hooks a structure declares it pairs with | `GET /templates/{id}/compatible-hooks` | `/studio` — the hook select, once a structure is chosen | The hook list **grouped** under a heading naming the structure, with every other approved hook under its own; a read that failed, a pairing that resolves to nothing, and a read still out are three different sentences beside the control | The list stays complete in all three, so there is nothing to recover from | `test_api_templates.py` (the handler, including its 400 and 404), `studio/Studio.pairing.test.tsx` | — |
 
 ## Generation — templates to drafts
 
@@ -170,8 +170,21 @@ because a matrix whose only purpose is to make itself look complete is worth not
    non-structure is unexercised. This is the same class of gap the README's 204-mutation audit
    found twice ("two routes had no HTTP coverage whatsoever") and is why this cell says so
    rather than naming the file that happens to contain the word.
-   **Still open.** `grep -rn "compatible-hooks" frontend/src backend/tests` returns nothing:
-   no caller and still no HTTP test. Task #18.
+   **Closed by task #18, and what the live data says changed the shape of the fix.** The route
+   answers, and now has HTTP tests: the newest approved version of a paired family, an empty
+   list for a pairing whose hooks have all been retired, an empty list for a structure that
+   recorded none, the 400 for a hook and the 404 for a missing id. Nothing was broken.
+
+   The live library is what ruled out filtering. Both approved structures record exactly one
+   family each — `ai-workflow-giveaway` → `ai-time-value-equation`, `case-study-loop` →
+   `small-input-big-recurring-result` — so each resolves to **one of the six approved hooks**. A
+   filter would hide five of six on every use, which makes the "show me all of them" escape
+   hatch the state a reader lives in, which is a filter nobody wanted plus a control to undo it.
+   Studio therefore **groups**: the recorded pairing under a heading naming the structure, every
+   other approved hook under its own, all of them selectable, and choosing a structure never
+   moves a hook already chosen. The wording says what extraction recorded and never that one
+   hook is better — compatibility is a structural fact from the corpus, and 40 of the 61
+   templates here cite a single source post.
 6. **`GET /templates/{id}/versions` is unread.** Lineage resolves through `(family_id,
    version)` everywhere in this system, and the one route that shows a family's history has no
    reader. A disclosure on the `/templates` review row is the natural home. Left for the same
