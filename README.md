@@ -55,6 +55,9 @@ API assumptions are backed by the companion
 - Produce capped autonomous draft batches without pushing them anywhere.
 - Run that batch once per local day, claimed durably, and report it as a Teams card.
 - Show every point where the workflow is waiting on a human in one Inbox.
+- Run each of those pulls and batches from a screen rather than from `curl`, behind a
+  confirmation that names what it costs and what it reaches.
+- Browse every research run and read the dossier behind any of them.
 
 ## How to use it
 
@@ -168,7 +171,7 @@ you, records your answer and your reason, and feeds your words back into the nex
 
 ---
 
-## The seven screens
+## The eight screens
 
 | Screen | What it's for |
 |---|---|
@@ -179,6 +182,7 @@ you, records your answer and your reason, and feeds your words back into the nex
 | **Templates** (`/templates`) | The library. Approve or retire proposals, author new templates, edit existing ones. **This is the main bottleneck** — 50 proposals are waiting. |
 | **Assets** (`/assets`) | Images that templates can use. Upload, tag, delete. |
 | **Scoreboard** (`/scoreboard`) | What each template version has actually done. Mostly empty, honestly so. |
+| **Operations** (`/operations`) | The work that isn't writing: pull the corpus from Zernio, pull engagement back, import a LinkedIn scrape, run a capped unattended batch, and browse every research run. Each operation says what it needs configured, what it will spend and what it will do, before it does it. None of them publishes, schedules or pushes. |
 
 ### The four Inbox queues
 
@@ -387,6 +391,11 @@ Ask Monte to publish that specific draft in Zernio.
 
 Wait for real engagement — a day at least, ideally a few.
 
+Open `/operations` and press **Sync metrics**. It confirms first — readings accumulate rather
+than overwrite, so a sync appends one row per post — and then reports what it read, how many
+snapshots it wrote, and how many drafts it found had gone live. The equivalent still works
+from a terminal if you prefer:
+
 ```bash
 curl -X POST http://localhost:8000/metrics/sync
 ```
@@ -482,6 +491,12 @@ Written plainly because the alternative is discovering it in production.
   template carries a default asset. Both were photographed against a read-only proxy instead.
 - **`AddExternal`** (the "add a post from elsewhere" form on `/posts`) **has no test file at
   all.** It writes to the corpus.
+- **Nothing on any screen says that unattended work ran.** The metrics scheduler, the
+  publication reconciliation pass and the daily editorial slot produce log lines and nothing
+  else, so a daily run that has been failing for a week looks like a quiet week. There is no
+  route to connect: `DailyRun` rows exist and no endpoint reads them. Full audit in
+  [`docs/capability-matrix.md`](docs/capability-matrix.md), which lists every backend
+  capability against the screen that reaches it — and the ones no screen reaches.
 
 ---
 

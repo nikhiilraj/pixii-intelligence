@@ -12,6 +12,10 @@ const ACTIONS = [
   { label: "Browse the corpus", detail: "Read published evidence", href: "/posts", group: "Go" },
   { label: "Open asset library", detail: "Upload or reuse visual material", href: "/assets", group: "Go" },
   { label: "View template evidence", detail: "Open the scoreboard", href: "/scoreboard", group: "Go" },
+  // "Go", not "Do": this opens the screen. Every action on it is behind its own confirmation,
+  // and a palette entry that fired a paid external call from a keystroke would be the exact
+  // one-press mistake those confirmations exist to prevent.
+  { label: "Open operations", detail: "Sync, ingest, generate a batch, browse research", href: "/operations", group: "Go" },
 ] as const;
 
 export function CommandPalette() {

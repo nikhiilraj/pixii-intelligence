@@ -15,6 +15,13 @@ const NAV = [
     match: (path: string) => path.startsWith("/templates") || path.startsWith("/scoreboard"),
   },
   { href: "/assets", label: "Assets", match: (path: string) => path.startsWith("/assets") },
+  // Last, deliberately. The nav reads left to right as the circuit — inbox, write, evidence,
+  // library, material — and the unattended work is what feeds it rather than a step in it.
+  {
+    href: "/operations",
+    label: "Operations",
+    match: (path: string) => path.startsWith("/operations"),
+  },
 ];
 
 /** The small client boundary that gives the otherwise-server-rendered shell a sense of place. */

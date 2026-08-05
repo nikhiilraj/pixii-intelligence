@@ -9,6 +9,9 @@ import InboxPage from "./(inbox)/page";
 import AssetsError from "./assets/error";
 import AssetsLoading from "./assets/loading";
 import AssetsPage from "./assets/page";
+import OperationsError from "./operations/error";
+import OperationsLoading from "./operations/loading";
+import OperationsPage from "./operations/page";
 import PostDetailError from "./posts/[id]/error";
 import PostDetailLoading from "./posts/[id]/loading";
 import PostDetailPage from "./posts/[id]/page";
@@ -26,7 +29,7 @@ import TemplatesError from "./templates/error";
 import TemplatesLoading from "./templates/loading";
 import TemplatesPage from "./templates/page";
 
-/* The seven `loading.tsx` / `error.tsx` pairs. Only `components/route-error.test.tsx` covered
+/* The eight `loading.tsx` / `error.tsx` pairs. Only `components/route-error.test.tsx` covered
  * any of this, and it covers the shared body — not the fourteen files that use it.
  *
  * **What a jsdom test can honestly claim here, and what it cannot.** It cannot measure a
@@ -44,8 +47,12 @@ import TemplatesPage from "./templates/page";
  * `max-w-6xl` — is the visible jump, expressed as the one thing jsdom can actually compare.
  *
  * The pages are rendered against a 500 for the container comparison: every one of them renders
- * its `<main>` before it branches on the read, so the failure path reaches the shell without
- * mounting any client component.
+ * its `<main>` before it branches on the read, so the failure path reaches the shell whatever
+ * the API said. `/operations` is the one page that still mounts its client panels there, and
+ * deliberately — a failed `/health` read means its prerequisites are *unknown*, not absent, so
+ * the controls stay on screen and the server stays the thing that decides. That is the
+ * `publishing === null` rule from PublishPanel, and it is why this test renders panels here
+ * and not on the other seven.
  */
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
@@ -103,6 +110,12 @@ const ROUTES = [
     /Loading Studio/,
   ],
   ["the template library", TemplatesLoading, () => TemplatesPage(), /Loading the template library/],
+  [
+    "Operations",
+    OperationsLoading,
+    () => OperationsPage({ searchParams: Promise.resolve({}) }),
+    /Loading operations/,
+  ],
 ] as const;
 
 describe("every route's skeleton stands in the same box as its page", () => {
@@ -113,7 +126,7 @@ describe("every route's skeleton stands in the same box as its page", () => {
 
     /* Class list, not width: jsdom applies no stylesheet, so this compares the container the
        two files declare rather than the box either one draws. It is still the invariant that
-       matters — `/posts/[id]` is deliberately `max-w-3xl` while the other six are `max-w-6xl`,
+       matters — `/posts/[id]` is deliberately `max-w-3xl` while the other seven are `max-w-6xl`,
        and a skeleton on the wrong one moves the whole page sideways when the content lands.
        `aria-busy` is the one attribute the skeleton may add and the page may not. */
     expect(skeleton.className.split(" ").filter(Boolean).sort()).toEqual(
@@ -235,7 +248,7 @@ describe("what a skeleton promises matches what arrives", () => {
   });
 });
 
-/* The seven five-line `error.tsx` files. `RouteError` itself is covered in
+/* The eight five-line `error.tsx` files. `RouteError` itself is covered in
    `components/route-error.test.tsx`; what is untested there is the part that differs between
    them — the name each one gives its route, and that it forwards `error` and `reset` at all. A
    wrapper that dropped `{...props}` would render a boundary with no message and a dead retry. */
@@ -248,6 +261,7 @@ describe("every route's error boundary names its own route and forwards its prop
     [ScoreboardError, "The scoreboard"],
     [StudioError, "Studio"],
     [TemplatesError, "The template library"],
+    [OperationsError, "Operations"],
   ] as const;
 
   it.each(BOUNDARIES)("%#: %s", (Boundary, what) => {

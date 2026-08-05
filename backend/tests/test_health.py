@@ -63,3 +63,23 @@ def test_health_reports_the_variants_ceiling_as_a_sibling_of_the_credential_flag
         "firecrawl_search",
         "brave_search",
     }
+
+
+def test_health_reports_the_autonomous_ceiling_as_a_sibling_too():
+    """The operations screen has to say what a manual autonomous run will spend.
+
+    Same relationship `variants_max` has with Studio and for the same reason: the client
+    reads the ceiling only to *state* it, and `POST /drafts/autonomous-run` still clamps its
+    `cap` query parameter server-side. Without this on the wire the estimate on the
+    confirmation hardcodes the number and lies the day the setting changes — the drift
+    `health()`'s own docstring names.
+
+    Compared against the setting, never the literal, for the reason the variants test gives.
+    """
+    body = client.get("/health").json()
+
+    assert body["autonomous_max_drafts"] == settings.autonomous_max_drafts
+    assert isinstance(body["autonomous_max_drafts"], int)
+    # A sibling of `credentials`, not a key inside it — the Inbox footer renders that mapping
+    # row-per-key as a health light, so a number in there draws a junk boolean.
+    assert "autonomous_max_drafts" not in body["credentials"]

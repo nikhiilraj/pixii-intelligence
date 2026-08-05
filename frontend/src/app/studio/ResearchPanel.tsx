@@ -256,7 +256,7 @@ export default function ResearchPanel({
       {dossier === null ? (
         <NoDossier unavailable={unavailable} />
       ) : (
-        <Dossierpanel dossier={dossier} />
+        <DossierPanel dossier={dossier} />
       )}
     </section>
   );
@@ -285,8 +285,16 @@ function NoDossier({ unavailable }: { unavailable: string | null }) {
   );
 }
 
-/** The dossier itself. */
-function Dossierpanel({ dossier }: { dossier: Dossier }) {
+/** The dossier itself — the question, the coverage summary, the claims, the sources, the
+ *  unknowns and the spend.
+ *
+ *  **Exported so the operations screen can browse runs without reimplementing any of this.**
+ *  Only this half is shared. `ResearchPanel` above it is Studio's framing — its heading and its
+ *  empty state both say "linked to this draft" and "never selected from the URL", which are
+ *  true there and false on a screen whose whole job is to select a run from the URL. Sharing
+ *  the wrapper would have put that sentence in front of someone who had just clicked a run,
+ *  which is worse than the duplication it saves. */
+export function DossierPanel({ dossier }: { dossier: Dossier }) {
   const counts = coverage(dossier.claims);
   const sources = new Map(dossier.sources.map((source) => [source.id, source]));
 

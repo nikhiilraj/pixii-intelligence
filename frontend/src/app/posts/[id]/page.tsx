@@ -13,6 +13,7 @@ import {
 
 import EngagementCurve from "./EngagementCurve";
 import ExcludeToggle from "./ExcludeToggle";
+import PromoteMedia from "./PromoteMedia";
 import RetopicForm from "./RetopicForm";
 import VerdictForm from "./VerdictForm";
 
@@ -221,6 +222,13 @@ export default async function PostDetail({ params }: { params: Promise<{ id: str
               className="w-full rounded-lg"
             />
           )}
+          {/* Inside the figure, beside the file it acts on. `POST /assets/promote` had no
+              caller at all — the library starts empty while 62 files sit in `media/`, so the
+              asset picker had nothing real to offer until somebody uploaded a copy of an
+              image the app already held. */}
+          <figcaption>
+            <PromoteMedia postId={post.id} isVideo={isVideo(post.local_media_path!)} />
+          </figcaption>
         </figure>
       )}
 

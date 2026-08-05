@@ -90,7 +90,11 @@ def health() -> dict:
     hardcodes 3 and drifts the day the setting changes. Anything added here must be a boolean
     or a scalar of the same kind. `variants_max` is a **sibling** of `credentials`, not a key
     inside it: the Inbox footer renders `credentials` row-per-key as a health light, so a
-    number in there would render as a junk boolean.
+    number in there would render as a junk boolean. `autonomous_max_drafts` is the same kind
+    of scalar for the same reason — the operations screen has to state what a manual
+    autonomous run will spend, and the ceiling `POST /drafts/autonomous-run` clamps its `cap`
+    to is the only honest basis for that sentence. Neither number limits anything here; both
+    are stated by a client and enforced by a route.
 
     `status` is derived, not the literal `"ok"` it used to be: the status row can render a
     failure (US-007), and a readout structurally incapable of saying anything but "fine" makes
@@ -107,6 +111,7 @@ def health() -> dict:
         "database": reachable,
         "credentials": settings.configured(),
         "variants_max": settings.variants_max,
+        "autonomous_max_drafts": settings.autonomous_max_drafts,
     }
 
 

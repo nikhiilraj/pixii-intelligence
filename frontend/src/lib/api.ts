@@ -463,7 +463,65 @@ export type Health = {
   database: boolean;
   credentials: Record<string, boolean>;
   variants_max: number;
+  /** `settings.autonomous_max_drafts` — the ceiling `POST /drafts/autonomous-run` clamps its
+   *  `cap` query parameter to. A sibling of `credentials` for the same reason `variants_max`
+   *  is, and read for the same purpose: the operations screen states what a run will spend
+   *  and the server is still the only thing that limits it. */
+  autonomous_max_drafts: number;
 };
+
+/* --- operations ---------------------------------------------------------------------------
+ *
+ * What the four unattended-work routes answer with. Every number on all four is a **measured
+ * zero** when it is zero: the run happened and created nothing, appended nothing, recovered
+ * nothing. None of them is ever `—`, and `value || "—"` over any of these is the
+ * absence-as-measurement rule read backwards — the mistake `measured()` in ResearchPanel
+ * exists to prevent, made in the other direction and looking correct all the while. */
+
+/** `POST /corpus/ingest` — the two Zernio passes, counted separately because they are two
+ *  different reads. `/analytics` carries metrics for a recent 50-row window; `/v1/posts` is
+ *  the full history and reports none, so `history_recovered` is posts the window missed. */
+export type IngestResult = {
+  fetched: number;
+  created: number;
+  updated: number;
+  history_fetched: number;
+  history_recovered: number;
+};
+
+/** `POST /metrics/sync` — `sync_metrics` in backend/app/metrics.py.
+ *
+ *  `snapshots` is readings appended, not posts changed: engagement accumulates rather than
+ *  overwrites, so a sync that finds identical numbers still writes a row and that is the
+ *  point. `went_live` is drafts this run noticed had been published by a human — the
+ *  transition the fourth Inbox queue is built on. */
+export type MetricsSyncResult = {
+  fetched: number;
+  snapshots: number;
+  went_live: number;
+  created: number;
+  updated: number;
+};
+
+/** `POST /corpus/linkedin` — `upsert_linkedin_posts`. Matched on normalised content, not the
+ *  URN, so re-ingesting the same scrape updates rather than duplicates. */
+export type LinkedInIngestResult = { created: number; updated: number };
+
+/** `POST /drafts/autonomous-run` — what one capped unattended batch produced and spent.
+ *
+ *  `visuals_failed` counts drafts that exist and have no picture, and it is reported beside
+ *  `created` rather than folded into `failed` because those drafts are real and openable —
+ *  "3 created" with the images missing is the failure that made the backend report it.
+ *
+ *  The spend pair arrives on the **failure** path too, in the 502's `detail`
+ *  (`{error, llm_calls, image_calls}`), because the drafts roll back with the request and the
+ *  money does not. `messageFrom` already unflattens that shape. */
+export type AutonomousRunResult = {
+  created: number;
+  failed: number;
+  visuals_failed: number;
+  topics: number;
+} & Spend;
 
 /** What a paid route reports it spent, on top of whatever it produced — `RetopicOut` and
  *  `VariantsOut` both carry exactly this pair, and `POST /drafts/variants`'s 502 detail
