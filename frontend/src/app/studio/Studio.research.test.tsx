@@ -12,10 +12,9 @@ import Studio from "./Studio";
  * - it is shown **before a push**, unlike the publication panel. Research is what a draft's
  *   factual claims rest on, and a reviewer who only sees it after pushing sees it after the
  *   point where it would have changed their mind;
- * - it is shown at all only when the page wired one. `research === null` is "this caller read
- *   no research", not "there is none", and a panel saying "no research is linked" on a page
- *   that never asked would be a claim about the database made by a component that made no
- *   request.
+ * - a draft with no editorial lineage gets the panel saying *no run is linked to this draft*,
+ *   which is a statement about that draft rather than about the database. It is a real answer
+ *   and it is the one every row in the live database currently gets.
  *
  * Its own file rather than more cases in `Studio.test.tsx`: that file is 1,400 lines about the
  * generation form, and these two are about a different panel. */
@@ -73,21 +72,17 @@ const DRAFT: Draft = {
   editorial: null,
 };
 
-function renderStudio(research: Parameters<typeof Studio>[0]["research"]) {
-  render(
-    <Studio
-      assets={[]}
-      drafts={[]}
-      initialDraft={DRAFT}
-      research={research}
-      templates={[TEMPLATE]}
-    />,
-  );
+/** The page's real call. Studio takes no `research` prop any more: it had no caller outside
+ *  these tests once the dossier started arriving on the draft, and its fallback was the same
+ *  object the draft-less branch already builds. So both cases below now render what
+ *  `studio/page.tsx` renders, rather than what a test could arrange. */
+function renderStudio(draft: Draft) {
+  render(<Studio assets={[]} drafts={[]} initialDraft={draft} templates={[TEMPLATE]} />);
 }
 
 describe("the research panel on the draft screen", () => {
   it("is shown for a draft that has never been pushed", () => {
-    renderStudio({ dossier: null, unavailable: null, jobs: [] });
+    renderStudio(DRAFT);
 
     expect(screen.getByText("Sources and claims")).toBeInTheDocument();
     // And the publication panel is not, which is what makes the claim above mean something:
@@ -95,8 +90,8 @@ describe("the research panel on the draft screen", () => {
     expect(screen.queryByText("Schedule or publish")).not.toBeInTheDocument();
   });
 
-  it("shows the historical no-lineage state when no research was persisted", () => {
-    renderStudio(null);
+  it("says no run is linked for a draft carrying no editorial lineage", () => {
+    renderStudio(DRAFT);
 
     expect(screen.getByText("Sources and claims")).toBeInTheDocument();
     expect(screen.getByText(/No research run is linked/)).toBeInTheDocument();

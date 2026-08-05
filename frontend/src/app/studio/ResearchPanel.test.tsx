@@ -87,7 +87,7 @@ function dossier(overrides: Partial<Dossier> = {}): Dossier {
 }
 
 function view(overrides: Partial<ResearchView> = {}): ResearchView {
-  return { dossier: dossier(), unavailable: null, jobs: [], ...overrides };
+  return { dossier: dossier(), unavailable: null, ...overrides };
 }
 
 /** The `<dd>` beside a `<dt>` with this text — the only way to assert on one number out of the
@@ -510,9 +510,7 @@ describe("order", () => {
 
 describe("with no dossier", () => {
   it("says no run is linked rather than that none exists", () => {
-    render(
-      <ResearchPanel draftId={7} research={{ dossier: null, unavailable: null, jobs: [] }} />,
-    );
+    render(<ResearchPanel draftId={7} research={{ dossier: null, unavailable: null }} />);
 
     expect(screen.getByText(/No research run is linked to this draft/)).toBeInTheDocument();
     expect(screen.getByText(/expected when the brief selected/)).toBeInTheDocument();
@@ -522,7 +520,7 @@ describe("with no dossier", () => {
     render(
       <ResearchPanel
         draftId={7}
-        research={{ dossier: null, unavailable: "HTTP 404: no research job 9", jobs: null }}
+        research={{ dossier: null, unavailable: "HTTP 404: no research job 9" }}
       />,
     );
 
@@ -532,27 +530,13 @@ describe("with no dossier", () => {
   });
 
   it("does not offer unrelated runs as draft lineage", () => {
-    render(
-      <ResearchPanel
-        draftId={7}
-        research={{
-          dossier: null,
-          unavailable: null,
-          jobs: [
-            {
-              job_id: 4,
-              question: "What did the Act change?",
-              mode: "light",
-              recommended_mode: "light",
-              state: "completed",
-              researched_at: "2026-08-05T09:30:00",
-            },
-          ],
-        }}
-      />,
-    );
+    /* This used to hand the panel a `jobs` list and assert no link to it rendered. `ResearchView`
+     * no longer has that field — nothing read it and every caller passed `[]` — so the guarantee
+     * moved from an assertion to the type: there is nowhere to put an unrelated run. What is
+     * still worth asserting is the sentence that tells a reviewer the run on screen is the
+     * draft's own, which is the part a redesign could quietly drop. */
+    render(<ResearchPanel draftId={7} research={{ dossier: null, unavailable: null }} />);
 
-    expect(screen.queryByRole("link", { name: "What did the Act change?" })).not.toBeInTheDocument();
     expect(screen.getByText(/never selected from the URL/)).toBeInTheDocument();
   });
 });

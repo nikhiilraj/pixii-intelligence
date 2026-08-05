@@ -40,7 +40,13 @@ API assumptions are backed by the companion
 - Add external or reference LinkedIn posts manually.
 - Extract proposed hook, structure, and visual templates from the corpus.
 - Let a human approve, edit, version, retire, or author templates.
-- Generate a complete LinkedIn draft from an idea or topic.
+- Generate a complete LinkedIn draft from an idea or topic, through a brief, a claim plan,
+  research, deterministic gates and an editorial-readiness rubric, and report each of those
+  stages while it is happening.
+- Choose how much research a draft buys — or let the application detect the floor, which it
+  will refuse to go below.
+- Check every factual assertion the finished post makes against the sources actually read, and
+  refuse the ones nothing backs.
 - Suggest templates while allowing every choice to be overridden.
 - Create several variants of one idea, then keep the preferred draft.
 - Regenerate text and visuals independently without changing their lineage.
@@ -132,12 +138,22 @@ idea → editorial brief → angle + planned claims → research-depth floor
 - Unsupported and contradicted dossier claims are blocking evidence findings and are never sent
   to the wording revision loop. Correctable writing findings use at most two revision rounds and
   three revision calls, including the single schema-repair attempt already defined by that loop.
-- Every assertion the finished post makes is then checked against the dossier's cited claims,
-  or — in `none` mode, which has no dossier — against the words of the idea itself. An
-  assertion nothing supports, or one the sources refute or disagree about, is a blocking
-  evidence finding. Opinions and statements about our own work need no citation. Voice
-  exemplars are never evidence: verification is never shown them. What was checked, and
-  what stood behind it, is persisted on the draft.
+- Every assertion the **finished post** makes is then checked, which is a different question
+  from the one the plan answers. Comparing the plan against the dossier can only ever see
+  claims somebody planned, so a statistic the model invented while writing had never been
+  looked at by anything. `backend/app/verification.py` reads the written candidate instead: a
+  registered, versioned prompt decides which sentences are checkable factual assertions and
+  names the evidence for each, and this side decides whether that evidence exists. A dossier
+  claim is named by its run-local `C1`/`C2` label and resolved against the claims of that job,
+  each of which was written only after its quoted span was found in a page the job actually
+  fetched. The idea is cited by quoting it character for character. Nothing else counts, so an
+  assertion nothing supports — or one the sources refute or disagree about — is a blocking
+  evidence finding. `none` mode is not an exemption and is not a separate branch: it is the
+  same path with the idea as the entire evidence set, which is what makes "makes no external
+  factual claim" a checked property rather than an intention. Opinions and statements about our
+  own work need no citation. Voice exemplars are never evidence: verification is never shown
+  them. What was checked, and what stood behind it, is persisted on the draft — `null` means
+  nobody verified it and an empty assertion list means somebody did and found nothing to check.
 - A gate or readiness failure is stored as `failed_review`, with findings/feedback. A visual
   failure stores `visual_error` while preserving the reviewed words.
 - A run whose process dies stops reading as one still going: a draft left in a non-terminal
@@ -157,13 +173,69 @@ If something looks empty, read the wording before treating it as a failure. `0`,
 queue mean different things throughout the product. If the API itself is unavailable, the route
 says so instead of pretending the list is empty.
 
+### Every path that writes a draft, and whether anything reviewed it
+
+There are five, and they stopped being equivalent. Four run the same reviewed workflow; the
+fifth writes words and declines to vouch for them.
+
+| Path | Reviewed | Notes |
+|---|---|---|
+| `POST /drafts/workflow` | Yes | Studio's Generate. Asynchronous: answers at `planning` and commits each stage as it enters it. |
+| `POST /drafts/variants` | Yes | One complete workflow per template combination, capped by `variants_max`. |
+| `POST /drafts/retopic` | Yes | Inherits the source draft's exact `(family_id, version)` for all three templates, and draws the visual with the renderer that row declares. |
+| `POST /drafts/autonomous-run`, and the daily slot | Yes | Capped by `autonomous_max_drafts`, and cannot push, schedule or publish. It takes a search adapter, so a factual topic researches or stops at a visible failed research state — with no key configured that is failures rather than opinion pieces written as though they had been checked. |
+| `POST /drafts` | **No** | Deprecated. One completion: no brief, no angle, no research, no gates, no rubric. |
+
+`POST /drafts` is worth saying out loud rather than leaving in a docstring, because an
+undocumented bypass is exactly what it would otherwise be. It is still reachable, because
+existing API clients call it, and it is marked `deprecated=True` so `/docs` says so. It sets no
+stage, so its drafts take the column's default of `unreviewed`, and every boundary downstream
+reads the same predicate: the push route refuses them, the schedule, publish and cancel routes
+refuse them, and Studio disables the Push button and says why instead of offering a press the
+server would answer 409 to. Nothing enforces this specially; it falls out of the route not
+claiming a review it did not do.
+
+### What a run looks like from outside, and what a retry does
+
+A draft's `generation_stage` is one of `unreviewed`, `planning`, `researching`, `drafting`,
+`verifying`, `revising`, `evaluating`, `rendering`, `ready`, `failed` or `failed_review`
+(`backend/app/models/stage.py`, which is also where "may a human act on this" lives, as one
+predicate rather than three hand-written copies of one set).
+
+Generation returns immediately and Studio polls the draft, naming what each stage is doing
+rather than repeating the stage's own word. The run happens on its own connection and commits
+each stage as it enters it, which is what makes the stage readable at all — and what makes a
+reload recover the attempt, since the draft id is in the address bar and the row is already in
+the database. Pressing Generate twice buys one run: the claim is a unique index derived from the
+request, and the second press is answered with the run already going.
+
+A run that outlives `WORKFLOW_TIMEOUT` in a non-terminal stage is recorded as failed with what
+is actually known about it, so a process that died stops reading as one still working. Retry
+starts a **new** draft and a new auditable attempt; the failed one stays where it is, with its
+stage and its reason, rather than being overwritten by the attempt that replaced it. The new
+attempt runs against the failed draft's own recorded template versions, not the newest version
+of each family — a retry reproduces the attempt that failed, and resolving forward would quietly
+retry something else.
+
+### What schedule, publish and cancel are allowed to send
+
+Schedule and publish send the words the reviewer confirmed. Zernio used to receive the time and
+the media and never the text, so a draft pushed, rewritten locally and then scheduled left the
+confirmation screen showing the new words while Zernio kept the old ones. Two refusals close the
+rest of it: a draft that is not review-ready cannot be commanded at all, and a draft whose
+revision has drifted from the one Zernio is holding is refused with both numbers rather than
+publishing something nobody read. Cancel is exempt from both on purpose — the state those guards
+exist for is a scheduled post whose words have since failed review, and cancel is the remedy for
+it. Cancel withdraws the appointment and is the one command that never carries `content`, so it
+cannot rewrite the remote post on its way past.
+
 ---
 
 ## The idea in one picture
 
 ```mermaid
 graph LR
-    A[Past posts<br/>107 in the corpus] -->|extract| B[Templates<br/>hooks · structures · visuals]
+    A[Past posts<br/>276 in the corpus] -->|extract| B[Templates<br/>hooks · structures · visuals]
     B -->|a human approves| C[Approved library]
     C -->|generate| D[Draft<br/>text + image]
     D -->|push| E[Zernio<br/>as a DRAFT]
@@ -229,26 +301,57 @@ These are the four points where the circuit stops and waits for a person:
 
 This is the part that surprises people, and it is a decision, not an omission.
 
-Engagement across this corpus spans **12.7×** — the median post gets 525 engaged actions, the
-best gets 6,691 — and each template has roughly **3 samples**. At that spread and that sample
-size, any ranking you compute is noise wearing a confident face.
+This section used to lead with a number: engagement spans **12.7×**, the median post gets 525
+engaged actions and the best gets 6,691. That was measured over a 107-post corpus that had come
+almost entirely from Zernio. The corpus is 276 posts now — 219 of them added by hand as external
+reference material, whose engagement was captured a different way and 218 of which carry no
+impressions reading at all — so the old figure is not out of date, it is **unrecomputable**.
+Over the 213 posts carrying any engagement, the median is 14 and the best is 4,331. That ratio
+is 309×, and quoting it as the old number recomputed would be averaging two populations and
+presenting the result as one distribution, which is the exact move this section exists to
+refuse. What can honestly be said is the direction: the corpus is now a mixture of measured and
+scraped rows, which puts the sample a ranking would need **further away, not closer**.
+
+The sample size is the part that does not depend on any of that. Of the 61 templates in the
+library, 40 cite **one** source post and 4 cite two, and not one template version has a single
+lineage-attributed published post behind it. At that sample size, any ranking you compute is
+noise wearing a confident face.
+
+The remaining 17 templates cite nothing, which is worth stating separately because it is a
+different problem: **every structure template in the library has an empty provenance list**,
+along with two proposed visuals. Extraction keeps only the ids the model was actually shown, so
+an empty list means the citations did not survive that check rather than that nobody asked for
+them. A hook you can trace back to the post it came from and a structure you cannot are not the
+same evidence, and ranking would treat them as if they were.
 
 So the tool:
 
 - **Never says "best", "top", or "recommended."** There is no sort-by-performance control
   anywhere, and adding one would be undoing a decision rather than adding a feature.
-- **Always shows its sample count**, and flags anything under 5 as `too thin (n/5)`.
-- **Prints `—`, not `0`, where data was never collected.** 35 posts in the corpus have no
-  impressions data at all — they were scraped, not measured. Showing `0` would present an
-  absence as a measurement. Where the database genuinely cannot tell the two apart, the tool
-  says so rather than guessing.
+- **Always shows its sample count**, and flags anything under 5 as `too thin (n/5)`. Every row
+  on the Scoreboard currently reads 0.
+- **Prints `—`, not `0`, where data was never collected.** 239 of the 276 posts in the corpus
+  carry no impressions figure — they were scraped, not measured. Showing `0` would present an
+  absence as a measurement. For 185 of them the absence is arithmetic — a post with engaged
+  actions did not have zero impressions. For the remaining 54 both columns read zero and the
+  database genuinely cannot tell an unread analytics window from a post nobody saw; the Corpus
+  table dashes those too and says underneath which two things it is refusing to choose between.
 - **Shows `Closed circuits: 0`** rather than hiding the counter until it's flattering.
 
 The optimizer — actual ranking — is not a backlog item. It is a **threshold**: roughly 300 posts
 with recorded template lineage. There are currently zero.
 
-**Nothing in this tool ever publishes.** A draft reaches Zernio as a draft. A human publishes it
-there, by hand, always.
+**Nothing here ever publishes on its own.** Automation prepares and then stops: the daily slot,
+the metrics scheduler and `run_autonomous` have no path to a publish command and must not learn
+one. A post reaches an audience only when a person hits the route that sends it, only while
+`PUBLISHING_ENABLED` is on — it is off by default — and only against the exact draft revision
+that person confirmed; a command carrying any other revision is refused rather than sent. That
+is narrower than the rule it replaces, which said the publish step could happen only in Zernio,
+and it keeps what that rule was protecting: no machine decision reaches an audience unless a
+person said so. It rests on Pixii running on localhost for one operator.
+[ADR 0002](docs/adr/0002-human-publication-authority.md) is the authority, and it names the
+condition that voids the arrangement — a second person, or anything but localhost — at which
+point authentication and a publisher role are required before the switch may be on again.
 
 ---
 
@@ -306,15 +409,35 @@ Run the complete quality gate:
 make check
 ```
 
-This runs Ruff, mypy, ESLint, TypeScript, pytest, and Vitest. To run one side only:
+`check` is `lint test build`, so that one command runs Ruff, mypy, ESLint, `tsc --noEmit`,
+pytest, Vitest **and the Next.js production build**. To run one side only:
 
 ```bash
 cd backend && .venv/bin/pytest -q
 cd ../frontend && pnpm test
 ```
 
-A green suite is necessary but not sufficient; the visual and end-to-end checks below cover
-things that jsdom and mocked integrations cannot prove.
+**What `make check` does not touch**, and what therefore has to be run separately before a
+change is called done:
+
+```bash
+cd backend && .venv/bin/alembic heads          # exactly one, or two agents wrote migrations
+cd backend && .venv/bin/alembic upgrade head   # the migration actually applies
+cd backend && .venv/bin/alembic check          # the models and the migrations agree
+cd /path/to/repo && git diff --check           # no whitespace damage in the diff
+```
+
+Alembic is outside the gate even though the suite runs against a real Postgres: the tests build
+their schema from `SQLModel.metadata.create_all` rather than by running the migrations, so a
+migration that is missing, duplicated or disagrees with the models is invisible to every test in
+the file. `git diff --check` is outside it because it is a property of the diff rather than of
+the code. Two agents writing migrations in the same wave is how this repo gets two heads, which
+is why `alembic heads` is on the list and not merely available.
+
+A green gate is necessary and it is not evidence. It says nothing about layout, focus,
+contrast, chart sizing or any integration that is mocked in the suite and real in production —
+which is what the visual and end-to-end checks below are for, and why the standard for a new
+test is to break the behaviour on purpose and confirm the test fails.
 
 ### 2. Safe UI smoke test
 
@@ -323,21 +446,36 @@ This pass stays local except for generation or rendering calls and does not push
 1. Visit every screen and confirm an API failure is distinguishable from an honestly empty list.
 2. Approve one hook, one structure, and one visual template. Start with a text-only visual such as
    `stat-card`; an `image_url` slot needs an asset selected.
-3. Generate an opinion-only draft and confirm Studio shows `none`, a floor reason, a brief,
-   angle, planned claims, passed gates, readiness result, text, visual and template versions.
-4. Generate a factual draft with Firecrawl configured. Confirm `light` or `deep` is shown,
-   sources are linked, citations support the factual wording, and the research job persists.
-5. Temporarily unset both search keys, retry a factual idea, and confirm it stops in a visible
-   failed research state without writing factual copy. Restore the key and use Retry.
-6. Regenerate the text and verify its lineage does not change and it is visibly marked for
+3. Generate an opinion-only draft. Studio should answer at once with a draft id in the address
+   bar and then name each stage as the run enters it, and finish showing `none`, a floor reason,
+   a brief, an angle, planned claims, what the finished post asserts, passed gates, a readiness
+   result, text, visual and template versions.
+4. Reload the page mid-run and confirm the attempt comes back rather than being lost, and that
+   pressing Generate twice buys one run rather than two.
+5. Generate a factual draft with Firecrawl configured. Confirm `light` or `deep` is shown,
+   sources are linked, citations support the factual wording, and the research job persists and
+   appears under Operations.
+6. Ask for `none` on that same factual idea and confirm the request is refused before a draft
+   row exists, naming what was asked, the floor and the signals that produced it. Then raise the
+   depth to `deep` and confirm a request above the floor is accepted.
+7. Temporarily unset both search keys, retry a factual idea, and confirm it stops in a visible
+   failed research state without writing factual copy and without falling back to `none`.
+   Restore the key and use Retry, then confirm the failed attempt is still there beside the new
+   one.
+8. Regenerate the text and verify its lineage does not change and it is visibly marked for
    review again. Redraw the visual and verify a render failure leaves the written post intact.
-7. Open a draft created before the migration and confirm it loads with a historical-lineage note.
-8. Confirm a failed-review draft cannot be pushed; confirm a ready draft pushes to Zernio only
-   as a draft. Leave `PUBLISHING_ENABLED=false` while performing this smoke test.
-6. Regenerate the visual, compare it with the previous version, and restore the previous image.
-7. Generate three variants, keep one, and confirm the discarded drafts leave the Inbox.
-8. Upload an asset and try a visual with an image slot.
-9. Exercise Corpus filters, open a post detail page, and inspect the unranked Scoreboard.
+9. Open a draft created before the migration and confirm it loads with a historical-lineage
+   note, distinct from an unreviewed draft, a run still planning, and a run that stopped before
+   its brief was written.
+10. Confirm an unreviewed or failed-review draft cannot be pushed and its button says so; confirm
+    a ready draft pushes to Zernio only as a draft. Leave `PUBLISHING_ENABLED=false` throughout,
+    and confirm the publication panel states that up front with its three buttons disabled.
+11. Regenerate the visual, compare it with the previous version, and restore the previous image.
+12. Generate three variants, keep one, and confirm the discarded drafts leave the Inbox. Each
+    variant is a full reviewed run, so expect some to arrive as `failed_review` rather than as
+    three finished posts.
+13. Upload an asset and try a visual with an image slot.
+14. Exercise Corpus filters, open a post detail page, and inspect the unranked Scoreboard.
 
 Generation and AI rendering may make paid external API calls even though this test does not push
 a draft anywhere.
@@ -447,6 +585,8 @@ feeding itself, which is the entire point of the tool.
 
 ## Current state
 
+Read off the live database on 2026-08-05, not from memory.
+
 ```
 closed_circuits:              0     ← never completed a lap
 proposals awaiting review:   50     ← the bottleneck
@@ -454,11 +594,22 @@ built, awaiting push:         4
 pushed, awaiting Monte:       2
 published, awaiting verdict:  0
 
-corpus:      107 posts (69 Monte, 15 creator inspiration, 13 pixii.creates, 10 Pixii_ai)
-templates:   11 approved · 50 proposed · 2 retired
+corpus:      276 posts (238 Monte, 15 creator inspiration, 13 pixii.creates, 10 Pixii_ai)
+             57 ingested from Zernio · 219 added by hand as external reference material
+templates:   10 approved · 50 proposed · 1 retired
+drafts:      6, every one `ready` and every one `editorial: null`
+research:    0 jobs
+daily runs:  0
 verdicts:    0
 tests:       1191 backend · 447 frontend
 ```
+
+The two zeros in the middle are the ones worth reading. **The reviewed workflow has never
+completed a real run.** All six drafts in the database predate the migration that introduced it
+— that is what `editorial: null` with a `ready` stage means — and `GET /research` returns an
+empty list, so no dossier has ever been built here outside a test. Every claim above about
+briefs, floors, gates, verification and readiness is a claim about code that is tested and has
+never yet produced a row in this database.
 
 Visual templates can now be **extracted** rather than hand-authored. `POST /templates/extract/visuals`
 shows a vision model the images of the posts that performed and asks for the layout underneath
@@ -505,6 +656,14 @@ Written plainly because the alternative is discovering it in production.
 - **The circuit has never run end to end.** Every segment is tested in isolation and proven
   against the live Zernio and Cloudflare APIs. The joins between them have never carried a real
   post all the way round.
+- **The reviewed workflow has never completed a real run.** `GET /research` returns an empty
+  list and all six drafts in the database return `editorial: null`, so the brief, the angle, the
+  research floor, the dossier, the gates, the claim verification and the readiness rubric have
+  produced rows in tests and in no other place. The review panel that displays them has only
+  ever been rendered against fixtures.
+- **No schedule, publish or cancel command has ever been sent.** `PUBLISHING_ENABLED` has never
+  been true outside a test, so the `scheduledFor` format and the response shape the
+  reconciliation pass reads are both chosen from documentation rather than from an answer.
 - **Nothing has been measured against real engagement.** Every number in the scoreboard logic is
   exercised with fixtures. No verdict has ever been recorded.
 - **Radix keyboard behaviour** — dialogs opening, focus traps, Escape, typeahead. jsdom only
@@ -516,8 +675,9 @@ Written plainly because the alternative is discovering it in production.
 - **Two UI surfaces have never been seen against real data** — the verdict-retract control and
   the asset picker's "use the template's default" — because no post carries a ruling and no
   template carries a default asset. Both were photographed against a read-only proxy instead.
-- **`AddExternal`** (the "add a post from elsewhere" form on `/posts`) **has no test file at
-  all.** It writes to the corpus.
+- **`AddExternal`** (the "add a post from elsewhere" form on `/posts`) had no test file at all
+  for two versions, which mattered because it writes to the corpus. It has three tests now.
+  Three is a floor, not coverage.
 - **Nothing on any screen says that unattended work ran.** The metrics scheduler, the
   publication reconciliation pass and the daily editorial slot produce log lines and nothing
   else, so a daily run that has been failing for a week looks like a quiet week. There is a

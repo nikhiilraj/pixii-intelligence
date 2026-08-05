@@ -48,7 +48,7 @@ import {
 } from "@/lib/api";
 
 import PublishPanel from "./PublishPanel";
-import ResearchPanel, { type ResearchView } from "./ResearchPanel";
+import ResearchPanel from "./ResearchPanel";
 import ReviewPanel from "./ReviewPanel";
 
 type Picked = { hook: number | null; structure: number | null; visual: number | null };
@@ -761,9 +761,6 @@ export default function Studio({
   // `GET /publishing` — the destination and the kill switch, or `null` when that read failed.
   // Handed straight down; the panel is what knows the difference between "off" and "unknown".
   publishing = null,
-  // Compatibility only for callers predating persisted draft lineage. Studio's page no longer
-  // resolves `?research=` or supplies this; a draft's own `editorial.research` wins.
-  research = null,
 }: {
   templates: Template[];
   assets: Asset[] | null;
@@ -773,7 +770,6 @@ export default function Studio({
   variantsMax?: number | null;
   publications?: Publication[] | null;
   publishing?: PublishingTarget | null;
-  research?: ResearchView | null;
 }) {
   const [idea, setIdea] = useState("");
   const [picked, setPicked] = useState<Picked>({ hook: null, structure: null, visual: null });
@@ -1466,14 +1462,18 @@ export default function Studio({
             {!running && (
               <ResearchPanel
                 draftId={draft.id}
+                // A draft with no editorial lineage has no research to show and no failed read
+                // to report, which is the third state this panel names in words. There used to
+                // be a `research` prop here as a fallback, for the removed `?research=`
+                // workaround; `studio/page.tsx` stopped supplying it and only tests passed it,
+                // so the fallback and the real value were the same object.
                 research={
                   draft.editorial
                     ? {
                         dossier: draft.editorial.research,
                         unavailable: draft.editorial.research_error,
-                        jobs: [],
                       }
-                    : (research ?? { dossier: null, unavailable: null, jobs: [] })
+                    : { dossier: null, unavailable: null }
                 }
               />
             )}

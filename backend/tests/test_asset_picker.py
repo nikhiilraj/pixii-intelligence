@@ -521,8 +521,15 @@ def test_the_list_endpoint_exposes_it_too(client, session, asset):
 
 
 def test_the_api_accepts_a_pick_and_hands_back_what_it_stored(client, session, asset):
-    """The request-to-response round trip, at the endpoint. `asset_values` on `IdeaIn` is the
-    only way a picker in the browser can reach `generate_draft`."""
+    """The request-to-response round trip: `asset_values` on `IdeaIn` survives a real request.
+
+    Against `POST /drafts`, which is deliberately not the browser's path any more — Studio
+    generates through `POST /drafts/workflow` and this route is the deprecated unreviewed one.
+    It is kept here because `IdeaIn` is the same body on both and this is the shortest request
+    that reaches a renderer, so what is asserted is the field surviving the wire rather than
+    anything about how a person generates a draft. The draft it produces is `unreviewed` and
+    cannot be pushed; `test_review_boundary.py` is where that is asserted.
+    """
     captured: dict = {}
     _, _, visual = library(session)
     app.dependency_overrides[get_llm] = lambda: FakeLLM()

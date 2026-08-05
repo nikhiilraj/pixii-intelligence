@@ -5,7 +5,6 @@ import type {
   Claim,
   ClaimStatus,
   Dossier,
-  ResearchJobSummary,
   ResearchSource,
 } from "@/lib/api";
 
@@ -201,18 +200,21 @@ function SourceLine({ source }: { source: ResearchSource }) {
 
 /** What this screen was given to show, and why there may be nothing.
  *
- *  Three fields rather than one nullable dossier, because "no research was asked for", "the
- *  read failed" and "there is a dossier" are three different things to tell a reviewer, and
- *  two of them are not an empty panel. */
+ *  Two fields rather than one nullable dossier, because "no research was asked for", "the read
+ *  failed" and "there is a dossier" are three different things to tell a reviewer, and two of
+ *  them are not an empty panel.
+ *
+ *  There used to be a third field, `jobs`, left over from when Studio resolved `?research=` and
+ *  could be pointed at a run that had nothing to do with the draft on screen. Nothing read it
+ *  after the dossier started arriving through `draft.editorial.research`; every caller passed
+ *  `[]`. Removed rather than left, because a field on a view type is a promise that something
+ *  renders it. */
 export type ResearchView = {
   /** The dossier for the run this page was pointed at, or `null` when none was or the read
    *  failed — `unavailable` is what tells those apart. */
   dossier: Dossier | null;
   /** Why there is no dossier on screen, in words, or `null` when none was asked for. */
   unavailable: string | null;
-  /** Legacy compatibility field. Studio no longer offers unrelated runs as lineage; the
-   *  dossier is loaded from the draft relationship. */
-  jobs: ResearchJobSummary[] | null;
 };
 
 /** The research behind a draft: its sources, its claims and what backed each one, what the

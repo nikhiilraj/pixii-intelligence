@@ -58,8 +58,14 @@ def committing_engine():
     """A second Postgres database, created and dropped around this module.
 
     Schema from `SQLModel.metadata.create_all` rather than from alembic: `alembic check` is
-    what pins the models against the migrations, and it runs in the same gate as this file, so
-    creating from the models here proves nothing less and takes a second rather than a minute.
+    what pins the models against the migrations, so creating from the models here proves
+    nothing less and takes a second rather than a minute.
+
+    It does **not** run "in the same gate as this file", which this docstring used to claim.
+    `make check` is `lint test build` and reaches no alembic command at all — that is why
+    `alembic heads`, `alembic upgrade head` and `alembic check` are listed in the README as
+    separate required checks. The claim mattered because it is the argument for building the
+    schema this way, and an argument resting on a command nobody runs is not one.
 
     Its own database rather than the shared one with a tidy-up afterwards, and the difference
     is not fastidiousness: a real commit into the database the running app and every other test

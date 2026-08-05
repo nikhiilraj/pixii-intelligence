@@ -72,8 +72,10 @@ const PAGE = 25;
 
 /* Impressions and engagement rate are `0` by column default and are written by exactly one
  * thing: a Zernio analytics read (`corpus.py::_apply`). The LinkedIn scrape ingest and
- * `ingest_inspiration_posts` write likes/comments/shares and never touch either column, so 35
- * of the 69 rows in the default view carry engagement and no impressions data at all.
+ * `ingest_inspiration_posts` write likes/comments/shares and never touch either column, so 162
+ * of the 238 rows in the default view carry engagement and no impressions data at all. That was
+ * 35 of 69 when this was written; widening the corpus made the dashed case the common one
+ * rather than the exception, which is an argument for the rule below and not against it.
  *
  * Two separate facts decide how that renders, and both are in the data rather than assumed:
  *
@@ -507,7 +509,7 @@ export default function Explorer({
             Two empties, told apart by `initial` — the unfiltered server read this component
             arrived with. Empty there means the corpus itself is empty; non-empty there means
             the filters excluded everything, and the count is worth naming because "no post
-            matches" beside a corpus of 107 is a filter problem, not a data problem. */}
+            matches" beside a corpus of 276 is a filter problem, not a data problem. */}
         {posts.length === 0 && !loading && !error && (
           <Card className="mt-6 bg-surface-2 text-body">
             {initial.length === 0 ? (
