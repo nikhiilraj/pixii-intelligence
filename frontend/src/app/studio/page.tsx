@@ -3,10 +3,12 @@ import {
   API_BASE,
   getJson,
   type Asset,
+  type Dossier,
   type Draft,
   type Health,
   type Publication,
   type PublishingTarget,
+  type ResearchJobSummary,
   type Template,
 } from "@/lib/api";
 
@@ -25,9 +27,22 @@ export default async function StudioPage({
      answers 422 with a usable message — it is that a query string has more shapes than a path
      segment does. `?draft=` is empty and would read as `/drafts/`, and `?draft=1&draft=2`
      arrives as an array; both would otherwise become a request nobody meant to make. */
-  const raw = (await searchParams).draft;
+  const params = await searchParams;
+  const raw = params.draft;
   const wanted = (Array.isArray(raw) ? raw[0] : (raw ?? "")).trim();
   const id = /^\d+$/.test(wanted) ? wanted : null;
+
+  /* `?research=<id>` — which research run to show under the draft, validated the same way and
+     for the same reasons as `?draft=` above.
+
+     **This is the whole of the draft→research link, and it is in the address bar because it is
+     nowhere else.** `Draft` has no `research_job_id` column: nothing in the schema connects a
+     draft to the research behind it, so there is no id to read off the draft. Resolving it here
+     rather than inside the panel is what makes that a one-line change — the day the column
+     exists, this becomes `requested.data.research_job_id` and the panel is untouched. */
+  const rawResearch = params.research;
+  const wantedResearch = (Array.isArray(rawResearch) ? rawResearch[0] : (rawResearch ?? "")).trim();
+  const researchId = /^\d+$/.test(wantedResearch) ? wantedResearch : null;
 
   // The library is read here so the picker has something to offer. A failed read is handed on
   // as `null` rather than as `[]`: only the templates are load-bearing enough to replace the
@@ -43,7 +58,20 @@ export default async function StudioPage({
   // arrived is a Publish button rendered without the history, and `GET /publications`' own
   // docstring names that as how one post gets commanded twice. A failed read is handed on as
   // `null` and the panel says so — it never renders as "nothing has been commanded".
-  const [templates, assets, drafts, requested, health, publications, publishing] = await Promise.all([
+  // The dossier `?research=` named, and the index of runs that exist. Both in the `Promise.all`
+  // rather than after it: neither depends on anything here, and a research panel that fills in
+  // after the draft has painted is a panel a reviewer reads the page without.
+  const [
+    templates,
+    assets,
+    drafts,
+    requested,
+    health,
+    publications,
+    publishing,
+    dossier,
+    jobs,
+  ] = await Promise.all([
     getJson<Template[]>("/templates"),
     getJson<Asset[]>("/assets"),
     getJson<Draft[]>("/drafts"),
@@ -54,6 +82,11 @@ export default async function StudioPage({
     // small response and the panel needs both fields before the first button is pressed, not
     // after a command comes back 403.
     getJson<PublishingTarget>("/publishing"),
+    researchId === null ? Promise.resolve(null) : getJson<Dossier>(`/research/${researchId}`),
+    // The index is read whether or not a run was named, because it is what a reviewer looking
+    // at an unresearched draft needs in order to reach one. A failed read is handed on as
+    // `null` and the panel says so: "no runs exist" is a claim a failed request cannot support.
+    getJson<ResearchJobSummary[]>("/research"),
   ]);
 
   /* Why the requested draft is not on screen, in words, or `null` when none was asked for.
@@ -68,6 +101,20 @@ export default async function StudioPage({
           ? requested.kind === "network"
             ? `Could not reach ${API_BASE} (${requested.message}).`
             : `HTTP ${requested.status}: ${requested.message}`
+          : null;
+
+  /* Why the requested research run is not on screen — the same three-way distinction `missing`
+     makes for the draft, because "none was asked for", "that id is not a number" and "the read
+     failed" are three different things to tell a reviewer and only one of them is an error. */
+  const researchUnavailable =
+    wantedResearch === ""
+      ? null
+      : researchId === null
+        ? `"${wantedResearch}" is not a research job id. A job id is a number, as in ?research=4.`
+        : dossier && !dossier.ok
+          ? dossier.kind === "network"
+            ? `Could not reach ${API_BASE} (${dossier.message}).`
+            : `HTTP ${dossier.status}: ${dossier.message}`
           : null;
 
   /* Narrowed to three fields before it crosses into the client component. `GET /drafts` answers
@@ -109,6 +156,15 @@ export default async function StudioPage({
              not "there is no account" — the panel says which, and only a *read* `false`
              disables anything. */
           publishing={publishing.ok ? publishing.data : null}
+          research={{
+            dossier: dossier?.ok ? dossier.data : null,
+            unavailable: researchUnavailable,
+            // `null` when the index read failed, which is not "no research has been run" — the
+            // same distinction the assets and drafts reads above carry, and it matters more
+            // here: a panel saying nothing has been researched, on a failed request, is the
+            // input that gets an uncited draft pushed.
+            jobs: jobs.ok ? jobs.data : null,
+          }}
         />
       ) : (
         <ApiFailureNotice failure={templates} className="mt-8" />

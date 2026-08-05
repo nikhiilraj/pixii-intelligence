@@ -13,6 +13,7 @@ from app.api_assets import router as assets_router
 from app.api_drafts import DraftOut, _out
 from app.api_drafts import router as drafts_router
 from app.api_publishing import router as publishing_router
+from app.api_research import router as research_router
 from app.api_templates import router as templates_router
 from app.config import settings
 from app.corpus import (
@@ -55,6 +56,7 @@ app.include_router(templates_router)
 app.include_router(drafts_router)
 app.include_router(assets_router)
 app.include_router(publishing_router)
+app.include_router(research_router)
 
 app.add_middleware(
     CORSMiddleware,

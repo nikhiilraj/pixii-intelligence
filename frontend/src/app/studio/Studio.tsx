@@ -35,6 +35,7 @@ import {
 } from "@/lib/api";
 
 import PublishPanel from "./PublishPanel";
+import ResearchPanel, { type ResearchView } from "./ResearchPanel";
 
 type Picked = { hook: number | null; structure: number | null; visual: number | null };
 
@@ -622,6 +623,15 @@ export default function Studio({
   // `GET /publishing` — the destination and the kill switch, or `null` when that read failed.
   // Handed straight down; the panel is what knows the difference between "off" and "unknown".
   publishing = null,
+  // The research run this page was pointed at, why there isn't one, and the runs that exist.
+  //
+  // **Passed through without being looked at.** Where the job id came from is `page.tsx`'s
+  // business — `?research=` today, and `draft.research_job_id` the day the schema links the
+  // two — and keeping that resolution out of here is what makes it a one-line change. `null`
+  // means the caller wired no research at all, which is why the panel then does not render:
+  // it is not "there is no research", and a panel saying so on a page that never asked would
+  // be a claim about the database made by a component that made no request.
+  research = null,
 }: {
   templates: Template[];
   assets: Asset[] | null;
@@ -631,6 +641,7 @@ export default function Studio({
   variantsMax?: number | null;
   publications?: Publication[] | null;
   publishing?: PublishingTarget | null;
+  research?: ResearchView | null;
 }) {
   const [idea, setIdea] = useState("");
   const [picked, setPicked] = useState<Picked>({ hook: null, structure: null, visual: null });
@@ -1144,6 +1155,12 @@ export default function Studio({
                 {draft.zernio_post_id ? "In Zernio" : "Push to Zernio as draft"}
               </Button>
             </div>
+
+            {/* Not gated on anything, unlike the publication panel below. Research is what a
+                draft's factual claims rest on, so it is read before a push and not after one —
+                and a draft with no research behind it is the state this panel most needs to be
+                able to say out loud. */}
+            {research && <ResearchPanel draftId={draft.id} research={research} />}
 
             {/* Only once there is a post in Zernio to command. Every route behind this panel
                 updates an existing post and none of them creates one, so before a push there

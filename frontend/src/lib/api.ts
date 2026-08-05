@@ -169,6 +169,126 @@ export type Publication = {
   accepted_at: string | null;
 };
 
+/* --- research ---------------------------------------------------------------------------- */
+
+/** `CLAIM_STATUSES` in backend/app/models/research.py — what the evidence did to one claim.
+ *
+ *  **`unsupported` is a recorded state, not an empty citation list.** `research.py` restructured
+ *  a table so that "nothing supports this" is a value you can filter on rather than a silence a
+ *  reader has to notice, and a client that infers it from `supporting_citation_ids.length === 0`
+ *  undoes that: a `refuted` claim has an empty supporting list too, and calling one two sources
+ *  actively contradict "uncited" says the opposite of what happened to it. Read `status`. */
+export type ClaimStatus = "supported" | "disputed" | "refuted" | "unsupported";
+
+/** `supports` or `contradicts`. A contradiction is a citation, not a failure. */
+export type Stance = "supports" | "contradicts";
+
+/** One page a research run actually fetched — `SourceOut` in backend/app/api_research.py.
+ *
+ *  **Fetched means read, never verified.** `trust_tier` and `published_at` are `null` on every
+ *  row this application writes — nothing assigns a tier, and the fetcher's parser never reads
+ *  the attributes a publication date lives in — so they render as `—`, and a fallback of
+ *  `"unknown"` would put a measurement on screen that nobody took. `publisher` is the hostname
+ *  of the final URL and no masthead was ever read.
+ *
+ *  **Link `url`, never `requested_url`.** `url` is the address that served the bytes, after
+ *  redirects; a citation naming the requested one cites a page nobody read. Both are here so a
+ *  reviewer can see the hop, and they are equal when there was none. */
+export type ResearchSource = {
+  id: number;
+  url: string;
+  requested_url: string;
+  title: string | null;
+  publisher: string | null;
+  published_at: string | null;
+  fetched_at: string;
+  trust_tier: string | null;
+  // sha256 of the bytes as served — what lets a reviewer re-fetch and prove whether they are
+  // reading what the model read. The only sense in which any of this is checkable.
+  content_hash: string;
+};
+
+/** The words in one source that bear on one claim — `CitationOut`. */
+export type Citation = {
+  id: number;
+  claim_id: number;
+  source_id: number;
+  stance: Stance;
+  span: string;
+  // The source's hash when this span was taken, which can differ from the source row's own if
+  // that page were ever re-fetched. That difference is the audit trail doing its job.
+  source_content_hash: string;
+};
+
+export type Claim = {
+  id: number;
+  text: string;
+  status: ClaimStatus;
+  supporting_citation_ids: number[];
+  contradicting_citation_ids: number[];
+};
+
+/** Something the run could not settle. `claim_id` is `null` for a question the model raised and
+ *  made no claim about — both are unknowns, only one has a row to look at. */
+export type Unknown = { text: string; claim_id: number | null };
+
+/** What the run cost. **Every field is `number | null` and the null is the point.**
+ *
+ *  `null` is "that step never ran"; `0` is a measurement. `queries: 0` is a search loop that
+ *  issued nothing, `null` is a `none`-mode run where there was no loop. So render with an
+ *  explicit `=== null` test: `{spend.queries || "—"}` prints `—` for a measured zero, which is
+ *  the same absence-as-measurement error read backwards, and it looks correct. */
+export type ResearchSpend = {
+  queries: number | null;
+  sources_found: number | null;
+  sources_fetched: number | null;
+  llm_calls: number | null;
+  // Which ceiling stopped the run early — `"queries"`, `"fetches"`, `"seconds"` — or `null` when
+  // none did. "Four sources because the fetch ceiling bit" and "four sources is all there were"
+  // are the same number and a different fact.
+  budget_exhausted: string | null;
+};
+
+/** `GET /research/{job_id}` — one run: what it asked, what it read, what it concluded.
+ *
+ *  `unknowns` and `contradictions` overlap `claims` deliberately; every unsupported claim is in
+ *  two of them. The lists are in the run's own insertion order and **must not be re-sorted** —
+ *  `research.dossier()`'s docstring refuses ordering by status or support for the reason the
+ *  project's never-rank rule gives. Prominence on screen is a badge and a summary, not a sort. */
+export type Dossier = {
+  job_id: number;
+  question: string;
+  // What ran, and what the floor detector said was needed. Both, because one field would make
+  // "the system asked for light and the run did none" unanswerable afterwards.
+  mode: string;
+  recommended_mode: string;
+  mode_signals: string[];
+  // `completed` with five unsupported claims is a **success** — the run found out that nothing
+  // supports them. `failed` is the run that died, and the dossier does not carry its reason.
+  state: string;
+  researched_at: string;
+  freshness_days: number | null;
+  sources: ResearchSource[];
+  claims: Claim[];
+  citations: Citation[];
+  unknowns: Unknown[];
+  contradictions: Claim[];
+  spend: ResearchSpend;
+};
+
+/** One row of `GET /research` — enough to recognise a run by, and nothing it concluded.
+ *
+ *  No counts, deliberately: two counts side by side read as a comparison of the runs, and there
+ *  is nothing here to compare. Newest first is a chronology, not a ranking. */
+export type ResearchJobSummary = {
+  job_id: number;
+  question: string;
+  mode: string;
+  recommended_mode: string;
+  state: string;
+  researched_at: string;
+};
+
 /** `MetricSnapshot` in backend/app/models/metric.py, as `GET /posts/{id}/history` returns it —
  *  one reading of one post's numbers, oldest first.
  *
