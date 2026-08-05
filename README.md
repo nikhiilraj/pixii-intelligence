@@ -71,9 +71,14 @@ The normal workflow is:
 2. Review proposals in **Templates**. Approve at least one hook, structure, and visual; retire
    patterns you do not want to reuse. Retiring preserves the historical record.
 3. Open **Studio**, enter an idea, and choose templates or ask the application to suggest them.
-4. Generate a draft. Studio creates an editorial brief and angle/claim plan, selects the
-   research depth, completes any required research, writes from that dossier, runs deterministic
-   gates and the editorial-readiness rubric, and only then renders the visual.
+4. Generate a draft. Studio answers immediately with a draft id and then reports each stage as
+   it happens — planning, researching, drafting, verifying, evaluating, rendering — because the
+   run itself happens in the background and commits every stage as it enters it. The run
+   creates an editorial brief and angle/claim plan, selects the research depth, completes any
+   required research, writes from that dossier, runs deterministic gates and the
+   editorial-readiness rubric, and only then renders the visual. Leaving the page or reloading
+   it does not lose the attempt: the address carries the draft id and the stages are already
+   in the database. Pressing Generate twice buys one run, not two.
 5. Inspect the brief, angle, research-floor reason, planned claims, sources, gate findings,
    readiness decision, prompt versions, image, and exact template versions under **Lineage**.
    A failed workflow remains visible with its reason and can be retried as a new auditable attempt.
@@ -123,6 +128,9 @@ idea → editorial brief → angle + planned claims → research-depth floor
   what stood behind it, is persisted on the draft.
 - A gate or readiness failure is stored as `failed_review`, with findings/feedback. A visual
   failure stores `visual_error` while preserving the reviewed words.
+- A run whose process dies stops reading as one still going: a draft left in a non-terminal
+  stage for longer than `WORKFLOW_TIMEOUT` is recorded as failed, with what is actually known
+  about it, and can be retried as a new attempt.
 - Drafts store nullable links to the brief, angle plan and research job, plus correlation ID,
   write prompt version, exact template versions, gate findings, readiness report and revision
   count. Drafts created before this migration return `editorial: null` and continue to open.
@@ -437,7 +445,7 @@ published, awaiting verdict:  0
 corpus:      107 posts (69 Monte, 15 creator inspiration, 13 pixii.creates, 10 Pixii_ai)
 templates:   11 approved · 50 proposed · 2 retired
 verdicts:    0
-tests:       508 backend · 232 frontend
+tests:       1179 backend · 412 frontend
 ```
 
 Visual templates can now be **extracted** rather than hand-authored. `POST /templates/extract/visuals`
@@ -500,8 +508,9 @@ Written plainly because the alternative is discovering it in production.
   all.** It writes to the corpus.
 - **Nothing on any screen says that unattended work ran.** The metrics scheduler, the
   publication reconciliation pass and the daily editorial slot produce log lines and nothing
-  else, so a daily run that has been failing for a week looks like a quiet week. There is no
-  route to connect: `DailyRun` rows exist and no endpoint reads them. Full audit in
+  else, so a daily run that has been failing for a week looks like a quiet week. There is a
+  route now — `GET /daily-runs` reads the `DailyRun` rows — and no screen calls it, so this is
+  answerable from a terminal and from nowhere else. Full audit in
   [`docs/capability-matrix.md`](docs/capability-matrix.md), which lists every backend
   capability against the screen that reaches it — and the ones no screen reaches.
 

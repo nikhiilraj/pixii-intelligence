@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -23,11 +23,14 @@ import {
   API_BASE,
   assetSrc,
   calls,
+  getJson,
+  inFlight,
   postForm,
   postJson,
   type Asset,
   type AssetKind,
   type Draft,
+  type GenerationStage,
   type Publication,
   type PublishingTarget,
   type Spend,
@@ -493,6 +496,62 @@ function Lineage({ draft, assets }: { draft: Draft; assets: Asset[] | null }) {
   );
 }
 
+/** How often the browser asks `GET /drafts/{id}` where the run has got to.
+ *
+ *  A second, because a stage transition is the only thing this is watching for and there are
+ *  seven of them across a run that lasts a minute or more — anything slower shows a reviewer a
+ *  stage the run has already left. The request is one indexed row and the sweep it triggers is
+ *  one indexed query, so the cost of asking is not what bounds this. */
+const POLL_MS = 1000;
+
+/** What each stage is actually doing, in words a person reading a screen can act on.
+ *
+ *  Written out rather than derived from the stage name. `researching` and "reading sources"
+ *  are not the same sentence, and the one that helps says what the minute is being spent on.
+ *  Every member of `GenerationStage` is here — the map is exhaustive by type, so adding a
+ *  stage to `lib/api` without saying what it means fails the build rather than rendering a
+ *  blank line at the moment a reviewer is waiting on it.
+ *
+ *  `revising` is in the map and the backend does not currently write it: `ORDER` puts
+ *  `verifying` before it, so the bounded revision loop deliberately leaves the stage alone.
+ *  Listed anyway, because the alternative is a screen that cannot name a stage the enum
+ *  contains — and the day that loop records itself, this is already right. */
+const STAGE_LABEL: Record<GenerationStage, string> = {
+  unreviewed: "Not reviewed",
+  planning: "Writing the brief and planning the angle",
+  researching: "Searching and reading sources",
+  drafting: "Writing the post from the plan",
+  verifying: "Checking every claim against the sources",
+  revising: "Revising against the findings",
+  evaluating: "Scoring editorial readiness",
+  rendering: "Drawing the visual",
+  ready: "Ready for review",
+  failed: "Failed",
+  failed_review: "Did not pass review",
+};
+
+/** What the run is doing, while it is doing it.
+ *
+ *  This is the whole point of the slice on this side: the words and the picture do not exist
+ *  yet, so rendering the draft's body here would show an empty article and an amber "visual
+ *  not produced" line about a run that has not reached rendering. What a reviewer needs during
+ *  the minute is the stage, and the fact that a reload will find it again.
+ *
+ *  `role="status"` rather than `role="alert"`: progress is not an interruption, and a stage
+ *  change every few seconds through an assertive live region would talk over everything else
+ *  on the page. */
+function RunProgress({ draft }: { draft: Draft }) {
+  return (
+    <Card className="space-y-2 p-4 text-sm" role="status" aria-live="polite">
+      <p className="font-medium">{STAGE_LABEL[draft.generation_stage]}…</p>
+      <p className="text-caption text-muted">
+        This takes a minute or more. Every stage is saved as it happens, so you can leave this
+        page or reload it — draft #{draft.id} is already here and this address will find it.
+      </p>
+    </Card>
+  );
+}
+
 function EditorialWorkflow({ draft }: { draft: Draft }) {
   const editorial = draft.editorial;
   // No `?? "historical"`. `generation_stage` is on every `DraftOut` and is required in
@@ -756,6 +815,44 @@ export default function Studio({
   // string on screen the next time the dialog opens. Measured, not assumed.
   const [picking, setPicking] = useState<ImageSlot | null>(null);
 
+  // Whether a run is going on right now, which is what disables Generate and what the poll
+  // below runs against. The client half of duplicate protection only — the server holds the
+  // UNIQUE claim, and a second press that gets past this button is answered with the draft
+  // that is already running rather than with a second one.
+  const running = draft !== null && inFlight(draft.generation_stage);
+
+  /* Ask the server where the run has got to, until it stops moving.
+   *
+   * An effect, and legitimately so: this is synchronisation with something outside React —
+   * a run in another process on another connection — and not the derived state that
+   * `chooseVisual` and the `initialDraft` seeding above deliberately refuse to sync this way.
+   * React 19 forbids the second, not the first.
+   *
+   * Keyed on the id **and the stage**, so the interval is rebuilt only when the run actually
+   * moves rather than on every response, and is torn down for good the moment the stage is
+   * terminal. The cleanup clears the timer on unmount too — Studio is remounted by its `key`
+   * whenever `?draft=` changes, so a timer that outlived that would poll a draft nobody is
+   * looking at, for as long as the tab stayed open.
+   *
+   * A failed poll is dropped rather than shown. The run is unaffected by whether this browser
+   * could reach the API for one second, and a toast per second on a flaky connection would
+   * bury the page; the stage on screen simply stops advancing, which is the truth. */
+  useEffect(() => {
+    if (draft === null || !inFlight(draft.generation_stage)) return;
+    const id = draft.id;
+    let live = true;
+    const timer = setInterval(async () => {
+      const next = await getJson<Draft>(`/drafts/${id}`);
+      if (!live || !next.ok) return;
+      setDraft((current) => (current && current.id === id ? next.data : current));
+    }, POLL_MS);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft?.id, draft?.generation_stage]);
+
   const approved = templates.filter((t) => t.status === "approved");
   const of = (kind: Template["kind"]) => approved.filter((t) => t.kind === kind);
 
@@ -1004,17 +1101,34 @@ export default function Studio({
           >
             Suggest templates
           </Button>
+          {/* Disabled while a run is in flight as well as while the request itself is out.
+              The two are different windows now and both are real: the request returns in a
+              second or two and the run it started lasts a minute, so `busy` alone would leave
+              the button live for the whole of it. The server is still the authority — the
+              claim is a UNIQUE index and a second press is answered with the running draft —
+              which is why this is a disabled control and not a check that refuses. */}
           <Button
-            disabled={!idea.trim() || busy !== null}
+            disabled={!idea.trim() || busy !== null || running}
             onClick={async () => {
               const d = await call<Draft>("/drafts/workflow", payload);
               if (d) {
                 setDraft(d);
                 setBatch(null);
+                // The address bar, so a reload finds the attempt. `history.replaceState` and
+                // not `router.replace`: `page.tsx` gives this component a `key` of the
+                // requested id, so a navigation would remount Studio mid-run and take the
+                // idea, the picks and the poll with it. Replace rather than push, because a
+                // Back button that returns to "no draft asked for" while the run continues is
+                // a browser control that appears to cancel something and does not.
+                window.history.replaceState(null, "", `/studio?draft=${d.id}`);
               }
             }}
           >
-            {busy === "/drafts/workflow" ? "Planning, researching and writing…" : "Generate draft"}
+            {busy === "/drafts/workflow"
+              ? "Starting…"
+              : running
+                ? "Generating…"
+                : "Generate draft"}
           </Button>
           {/* Its own button, and the label says what it does rather than "Generate": one press
               here is several completions and several renders, so it must be chosen, never
@@ -1122,6 +1236,7 @@ export default function Studio({
           <>
             <Lineage draft={draft} assets={library} />
             <EditorialWorkflow draft={draft} />
+            {running && <RunProgress draft={draft} />}
 
             {/* "In Zernio as a draft ({id}). Publishing stays a human act." stood here, under
                 exactly the condition that now renders the publication panel — so the two always
@@ -1132,9 +1247,14 @@ export default function Studio({
                 names the post, and one place saying where the draft is cannot disagree with
                 itself. */}
 
-            <article className="whitespace-pre-wrap border-y border-border py-6 text-[15px] leading-7">
-              {draft.full_text}
-            </article>
+            {/* Only once there are words. An in-flight run has none yet and a run that failed
+                at planning never wrote any, and an empty bordered box in either case reads as
+                a post that says nothing rather than as a post that does not exist. */}
+            {draft.full_text && (
+              <article className="whitespace-pre-wrap border-y border-border py-6 text-[15px] leading-7">
+                {draft.full_text}
+              </article>
+            )}
 
             {draft.visual_png ? (
               <div
@@ -1169,9 +1289,19 @@ export default function Studio({
                   </figure>
                 )}
               </div>
-            ) : (
+            ) : draft.visual_error ? (
               <p className="text-sm text-amber-700 dark:text-amber-400">
-                Visual not produced: {draft.visual_error ?? "unknown"} — the text is unaffected.
+                Visual not produced: {draft.visual_error} — the text is unaffected.
+              </p>
+            ) : (
+              /* No image and no error is a run that never reached rendering — it is still
+                 going, or it stopped before the picture. `Visual not produced: unknown` was
+                 what stood here, and against a workflow that now fails visibly at any stage it
+                 reported a drawing that was never attempted as one that went wrong. */
+              <p className="text-sm text-muted">
+                {running
+                  ? "The visual is drawn last, once the words have passed review."
+                  : "No visual was drawn — this run did not reach rendering."}
               </p>
             )}
 
@@ -1181,10 +1311,14 @@ export default function Studio({
               </p>
             )}
 
+            {/* Every control here acts on words and a picture the run has not finished
+                writing, so all of them wait for it. The server refuses them anyway — a
+                non-`ready` draft cannot be pushed — but a button that is alive and then 409s
+                is a button that looks like it did something. */}
             <div className="flex flex-wrap gap-2">
               <Button
                 variant="outline"
-                disabled={busy !== null}
+                disabled={busy !== null || running}
                 onClick={async () => {
                   const d = await call<Draft>(`/drafts/${draft.id}/regenerate-text`);
                   if (d) setDraft(d);
@@ -1194,7 +1328,7 @@ export default function Studio({
               </Button>
               <Button
                 variant="outline"
-                disabled={busy !== null}
+                disabled={busy !== null || running}
                 onClick={async () => {
                   const d = await call<Draft>(`/drafts/${draft.id}/regenerate-visual`);
                   if (d) {
@@ -1208,7 +1342,7 @@ export default function Studio({
               {draft.has_previous_visual && (
                 <Button
                   variant="outline"
-                  disabled={busy !== null}
+                  disabled={busy !== null || running}
                   onClick={async () => {
                     const d = await call<Draft>(`/drafts/${draft.id}/restore-visual`);
                     if (d) {
@@ -1227,6 +1361,7 @@ export default function Studio({
               <Button
                 disabled={
                   busy !== null ||
+                  running ||
                   draft.zernio_post_id !== null ||
                   draft.generation_stage === "failed" ||
                   draft.generation_stage === "failed_review"
@@ -1256,18 +1391,20 @@ export default function Studio({
                 draft's factual claims rest on, so it is read before a push and not after one —
                 and a draft with no research behind it is the state this panel most needs to be
                 able to say out loud. */}
-            <ResearchPanel
-              draftId={draft.id}
-              research={
-                draft.editorial
-                  ? {
-                      dossier: draft.editorial.research,
-                      unavailable: draft.editorial.research_error,
-                      jobs: [],
-                    }
-                  : (research ?? { dossier: null, unavailable: null, jobs: [] })
-              }
-            />
+            {!running && (
+              <ResearchPanel
+                draftId={draft.id}
+                research={
+                  draft.editorial
+                    ? {
+                        dossier: draft.editorial.research,
+                        unavailable: draft.editorial.research_error,
+                        jobs: [],
+                      }
+                    : (research ?? { dossier: null, unavailable: null, jobs: [] })
+                }
+              />
+            )}
 
             {/* Only once there is a post in Zernio to command. Every route behind this panel
                 updates an existing post and none of them creates one, so before a push there

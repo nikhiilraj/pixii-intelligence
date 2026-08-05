@@ -159,12 +159,15 @@ because a matrix whose only purpose is to make itself look complete is worth not
    version)` everywhere in this system, and the one route that shows a family's history has no
    reader. A disclosure on the `/templates` review row is the natural home. Left for the same
    reason: it is a display, and the operations above were the gap.
-7. **Nothing in the UI shows that unattended work ran.** The metrics scheduler, the
-   reconciliation pass and the daily editorial slot all produce log lines and nothing else. A
-   daily run that has been failing for a week is invisible from every screen — the Inbox would
-   simply have fewer drafts in it, which looks like a quiet week. There is no route to connect:
-   `DailyRun` rows exist in the database and no endpoint reads them. This is the largest
-   remaining gap the matrix found, and it needs a backend route before it needs a screen.
+7. **Nothing in the UI shows that unattended work ran — but there is now a route to
+   connect.** The metrics scheduler, the reconciliation pass and the daily editorial slot all
+   produce log lines and nothing else. A daily run that has been failing for a week is
+   invisible from every screen — the Inbox would simply have fewer drafts in it, which looks
+   like a quiet week. The half of that which was a *missing route* is closed:
+   `GET /daily-runs` reads the `DailyRun` rows, newest first, passing NULL counts through as
+   null because `0` would say a run finished and produced nothing. The screen is not built.
+   `/operations` is where it belongs — that page already holds the work that is not writing —
+   and until it exists this remains invisible to anyone not holding a terminal. Task #17.
 8. **`POST /drafts` (legacy) is reachable and unreviewed.** Not a UI gap — a deliberate
    omission, recorded here so that nobody "connects" it later on the grounds that it appears
    in this table with no entry point.
