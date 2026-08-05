@@ -78,6 +78,9 @@ export default function AddExternal() {
         <input
           value={engaged}
           onChange={(e) => setEngaged(e.target.value)}
+          type="number"
+          min="0"
+          step="1"
           inputMode="numeric"
           placeholder="engaged actions"
           className={field}

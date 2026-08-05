@@ -183,8 +183,8 @@ class ManualPostIn(BaseModel):
     content: str
     author: str | None = None
     platform: str = "linkedin"
-    engaged_actions: int = 0
-    impressions: int = 0
+    engaged_actions: int = Field(default=0, ge=0)
+    impressions: int = Field(default=0, ge=0)
     published_at: datetime | None = None
     note: str = ""
 
