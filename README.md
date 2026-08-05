@@ -445,7 +445,7 @@ published, awaiting verdict:  0
 corpus:      107 posts (69 Monte, 15 creator inspiration, 13 pixii.creates, 10 Pixii_ai)
 templates:   11 approved · 50 proposed · 2 retired
 verdicts:    0
-tests:       1179 backend · 412 frontend
+tests:       1181 backend · 412 frontend
 ```
 
 Visual templates can now be **extracted** rather than hand-authored. `POST /templates/extract/visuals`

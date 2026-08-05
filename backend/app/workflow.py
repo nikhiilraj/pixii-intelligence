@@ -25,9 +25,11 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
+from sqlalchemy import update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.engine import CursorResult
 from sqlmodel import Session, col, select
 
 from app.config import settings
@@ -297,8 +299,17 @@ def start(
 
 def _spawn(draft_id: int, requested_mode: str | None) -> None:
     def work() -> None:
-        with resources() as adapters:
-            run(draft_id, resources_=adapters, requested_mode=requested_mode)
+        try:
+            with resources() as adapters:
+                run(draft_id, resources_=adapters, requested_mode=requested_mode)
+        except Exception:
+            # `run` records its own failures on the draft; this catches the two things that
+            # happen outside it — building the four adapters, and opening the connection. A
+            # thread that dies here dies with an unhandled traceback nobody reads, and leaves a
+            # draft at `planning` that the sweep will not touch for the whole timeout. The row
+            # is still the honest record and the sweep still closes it; this is only so the log
+            # says which of the two it was rather than being silent about both.
+            log.exception("workflow %s could not be started", draft_id)
 
     threading.Thread(target=work, name=f"workflow-{draft_id}", daemon=True).start()
 
@@ -332,21 +343,43 @@ def sweep_stalled(session: Session, *, now: datetime | None = None) -> list[Draf
         ).all()
         if at - utc(draft.created_at) >= cutoff
     ]
+    swept: list[Draft] = []
     for draft in stalled:
         # The stage it died in is in the message, because it is the only diagnosis available:
         # nothing recorded why the process went away, and "researching" versus "rendering"
         # is the difference between a search provider hanging and a renderer doing it.
-        draft.generation_error = (
+        reason = (
             f"the run stopped responding at {draft.generation_stage} and was declared failed "
             f"after {settings.workflow_timeout_minutes} minutes. Nothing is known about what "
             f"happened to it; Retry starts a fresh attempt and keeps this one."
         )
-        draft.generation_stage = GenerationStage.FAILED
-        _release(draft)
-        session.add(draft)
-    if stalled:
+        # **The in-flight test is repeated in the UPDATE, and that is not belt and braces.**
+        # The SELECT above is a snapshot: a run that was merely slow can commit `ready` and
+        # release its claim between it and this write, and this statement would then stamp
+        # `failed` over a finished draft — the resurrection the checkpoint guards against,
+        # running the other way, and it makes a perfectly good post unpushable. Worse, the
+        # worker's `SELECT … FOR UPDATE` holds the row while it commits, so the window is
+        # exactly as wide as the commit that closes it. Conditioned here, the row that went
+        # terminal in between updates nothing at all.
+        done = session.execute(
+            update(Draft)
+            .where(
+                col(Draft.id) == draft.id,
+                col(Draft.generation_stage).in_(sorted(IN_FLIGHT)),
+            )
+            .values(
+                generation_stage=GenerationStage.FAILED,
+                generation_error=reason,
+                workflow_key=None,
+            )
+        )
+        # `rowcount` is on `CursorResult`, which is what an UPDATE returns; the annotation on
+        # `Session.execute` is the wider `Result`, which has no such attribute.
+        if cast("CursorResult[Any]", done).rowcount:
+            swept.append(draft)
+    if swept:
         # Committed here rather than left to the route. A `GET` that commits is unusual enough
         # to say out loud: this is not the request's own work, it is a correction to a row that
         # is lying, and leaving it uncommitted would make every reader re-derive it forever.
         session.commit()
-    return stalled
+    return swept

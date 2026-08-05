@@ -27,21 +27,26 @@ from sqlalchemy.engine import make_url
 from sqlmodel import Session, SQLModel, col, select
 
 import app.models  # noqa: F401  — registers every table on SQLModel.metadata
-from app import gates, workflow
+from app import gates, research, workflow
 from app.config import settings
 from app.db import get_session
 from app.deps import get_llm
 from app.main import app
 from app.models.draft import Draft
 from app.models.generation_trace import GenerationTrace
+from app.models.research import LIGHT
 from app.models.stage import GenerationStage
+from app.research import SearchResult
 from app.workflow import Resources
 from tests.test_studio_workflow import (
+    ANGLE_FACT,
     ANGLE_NONE,
     BRIEF,
     READY,
     VERIFIED,
+    WRITE_FACT,
     WRITE_NONE,
+    fetched,
     templates,
 )
 
@@ -141,6 +146,32 @@ class NoSearch:
         raise AssertionError("a none-mode workflow must not search")
 
 
+class Searching:
+    """A search provider for the one run below that has a factual floor."""
+
+    def search(self, query: str, *, limit: int):
+        return [SearchResult("https://example.com/acme", "Acme checkout")]
+
+
+RESEARCH_CLAIMS = {
+    "claims": [
+        {
+            "text": "Acme changed its checkout flow to remove one field",
+            "citations": [
+                {
+                    "source": "S1",
+                    "span": "Acme changed its checkout flow to remove one field",
+                    "stance": "supports",
+                }
+            ],
+        }
+    ],
+    "unknowns": [],
+}
+# The finished post's one assertion, resolved against the dossier claim above.
+VERIFIED_FACT: dict = {"assertions": []}
+
+
 class NoImages:
     def generate(self, prompt: str, width: int, height: int) -> bytes:
         raise AssertionError("the template declares html; the image renderer is the wrong one")
@@ -210,6 +241,54 @@ def test_every_stage_is_committed_as_it_is_entered(committing_engine, committed)
     assert renderer.seen == ["rendering"]
     with Session(committing_engine) as elsewhere:
         assert elsewhere.get(Draft, draft.id).generation_stage == GenerationStage.READY
+
+
+def test_the_researching_stage_is_committed_too(committing_engine, committed, monkeypatch):
+    """The one transition the `none`-mode run above never enters.
+
+    `researching` is inside `if brief.research_mode != research.NONE`, so a run that makes no
+    web request skips both the `advance` and the checkpoint beside it — and that branch is
+    where a run spends the longest, so it is the stage a reviewer is most likely to be looking
+    at when they wonder whether anything is happening.
+    """
+    # The dossier's pages come from a stub. Injected by wrapping `run_research` rather than
+    # by adding a fetcher argument to `workflow.run`: the worker builds its own adapters
+    # precisely so that a caller cannot hand it any, and a test-only parameter on that seam
+    # would be a hole in the thing under test. `fetching.fetch` cannot be patched instead —
+    # it is a default argument, bound once when `run_research` was defined.
+    real_research = research.run_research
+    monkeypatch.setattr(
+        research,
+        "run_research",
+        lambda *args, **kwargs: real_research(*args, **{**kwargs, "fetcher": fetched}),
+    )
+    draft = start(committed, idea="what Acme changed about its checkout flow")
+    watcher = Watching(
+        committing_engine,
+        draft.id or 0,
+        BRIEF,
+        ANGLE_FACT,
+        {"queries": ["acme checkout change"]},
+        RESEARCH_CLAIMS,
+        WRITE_FACT,
+        VERIFIED_FACT,
+        READY,
+    )
+    workflow.run(
+        draft.id or 0,
+        resources_=Resources(
+            llm=watcher,
+            search=Searching(),
+            html_renderer=WatchingRenderer(watcher),
+            image_renderer=NoImages(),
+        ),
+        session_factory=lambda: Session(committing_engine),
+        requested_mode=LIGHT,
+    )
+
+    # brief, angle, then the two research calls — both of which are the researching stage.
+    assert watcher.seen[:4] == ["planning", "planning", "researching", "researching"]
+    assert watcher.seen[4] == "drafting"
 
 
 def test_a_reload_finds_the_attempt_rather_than_losing_it(committing_engine, committed):
@@ -386,6 +465,53 @@ def test_a_swept_run_is_not_resurrected_by_the_worker_that_finishes_afterwards(
     # The run stopped rather than ran on: it never reached the rubric, and never drew.
     assert len(watcher.seen) == 3
     assert renderer.seen == []
+
+
+def test_a_run_that_finishes_first_is_not_swept_out_from_under_itself(
+    committing_engine, committed, monkeypatch
+):
+    """The mirror of the resurrection, and the more damaging direction of the two.
+
+    The sweep decides from a snapshot. A run that was merely slow can commit `ready` and
+    release its claim between that SELECT and the UPDATE, and an unconditioned write would then
+    stamp `failed` over a finished post: right words, right picture, no longer pushable, and a
+    reason saying it stopped responding. The worker's own `SELECT … FOR UPDATE` holds the row
+    while it commits, so the sweep is *blocked* there and the window is exactly as wide as the
+    commit that closes it — this is not a narrow race.
+
+    Produced deterministically by finishing the run from inside `db.utc`, which the sweep calls
+    once per row **after** its SELECT has returned and **before** it writes anything. That is
+    the interleaving, statement for statement, with no timing in it.
+    """
+    draft = start(committed)
+    real_utc = workflow.utc
+    finished: list[str] = []
+
+    def finish_the_run_first(value):
+        if not finished:
+            finished.append("done")
+            drive(
+                committing_engine,
+                committed,
+                draft,
+                BRIEF,
+                ANGLE_NONE,
+                WRITE_NONE,
+                VERIFIED,
+                READY,
+            )
+        return real_utc(value)
+
+    monkeypatch.setattr(workflow, "utc", finish_the_run_first)
+
+    with Session(committing_engine) as poller:
+        assert workflow.sweep_stalled(poller, now=datetime.now(UTC) + timedelta(days=1)) == []
+
+    assert finished == ["done"]
+    with Session(committing_engine) as elsewhere:
+        stored = elsewhere.get(Draft, draft.id)
+        assert stored.generation_stage == GenerationStage.READY
+        assert stored.generation_error is None
 
 
 def test_the_sweep_leaves_a_run_inside_the_timeout_alone(committing_engine, committed):
