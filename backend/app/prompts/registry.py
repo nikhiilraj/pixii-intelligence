@@ -54,13 +54,10 @@ class Prompt:
 
     # The JSON shape the model is told to return, as a JSON-Schema-shaped dict.
     #
-    # **Declared, not enforced.** Nothing validates against it yet; hard gates are a later
-    # slice, and a validator switched on here would start failing drafts that the callers
-    # deliberately tolerate — `_by_name` falls back to the first approved template precisely
-    # so a model naming something that does not exist does not cost the operator a draft.
-    # `required` therefore states what the prompt *demands of the model*, which is a stricter
-    # thing than what today's caller can survive. Reconcile the two when the gate lands, and
-    # reconcile it towards the prompt.
+    # Enforced by the connected editorial/research/Studio call sites through
+    # `output_schema.validate`. The legacy direct-generation helper retains its historical
+    # template-name fallback, but the Studio workflow never treats a malformed response as a
+    # valid artifact.
     output_schema: Mapping[str, Any]
 
     def __post_init__(self) -> None:

@@ -493,6 +493,77 @@ function Lineage({ draft, assets }: { draft: Draft; assets: Asset[] | null }) {
   );
 }
 
+function EditorialWorkflow({ draft }: { draft: Draft }) {
+  const editorial = draft.editorial;
+  const label = (draft.generation_stage ?? "historical").replaceAll("_", " ");
+  return (
+    <Card className="space-y-4 p-4 text-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="font-medium">Editorial workflow</h3>
+        <span className="rounded-full border border-border px-2 py-0.5 text-caption uppercase tracking-label">
+          {label}
+        </span>
+      </div>
+      {draft.generation_error && (
+        <p role="alert" className="text-red-700 dark:text-red-400">
+          {draft.generation_error}
+        </p>
+      )}
+      {editorial ? (
+        <div className="grid gap-4 md:grid-cols-2">
+          <section>
+            <h4 className="font-medium">Brief</h4>
+            <p className="mt-1 text-muted">{editorial.brief.objective}</p>
+            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-caption">
+              <dt className="text-muted">Audience</dt><dd>{editorial.brief.audience}</dd>
+              <dt className="text-muted">Action</dt><dd>{editorial.brief.desired_action}</dd>
+              <dt className="text-muted">Research</dt>
+              <dd>
+                {editorial.brief.research_mode} (floor {editorial.brief.recommended_mode})
+                {editorial.brief.mode_signals.length
+                  ? ` — ${editorial.brief.mode_signals.join(", ")}`
+                  : " — no factual floor signal"}
+              </dd>
+            </dl>
+          </section>
+          <section>
+            <h4 className="font-medium">Angle</h4>
+            <p className="mt-1">{editorial.angle.thesis}</p>
+            <p className="mt-1 text-caption text-muted">{editorial.angle.tension}</p>
+            <p className="mt-2 text-caption">CTA: {editorial.angle.cta}</p>
+          </section>
+          <section>
+            <h4 className="font-medium">Planned claims</h4>
+            <ul className="mt-1 list-disc space-y-1 pl-4 text-caption">
+              {editorial.planned_claims.map((claim) => <li key={claim.id}>{claim.text}</li>)}
+            </ul>
+          </section>
+          <section>
+            <h4 className="font-medium">Quality review</h4>
+            {(draft.gate_results ?? []).length ? (
+              <ul className="mt-1 list-disc space-y-1 pl-4 text-caption text-red-700 dark:text-red-400">
+                {(draft.gate_results ?? []).map((finding, index) => (
+                  <li key={`${finding.gate}-${index}`}>[{finding.gate}] {finding.detail}</li>
+                ))}
+              </ul>
+            ) : <p className="mt-1 text-caption text-muted">Deterministic gates passed.</p>}
+            {draft.readiness_result && (
+              <p className="mt-2 text-caption">
+                {draft.readiness_result.readiness_points}/100 — {draft.readiness_result.decision.replaceAll("_", " ")}
+              </p>
+            )}
+            {(draft.revision_rounds ?? 0) > 0 && (
+              <p className="mt-1 text-caption text-muted">{draft.revision_rounds} bounded revision round(s)</p>
+            )}
+          </section>
+        </div>
+      ) : (
+        <p className="text-muted">Historical draft — editorial lineage was not recorded when it was created.</p>
+      )}
+    </Card>
+  );
+}
+
 /** `VariantsOut` (api_drafts.py:318) — one idea written several ways, and what the whole batch
  *  cost. **There is no fourth field and that is the slice**: no score, no confidence, no
  *  recommendation, and no order but the one the drafts were written in.
@@ -623,14 +694,8 @@ export default function Studio({
   // `GET /publishing` — the destination and the kill switch, or `null` when that read failed.
   // Handed straight down; the panel is what knows the difference between "off" and "unknown".
   publishing = null,
-  // The research run this page was pointed at, why there isn't one, and the runs that exist.
-  //
-  // **Passed through without being looked at.** Where the job id came from is `page.tsx`'s
-  // business — `?research=` today, and `draft.research_job_id` the day the schema links the
-  // two — and keeping that resolution out of here is what makes it a one-line change. `null`
-  // means the caller wired no research at all, which is why the panel then does not render:
-  // it is not "there is no research", and a panel saying so on a page that never asked would
-  // be a claim about the database made by a component that made no request.
+  // Compatibility only for callers predating persisted draft lineage. Studio's page no longer
+  // resolves `?research=` or supplies this; a draft's own `editorial.research` wins.
   research = null,
 }: {
   templates: Template[];
@@ -929,14 +994,14 @@ export default function Studio({
           <Button
             disabled={!idea.trim() || busy !== null}
             onClick={async () => {
-              const d = await call<Draft>("/drafts", payload);
+              const d = await call<Draft>("/drafts/workflow", payload);
               if (d) {
                 setDraft(d);
                 setBatch(null);
               }
             }}
           >
-            {busy === "/drafts" ? "Writing…" : "Generate draft"}
+            {busy === "/drafts/workflow" ? "Planning, researching and writing…" : "Generate draft"}
           </Button>
           {/* Its own button, and the label says what it does rather than "Generate": one press
               here is several completions and several renders, so it must be chosen, never
@@ -1043,6 +1108,7 @@ export default function Studio({
         ) : draft ? (
           <>
             <Lineage draft={draft} assets={library} />
+            <EditorialWorkflow draft={draft} />
 
             {/* "In Zernio as a draft ({id}). Publishing stays a human act." stood here, under
                 exactly the condition that now renders the publication panel — so the two always
@@ -1146,7 +1212,12 @@ export default function Studio({
                   `zernio_post_id` is set: pushing creates a Zernio DRAFT and nothing here ever
                   publishes. */}
               <Button
-                disabled={busy !== null || draft.zernio_post_id !== null}
+                disabled={
+                  busy !== null ||
+                  draft.zernio_post_id !== null ||
+                  draft.generation_stage === "failed" ||
+                  draft.generation_stage === "failed_review"
+                }
                 onClick={async () => {
                   const d = await call<Draft>(`/drafts/${draft.id}/push`);
                   if (d) setDraft(d);
@@ -1154,13 +1225,36 @@ export default function Studio({
               >
                 {draft.zernio_post_id ? "In Zernio" : "Push to Zernio as draft"}
               </Button>
+              {(draft.generation_stage === "failed" || draft.generation_stage === "failed_review") && (
+                <Button
+                  variant="outline"
+                  disabled={busy !== null}
+                  onClick={async () => {
+                    const retried = await call<Draft>(`/drafts/${draft.id}/retry`);
+                    if (retried) setDraft(retried);
+                  }}
+                >
+                  Retry complete flow
+                </Button>
+              )}
             </div>
 
             {/* Not gated on anything, unlike the publication panel below. Research is what a
                 draft's factual claims rest on, so it is read before a push and not after one —
                 and a draft with no research behind it is the state this panel most needs to be
                 able to say out loud. */}
-            {research && <ResearchPanel draftId={draft.id} research={research} />}
+            <ResearchPanel
+              draftId={draft.id}
+              research={
+                draft.editorial
+                  ? {
+                      dossier: draft.editorial.research,
+                      unavailable: draft.editorial.research_error,
+                      jobs: [],
+                    }
+                  : (research ?? { dossier: null, unavailable: null, jobs: [] })
+              }
+            />
 
             {/* Only once there is a post in Zernio to command. Every route behind this panel
                 updates an existing post and none of them creates one, so before a push there

@@ -5,9 +5,11 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 from sqlmodel import col, desc, select
 
+from app import research
+from app.api_research import _out as research_out
 from app.autonomous import AutonomousRunFailed, SpendMeter, run_autonomous
 from app.config import settings
-from app.deps import HtmlRendererDep, ImageRendererDep, LLMDep, SessionDep, ZernioDep
+from app.deps import HtmlRendererDep, ImageRendererDep, LLMDep, SearchDep, SessionDep, ZernioDep
 from app.distribution import (
     CommandRefused,
     NotPushed,
@@ -18,6 +20,8 @@ from app.distribution import (
 from app.generation import (
     NoUsableTemplates,
     generate_draft,
+    generate_reviewed_draft,
+    generated_from,
     regenerate_text,
     regenerate_visual,
     retopic,
@@ -27,6 +31,7 @@ from app.generation import (
 from app.llm import LLMResponseError
 from app.metrics import draft_for_post
 from app.models.draft import Draft
+from app.models.editorial import AnglePlan, EditorialBrief, PlannedClaim
 from app.models.post import Post
 from app.models.publication import CANCEL_SCHEDULE, PUBLISH_NOW, SCHEDULE, Publication
 from app.models.template import Template
@@ -45,6 +50,7 @@ class IdeaIn(BaseModel):
     # (`generation.chosen_assets`), so this is not a second route to writing prose into a
     # template. Absent slots fall back to the slot's own `default_asset_id`.
     asset_values: dict[str, str] = {}
+    research_mode: str | None = None
 
 
 class DraftOut(BaseModel):
@@ -85,6 +91,12 @@ class DraftOut(BaseModel):
     # review screen has nothing to submit and the stale-revision guard cannot fire.
     revision: int
     lineage: dict
+    generation_stage: str
+    generation_error: str | None
+    gate_results: list[dict]
+    readiness_result: dict | None
+    revision_rounds: int
+    editorial: dict | None
 
 
 def _lineage(session: SessionDep, draft: Draft) -> dict:
@@ -94,8 +106,7 @@ def _lineage(session: SessionDep, draft: Draft) -> dict:
         if not family:
             return None
         template = session.exec(
-            select(Template)
-            .where(Template.family_id == family, Template.version == version)
+            select(Template).where(Template.family_id == family, Template.version == version)
         ).first()
         return {
             "family": family,
@@ -121,9 +132,7 @@ def _out(session: SessionDep, draft: Draft) -> DraftOut:
         visual_values=draft.visual_values,
         asset_values=draft.asset_values,
         visual_error=draft.visual_error,
-        visual_png=(
-            base64.b64encode(draft.visual_image).decode() if draft.visual_image else None
-        ),
+        visual_png=(base64.b64encode(draft.visual_image).decode() if draft.visual_image else None),
         has_previous_visual=draft.previous_visual is not None,
         zernio_post_id=draft.zernio_post_id,
         pushed_at=draft.pushed_at,
@@ -131,7 +140,69 @@ def _out(session: SessionDep, draft: Draft) -> DraftOut:
         created_at=draft.created_at,
         revision=draft.revision,
         lineage=_lineage(session, draft),
+        generation_stage=draft.generation_stage,
+        generation_error=draft.generation_error,
+        gate_results=list(draft.gate_results),
+        readiness_result=draft.readiness_result,
+        revision_rounds=draft.revision_rounds,
+        editorial=_editorial_lineage(session, draft),
     )
+
+
+def _editorial_lineage(session: SessionDep, draft: Draft) -> dict | None:
+    """The persisted artifacts behind this draft, or null for a historical row."""
+    if draft.editorial_brief_id is None or draft.angle_plan_id is None:
+        return None
+    brief = session.get(EditorialBrief, draft.editorial_brief_id)
+    plan = session.get(AnglePlan, draft.angle_plan_id)
+    if brief is None or plan is None:
+        return None
+    claims = list(
+        session.exec(
+            select(PlannedClaim)
+            .where(PlannedClaim.plan_id == plan.id)
+            .order_by(col(PlannedClaim.id))
+        ).all()
+    )
+    dossier = None
+    research_error = None
+    if draft.research_job_id is not None:
+        try:
+            dossier = research_out(research.dossier(session, draft.research_job_id)).model_dump()
+        except Exception as exc:  # historical/failed job: lineage still renders
+            research_error = f"{type(exc).__name__}: {exc}"
+    return {
+        "brief": {
+            "id": brief.id,
+            "objective": brief.objective,
+            "audience": brief.audience,
+            "desired_action": brief.desired_action,
+            "constraints": brief.constraints,
+            "requested_mode": brief.requested_mode,
+            "recommended_mode": brief.recommended_mode,
+            "research_mode": brief.research_mode,
+            "mode_signals": brief.mode_signals,
+            "prompt": {"name": brief.prompt_name, "version": brief.prompt_version},
+        },
+        "angle": {
+            "id": plan.id,
+            "thesis": plan.thesis,
+            "tension": plan.tension,
+            "audience_stake": plan.audience_stake,
+            "cta": plan.cta,
+            "beats": plan.beats,
+            "prompt": {"name": plan.prompt_name, "version": plan.prompt_version},
+        },
+        "planned_claims": [{"id": claim.id, "text": claim.text} for claim in claims],
+        "research_job_id": draft.research_job_id,
+        "research": dossier,
+        "research_error": research_error,
+        "write_prompt": {
+            "name": draft.write_prompt_name,
+            "version": draft.write_prompt_version,
+        },
+        "correlation_id": draft.correlation_id,
+    }
 
 
 def _load(session: SessionDep, draft_id: int) -> Draft:
@@ -205,7 +276,7 @@ def create_draft(
     image_renderer: ImageRendererDep,
     payload: IdeaIn,
 ) -> DraftOut:
-    """Turn an idea into a reviewable draft. Nothing leaves the building here."""
+    """Legacy direct generation used by variants and existing API clients."""
     visual = session.get(Template, payload.visual_id) if payload.visual_id else None
     renderer = _renderer_for(visual, html_renderer, image_renderer)
     try:
@@ -227,6 +298,77 @@ def create_draft(
     session.commit()
     session.refresh(draft)
     return _out(session, draft)
+
+
+@router.post("/workflow", status_code=201)
+def create_workflow_draft(
+    session: SessionDep,
+    llm: LLMDep,
+    search: SearchDep,
+    html_renderer: HtmlRendererDep,
+    image_renderer: ImageRendererDep,
+    payload: IdeaIn,
+) -> DraftOut:
+    """Run the persisted editorial-to-review Studio workflow. Nothing publishes here."""
+    visual = session.get(Template, payload.visual_id) if payload.visual_id else None
+    renderer = _renderer_for(visual, html_renderer, image_renderer)
+    try:
+        draft = generate_reviewed_draft(
+            session,
+            llm,
+            search,
+            renderer,
+            idea=payload.idea,
+            hook_id=payload.hook_id,
+            structure_id=payload.structure_id,
+            visual_id=payload.visual_id,
+            asset_values=payload.asset_values,
+            requested_mode=payload.research_mode,
+        )
+    except NoUsableTemplates as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    session.commit()
+    session.refresh(draft)
+    return _out(session, draft)
+
+
+@router.post("/{draft_id}/retry", status_code=201)
+def retry_draft(
+    session: SessionDep,
+    llm: LLMDep,
+    search: SearchDep,
+    html_renderer: HtmlRendererDep,
+    image_renderer: ImageRendererDep,
+    draft_id: int,
+) -> DraftOut:
+    """Retry a failed workflow as a new attempt, preserving the failed row for audit."""
+    source = _load(session, draft_id)
+    if source.generation_stage not in {"failed", "failed_review"}:
+        raise HTTPException(status_code=409, detail="only a failed workflow can be retried")
+    hook = generated_from(session, source.hook_family, source.hook_version)
+    structure = generated_from(session, source.structure_family, source.structure_version)
+    visual = generated_from(session, source.visual_family, source.visual_version)
+    renderer = _renderer_for(visual, html_renderer, image_renderer)
+    requested_mode = None
+    if source.editorial_brief_id is not None:
+        brief = session.get(EditorialBrief, source.editorial_brief_id)
+        requested_mode = brief.requested_mode if brief else None
+    retried = generate_reviewed_draft(
+        session,
+        llm,
+        search,
+        renderer,
+        idea=source.idea,
+        hook_id=hook.id,
+        structure_id=structure.id,
+        visual_id=visual.id,
+        asset_values=source.asset_values,
+        requested_mode=requested_mode,
+        mode=source.mode,
+    )
+    session.commit()
+    session.refresh(retried)
+    return _out(session, retried)
 
 
 class RetopicIn(BaseModel):
@@ -464,6 +606,11 @@ def rewrite(session: SessionDep, llm: LLMDep, draft_id: int) -> DraftOut:
     except (NoUsableTemplates, LLMResponseError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     draft.edited()
+    if draft.editorial_brief_id is not None:
+        draft.generation_stage = "failed_review"
+        draft.generation_error = "text was regenerated and must pass the complete review flow again"
+        draft.gate_results = []
+        draft.readiness_result = None
     session.commit()
     session.refresh(draft)
     return _out(session, draft)
@@ -542,6 +689,13 @@ def push(session: SessionDep, zernio: ZernioDep, draft_id: int) -> DraftOut:
     second post, and the underlying request carries a stable idempotency key.
     """
     draft = _load(session, draft_id)
+    if draft.generation_stage in {"failed", "failed_review"}:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"draft is not review-ready ({draft.generation_stage}): {draft.generation_error}"
+            ),
+        )
     try:
         push_draft(session, draft, zernio)
     except PushFailed as exc:
@@ -755,9 +909,7 @@ def autonomous_run(
         # Same key names as the success body, so a caller reads the spend one way on both
         # paths. Note the asymmetry this exposes and does not create: the drafts written
         # before the raise roll back with the request, the money does not.
-        raise HTTPException(
-            status_code=502, detail={"error": str(exc), **meter.spend()}
-        ) from exc
+        raise HTTPException(status_code=502, detail={"error": str(exc), **meter.spend()}) from exc
     session.commit()
     return {
         "created": result.created,

@@ -18,6 +18,7 @@ from sqlmodel import col, select
 from app import prompts, research
 from app.db import utc
 from app.fetching import Fetched, FetchFailed, UnsafeUrl
+from app.llm import LLMResponseError
 from app.models.generation_trace import GenerationTrace
 from app.models.research import (
     COMPLETED,
@@ -725,12 +726,10 @@ def test_a_claim_only_contradicted_is_refuted(session):
 
 
 def test_a_stance_that_is_neither_is_not_a_reading(session):
-    """`"maybe"` is not a third stance; it is a citation nobody can act on."""
+    """`"maybe"` is not a third stance; strict model schemas fail the run clearly."""
     llm = FakeLLM(QUERIES_ANSWER, claims_answer(cited("a claim", cite(stance="maybe"))))
-    result = light_run(session, llm=llm)
-
-    (claim,) = result.claims
-    assert claim.status == UNSUPPORTED
+    with pytest.raises(LLMResponseError, match="stance must be one of"):
+        light_run(session, llm=llm)
 
 
 # --- 0 is a measurement; NULL is "that never happened" ------------------------------------------

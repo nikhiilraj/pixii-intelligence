@@ -68,10 +68,17 @@ The normal workflow is:
 2. Review proposals in **Templates**. Approve at least one hook, structure, and visual; retire
    patterns you do not want to reuse. Retiring preserves the historical record.
 3. Open **Studio**, enter an idea, and choose templates or ask the application to suggest them.
-4. Generate a draft and inspect its text, image, and exact template versions under **Lineage**.
-5. Regenerate individual parts or create variants if the first result is not right.
-6. Push the chosen result to Zernio. Pixii sends a draft.
-7. Schedule or publish it. Studio shows a publication panel for any draft that has reached
+4. Generate a draft. Studio creates an editorial brief and angle/claim plan, selects the
+   research depth, completes any required research, writes from that dossier, runs deterministic
+   gates and the editorial-readiness rubric, and only then renders the visual.
+5. Inspect the brief, angle, research-floor reason, planned claims, sources, gate findings,
+   readiness decision, prompt versions, image, and exact template versions under **Lineage**.
+   A failed workflow remains visible with its reason and can be retried as a new auditable attempt.
+6. Regenerate individual parts or create variants if the first result is not right. Rewritten
+   editorial drafts return to `failed_review` until the complete review flow is retried.
+7. Push the chosen result to Zernio. Pixii sends a draft. Failed and failed-review candidates
+   are refused at this boundary.
+8. Schedule or publish it. Studio shows a publication panel for any draft that has reached
    Zernio. Nothing fires from the button that names it: Schedule, Publish now and Cancel
    schedule each open a confirmation showing the action, the destination account, the local
    time as typed, the timezone, and the UTC instant those two resolve to, alongside every
@@ -79,9 +86,38 @@ The normal workflow is:
    an older version of the words. With `PUBLISHING_ENABLED` off — still the default — the
    panel says so up front and the three buttons are disabled, rather than letting you compose
    a command and then refusing it; publishing happens in Zernio by hand.
-8. Synchronize metrics after the post has accumulated meaningful engagement.
-9. Record a verdict and explain why it worked, did not work, or produced a mixed result.
-10. Return to **Inbox** and confirm the item moved to the next gate or completed the circuit.
+9. Synchronize metrics after the post has accumulated meaningful engagement.
+10. Record a verdict and explain why it worked, did not work, or produced a mixed result.
+11. Return to **Inbox** and confirm the item moved to the next gate or completed the circuit.
+
+### Studio generation flow and failure behavior
+
+The directed Studio endpoint is `POST /drafts/workflow`:
+
+```text
+idea → editorial brief → angle + planned claims → research-depth floor
+     → optional Brave search + fetched/cited dossier → source-disciplined write
+     → deterministic gates → bounded revision → editorial-readiness evaluation
+     → persisted review state → visual render → human review → optional Zernio draft
+```
+
+- `none` still builds the brief and plan, but makes no web request. `light` and `deep` must
+  finish research before writing. An explicit mode below the detected floor is refused.
+- `BRAVE_SEARCH_API_KEY` enables factual research. Without it, `light`/`deep` stop at a visible
+  failed research state; they never fall back to `none`.
+- Model JSON is checked against the registered output schema. Missing or mistyped write fields
+  produce a persisted, recoverable drafting failure.
+- Unsupported and contradicted dossier claims are blocking evidence findings and are never sent
+  to the wording revision loop. Correctable writing findings use at most two revision rounds and
+  three revision calls, including the single schema-repair attempt already defined by that loop.
+- A gate or readiness failure is stored as `failed_review`, with findings/feedback. A visual
+  failure stores `visual_error` while preserving the reviewed words.
+- Drafts store nullable links to the brief, angle plan and research job, plus correlation ID,
+  write prompt version, exact template versions, gate findings, readiness report and revision
+  count. Drafts created before this migration return `editorial: null` and continue to open.
+- Generation never publishes or pushes. Autonomous generation remains unable to push. Zernio
+  push still creates a draft, and the publishing kill switch plus revision confirmation remain
+  unchanged.
 
 The verdict explanation is especially important: the note, not just the label, is the lesson
 supplied to later generations.
@@ -255,9 +291,17 @@ This pass stays local except for generation or rendering calls and does not push
 1. Visit every screen and confirm an API failure is distinguishable from an honestly empty list.
 2. Approve one hook, one structure, and one visual template. Start with a text-only visual such as
    `stat-card`; an `image_url` slot needs an asset selected.
-3. Generate a draft from a simple idea.
-4. Confirm it contains text, a rendered visual, and three lineage entries with explicit versions.
-5. Regenerate the text and verify its lineage does not change.
+3. Generate an opinion-only draft and confirm Studio shows `none`, a floor reason, a brief,
+   angle, planned claims, passed gates, readiness result, text, visual and template versions.
+4. Generate a factual draft with Brave configured. Confirm `light` or `deep` is shown, sources
+   are linked, citations support the factual wording, and the research job persists after reload.
+5. Temporarily unset `BRAVE_SEARCH_API_KEY`, retry a factual idea, and confirm it stops in a
+   visible failed research state without writing factual copy. Restore the key and use Retry.
+6. Regenerate the text and verify its lineage does not change and it is visibly marked for
+   review again. Redraw the visual and verify a render failure leaves the written post intact.
+7. Open a draft created before the migration and confirm it loads with a historical-lineage note.
+8. Confirm a failed-review draft cannot be pushed; confirm a ready draft pushes to Zernio only
+   as a draft. Leave `PUBLISHING_ENABLED=false` while performing this smoke test.
 6. Regenerate the visual, compare it with the previous version, and restore the previous image.
 7. Generate three variants, keep one, and confirm the discarded drafts leave the Inbox.
 8. Upload an asset and try a visual with an image slot.

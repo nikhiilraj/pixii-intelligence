@@ -121,6 +121,55 @@ export type Draft = {
   // that may omit it can publish words nobody approved.
   revision: number;
   lineage: { hook: LineageEntry; structure: LineageEntry; visual: LineageEntry };
+  generation_stage?:
+    | "planning"
+    | "researching"
+    | "drafting"
+    | "evaluating"
+    | "ready"
+    | "failed"
+    | "failed_review";
+  generation_error?: string | null;
+  gate_results?: { gate: string; detail: string }[];
+  readiness_result?: {
+    rubric_version: string;
+    prompt_name: string;
+    prompt_version: string;
+    readiness_points: number;
+    decision: "ready_for_editorial_review" | "needs_revision";
+    summary: string;
+    deductions: { criterion: string; points: number; reason: string; evidence: string }[];
+  } | null;
+  revision_rounds?: number;
+  editorial?: {
+    brief: {
+      id: number;
+      objective: string;
+      audience: string;
+      desired_action: string;
+      constraints: string[];
+      requested_mode: string | null;
+      recommended_mode: string;
+      research_mode: string;
+      mode_signals: string[];
+      prompt: { name: string; version: string };
+    };
+    angle: {
+      id: number;
+      thesis: string;
+      tension: string;
+      audience_stake: string;
+      cta: string;
+      beats: string[];
+      prompt: { name: string; version: string };
+    };
+    planned_claims: { id: number; text: string }[];
+    research_job_id: number | null;
+    research: Dossier | null;
+    research_error: string | null;
+    write_prompt: { name: string | null; version: string | null };
+    correlation_id: string | null;
+  } | null;
 };
 
 /** The three things a human can command against a post that already exists in Zernio —

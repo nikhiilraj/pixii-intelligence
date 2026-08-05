@@ -20,6 +20,7 @@ SECRET_FIELDS = (
     "azure_openai_image_api_key",
     "cloudflare_browser_rendering_token",
     "teams_webhook_url",
+    "brave_search_api_key",
 )
 
 
@@ -73,5 +74,6 @@ def test_configured_reports_presence_without_revealing_anything():
         "azure_chat": True,
         "azure_image": True,
         "cloudflare_rendering": True,
+        "brave_search": True,
     }
     assert CANARY not in repr(reported)

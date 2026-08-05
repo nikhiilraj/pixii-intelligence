@@ -34,6 +34,7 @@ from sqlmodel import Session, col, select
 from app import research
 from app.llm import LLM
 from app.models.editorial import CHANNEL, AnglePlan, EditorialBrief, PlannedClaim
+from app.output_schema import validate as validate_output
 from app.prompts.editorial import ANGLE_PLAN, BRIEF
 from app.prompts.tracing import new_correlation_id, traced_call
 
@@ -146,6 +147,7 @@ def build_brief(
         # No input artifact: the input to this stage is the operator's own sentence, which has
         # no id. The correlation id is what ties this call to everything downstream of it.
     )
+    validate_output(answer, BRIEF.output_schema)
 
     brief = EditorialBrief(
         correlation_id=correlation,
@@ -216,13 +218,13 @@ def plan_angle(
         # call has nothing to name and passes none.
         input_artifact_ids={"editorial_brief": brief.id},
     )
-
     claims = _planned(answer.get("claims"))
     if not claims:
         raise UnplannableClaims(
             "the angle plan named no claim that could be addressed on its own; "
             "a claim plan is a list of statements, not a paragraph about them"
         )
+    validate_output(answer, ANGLE_PLAN.output_schema)
 
     # Before the plan row, deliberately — see the docstring. A `ModeBelowFloor` from here
     # leaves no plan behind.

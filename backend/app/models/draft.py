@@ -31,6 +31,29 @@ class Draft(SQLModel, table=True):
     visual_family: str | None = Field(default=None, index=True)
     visual_version: int | None = None
 
+    # Editorial lineage. Nullable so drafts created before the Studio workflow was wired
+    # remain readable; new directed generations fill all three applicable relationships.
+    editorial_brief_id: int | None = Field(
+        default=None, foreign_key="editorial_brief.id", index=True
+    )
+    angle_plan_id: int | None = Field(default=None, foreign_key="angle_plan.id", index=True)
+    research_job_id: int | None = Field(
+        default=None, foreign_key="research_job.id", index=True
+    )
+    correlation_id: str | None = Field(default=None, index=True)
+
+    # Honest workflow/review state. Historical rows are migrated to `ready`; a new row moves
+    # through planning/researching/drafting/evaluating and can stop at failed_review.
+    generation_stage: str = Field(default="ready", index=True, nullable=False)
+    generation_error: str | None = None
+    gate_results: list = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
+    readiness_result: dict | None = Field(
+        default=None, sa_column=Column(JSONB, nullable=True)
+    )
+    revision_rounds: int = Field(default=0, nullable=False)
+    write_prompt_name: str | None = None
+    write_prompt_version: str | None = None
+
     hook_text: str = ""
     body_text: str = ""
 

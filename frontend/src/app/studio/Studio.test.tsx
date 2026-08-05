@@ -245,9 +245,9 @@ const HERO_SLOTS: Record<string, unknown>[] = [
   { name: "hero_image_url", type: "image_url", default_asset_id: 9 },
 ];
 
-/** The raw body of the one `POST /drafts` the click made. `/drafts/suggest` does not match. */
+/** The raw body of the one complete-workflow POST the click made. */
 function sentRaw(fetchStub: ReturnType<typeof vi.fn>): string {
-  const call = fetchStub.mock.calls.find(([url]) => String(url).endsWith("/drafts"));
+  const call = fetchStub.mock.calls.find(([url]) => String(url).endsWith("/drafts/workflow"));
   return String((call?.[1] as RequestInit).body);
 }
 
@@ -1263,7 +1263,7 @@ describe("one idea, several drafts", () => {
 
     await waitFor(() => expect(screen.getByText(/A 9-figure exit/)).toBeInTheDocument());
     expect(screen.queryByRole("button", { name: /keep draft 13/i })).not.toBeInTheDocument();
-    expect(bodySentTo(fetchStub, "/drafts")).toMatchObject({ hook_id: 1 });
+    expect(bodySentTo(fetchStub, "/drafts/workflow")).toMatchObject({ hook_id: 1 });
   });
 });
 

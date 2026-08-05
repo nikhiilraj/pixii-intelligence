@@ -17,10 +17,8 @@ Three rules shape every function here, and each of them is a thing that goes wro
   neutralising anything in it that could close the delimiter. A page that says "ignore your
   instructions" must be unable to say it *to the model*.
 
-**No live search has ever run.** There is no search-provider API key, so the only adapter in
-this file is `NoSearchProvider`, which refuses. `SearchProvider` is the seam — the same one
-`LLM` and the renderers carry — and the fixture adapter the tests drive lives in
-`tests/test_research.py`. Nothing here has spoken to a search engine.
+`SearchProvider` remains the seam used by tests and orchestration. Production uses the small
+Brave adapter below; when its key is absent `NoSearchProvider` refuses factual research loudly.
 """
 
 import logging
@@ -32,6 +30,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
+import httpx
 from sqlmodel import Session, col, select
 
 from app import fetching, prompts
@@ -59,6 +58,7 @@ from app.models.research import (
     ResearchJob,
     ResearchSource,
 )
+from app.output_schema import validate as validate_output
 from app.prompts.tracing import new_correlation_id, traced_call
 
 log = logging.getLogger("pixii.research")
@@ -147,6 +147,42 @@ class NoSearchProvider:
         raise SearchUnavailable(
             "no search provider is configured; research modes 'light' and 'deep' need one"
         )
+
+
+class BraveSearchProvider:
+    """Brave Web Search adapter returning candidates, never evidence.
+
+    The research layer still fetches and validates every returned URL itself. Search snippets
+    are discovery metadata and are never eligible for citation.
+    """
+
+    def __init__(self, api_key: str, endpoint: str, transport: httpx.BaseTransport | None = None):
+        self._client = httpx.Client(
+            headers={"X-Subscription-Token": api_key, "Accept": "application/json"},
+            timeout=20.0,
+            transport=transport,
+        )
+        self._endpoint = endpoint
+
+    def search(self, query: str, *, limit: int) -> Sequence[SearchResult]:
+        response = self._client.get(
+            self._endpoint,
+            params={"q": query, "count": min(max(limit, 1), RESULTS_PER_QUERY)},
+        )
+        response.raise_for_status()
+        rows = response.json().get("web", {}).get("results", [])
+        return [
+            SearchResult(
+                url=str(row.get("url") or ""),
+                title=str(row.get("title") or "") or None,
+                snippet=str(row.get("description") or "") or None,
+            )
+            for row in rows
+            if str(row.get("url") or "").strip()
+        ]
+
+    def close(self) -> None:
+        self._client.close()
 
 
 @dataclass(frozen=True)
@@ -470,15 +506,11 @@ def dossier(session: Session, job_id: int) -> ResearchDossier:
         .where(ResearchSource.job_id == job_id)
         .order_by(col(ResearchSource.id))
     ).all()
-    claims = session.exec(
-        select(Claim).where(Claim.job_id == job_id).order_by(col(Claim.id))
-    ).all()
+    claims = session.exec(select(Claim).where(Claim.job_id == job_id).order_by(col(Claim.id))).all()
     claim_ids = [claim.id for claim in claims if claim.id is not None]
     citations = (
         session.exec(
-            select(Citation)
-            .where(col(Citation.claim_id).in_(claim_ids))
-            .order_by(col(Citation.id))
+            select(Citation).where(col(Citation.claim_id).in_(claim_ids)).order_by(col(Citation.id))
         ).all()
         if claim_ids
         else []
@@ -559,9 +591,7 @@ def dossier(session: Session, job_id: int) -> ResearchDossier:
             if citation.id is not None
         ),
         unknowns=unknowns,
-        contradictions=tuple(
-            claim for claim in out_claims if claim.status in (DISPUTED, REFUTED)
-        ),
+        contradictions=tuple(claim for claim in out_claims if claim.status in (DISPUTED, REFUTED)),
         spend=Spend(
             queries=job.queries_run,
             sources_found=job.sources_found,
@@ -853,6 +883,7 @@ def _plan_queries(session: Session, llm: LLM, job: ResearchJob, budget: Budget) 
         correlation_id=job.correlation_id,
         input_artifact_ids={"research_job": job.id},
     )
+    validate_output(answer, _QUERIES.output_schema)
     proposed = answer.get("queries")
     queries = (
         [str(query).strip() for query in proposed if str(query).strip()]
@@ -963,9 +994,7 @@ def _fetch(
         label = f"S{len(evidence) + 1}"
         # The excerpt the model will be shown, kept beside its row and never stored: spans are
         # validated against exactly this text, and the page itself is not ours to keep.
-        evidence[label] = Evidence(
-            label=label, source=source, excerpt=page.text[:EXCERPT_CHARS]
-        )
+        evidence[label] = Evidence(label=label, source=source, excerpt=page.text[:EXCERPT_CHARS])
         job.sources_fetched += 1
 
     # Flushed so every source has the id its citations will point at.
@@ -996,6 +1025,7 @@ def _extract_claims(
         correlation_id=job.correlation_id,
         input_artifact_ids={"research_job": job.id, "sources": list(evidence)},
     )
+    validate_output(answer, _CLAIMS.output_schema)
 
     for text, proposed in _proposed(answer):
         record_claim(session, job, text, proposed, evidence)

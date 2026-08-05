@@ -4,9 +4,11 @@ from typing import Annotated
 from fastapi import Depends
 from sqlmodel import Session
 
+from app.config import settings
 from app.db import get_session
 from app.llm import LLM, AzureChat
 from app.rendering import AzureImageRenderer, CloudflareRenderer, HtmlRenderer, ImageRenderer
+from app.research import BraveSearchProvider, NoSearchProvider, SearchProvider
 from app.zernio import ZernioClient
 
 # Every route takes the session this way. Declaring it as an annotated alias rather than
@@ -24,6 +26,25 @@ def get_llm() -> Iterator[LLM]:
 
 
 LLMDep = Annotated[LLM, Depends(get_llm)]
+
+
+def get_search() -> Iterator[SearchProvider]:
+    provider: SearchProvider
+    if settings.brave_search_api_key:
+        provider = BraveSearchProvider(
+            settings.brave_search_api_key, settings.brave_search_endpoint
+        )
+    else:
+        provider = NoSearchProvider()
+    try:
+        yield provider
+    finally:
+        close = getattr(provider, "close", None)
+        if close:
+            close()
+
+
+SearchDep = Annotated[SearchProvider, Depends(get_search)]
 
 
 def get_html_renderer() -> Iterator[HtmlRenderer]:

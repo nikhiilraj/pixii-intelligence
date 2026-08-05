@@ -78,9 +78,10 @@ describe("the research panel on the draft screen", () => {
     expect(screen.queryByText("Schedule or publish")).not.toBeInTheDocument();
   });
 
-  it("is not shown at all when the page wired no research", () => {
+  it("shows the historical no-lineage state when no research was persisted", () => {
     renderStudio(null);
 
-    expect(screen.queryByText("Sources and claims")).not.toBeInTheDocument();
+    expect(screen.getByText("Sources and claims")).toBeInTheDocument();
+    expect(screen.getByText(/No research run is linked/)).toBeInTheDocument();
   });
 });

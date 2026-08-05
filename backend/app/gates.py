@@ -445,9 +445,9 @@ def _echoed_claims(
     above the near-duplicate threshold for the opposite reason that one sits low — this gate
     blocks a post, so a false positive costs a person an argument with the tool.
 
-    Compared against the whole post rather than sentence by sentence, matching how
-    `_near_duplicate` works, and that is a real limit: a single claim echoed inside a long
-    post dilutes below the ratio. Stated rather than hidden — see the ceiling below.
+    Compared against both the whole post and each sentence. Whole-post matching catches a
+    short candidate that paraphrases one claim; sentence matching prevents a supported-looking
+    long post from diluting one uncited assertion below the threshold.
 
     **`ponytail:` this gate catches an echo of a claim the plan already made, and nothing
     else.** A candidate that invents a fresh factual assertion nobody researched passes it
@@ -462,6 +462,14 @@ def _echoed_claims(
         # strings 1.0, so an empty candidate would echo every claim ever made.
         return []
 
+    # Keep the whole candidate as one comparison and add its individual assertions. Empty
+    # segments are dropped so an empty string cannot match an empty claim at 1.0.
+    comparisons = [candidate]
+    comparisons.extend(
+        normalised
+        for sentence in re.split(r"[.!?\n]+", full_text)
+        if (normalised := _normalised(sentence))
+    )
     findings = []
     for gate, claims, verb in (
         ("uncited_claim", unsupported, "nothing in the research supports"),
@@ -473,9 +481,10 @@ def _echoed_claims(
             # real text scores 0.0 and fails the threshold on its own, so the guard is one
             # no test could distinguish. It was written, and a mutation removing it passed
             # every test — which is what the comment predicts and the reason it is gone.
-            ratio = SequenceMatcher(
-                None, candidate, _normalised(claim), autojunk=False
-            ).ratio()
+            ratio = max(
+                SequenceMatcher(None, text, _normalised(claim), autojunk=False).ratio()
+                for text in comparisons
+            )
             if ratio >= CLAIM_ECHO_RATIO:
                 findings.append(
                     Finding(

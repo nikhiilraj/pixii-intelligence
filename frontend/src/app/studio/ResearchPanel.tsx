@@ -210,8 +210,8 @@ export type ResearchView = {
   dossier: Dossier | null;
   /** Why there is no dossier on screen, in words, or `null` when none was asked for. */
   unavailable: string | null;
-  /** Recent runs, so a human can reach one. `null` means that read failed, which is not an
-   *  empty list of runs. */
+  /** Legacy compatibility field. Studio no longer offers unrelated runs as lineage; the
+   *  dossier is loaded from the draft relationship. */
   jobs: ResearchJobSummary[] | null;
 };
 
@@ -235,13 +235,11 @@ export type ResearchView = {
  *  Ceiling: a "research this draft again" control the day a route exists to run one. */
 export default function ResearchPanel({
   research,
-  /** The draft this panel sits under, so the links to other runs come back to it. */
-  draftId,
 }: {
   research: ResearchView;
   draftId: number;
 }) {
-  const { dossier, unavailable, jobs } = research;
+  const { dossier, unavailable } = research;
 
   return (
     <section className="space-y-4 rounded-card border border-border p-4">
@@ -256,7 +254,7 @@ export default function ResearchPanel({
       </div>
 
       {dossier === null ? (
-        <NoDossier draftId={draftId} jobs={jobs} unavailable={unavailable} />
+        <NoDossier unavailable={unavailable} />
       ) : (
         <Dossierpanel dossier={dossier} />
       )}
@@ -265,15 +263,7 @@ export default function ResearchPanel({
 }
 
 /** No dossier on screen, and which of the three reasons it is. */
-function NoDossier({
-  draftId,
-  jobs,
-  unavailable,
-}: {
-  draftId: number;
-  jobs: ResearchJobSummary[] | null;
-  unavailable: string | null;
-}) {
+function NoDossier({ unavailable }: { unavailable: string | null }) {
   return (
     <>
       {unavailable ? (
@@ -285,49 +275,12 @@ function NoDossier({
         <Card className="border-dashed text-meta">
           <p className="font-medium">No research run is linked to this draft.</p>
           <p className="mt-1 text-muted">
-            Nothing in the database connects a draft to the research behind it — there is no
-            column for it — so a run is opened by naming it in the address, as{" "}
-            <code className="font-mono">?draft={draftId}&amp;research=&lt;id&gt;</code>. That an
-            unresearched draft looks exactly like a researched one here is a gap in the schema
-            and not a statement about this draft.
+            This is expected when the brief selected <code className="font-mono">none</code>,
+            and for historical drafts created before editorial lineage was stored. A factual
+            workflow records its own research job here; it is never selected from the URL.
           </p>
         </Card>
       )}
-
-      <div className="space-y-2">
-        <p className="font-mono text-caption uppercase tracking-[0.12em] text-muted">
-          Recent runs
-        </p>
-        {jobs === null ? (
-          <p className="text-meta text-amber-700 dark:text-amber-400">
-            The list of research runs could not be read. This is a failed request, not an absence
-            of runs — there may well be research on this subject that this panel cannot see.
-          </p>
-        ) : jobs.length === 0 ? (
-          <p className="text-meta text-muted">
-            No research has been run. Nothing in this application has ever reached a search
-            provider: there is no provider key, so every mode but <code>none</code> refuses.
-          </p>
-        ) : (
-          // Newest first, as the API returns them. A chronology, and the only ordering over
-          // these rows that carries no claim about their quality.
-          <ul className="min-w-0 space-y-1">
-            {jobs.map((job) => (
-              <li key={job.job_id} className="min-w-0">
-                <a
-                  className="text-meta underline underline-offset-2 wrap-anywhere"
-                  href={`/studio?draft=${draftId}&research=${job.job_id}`}
-                >
-                  {job.question}
-                </a>{" "}
-                <span className="text-caption text-muted">
-                  {job.mode} · {job.state} · {stamp(job.researched_at)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
     </>
   );
 }

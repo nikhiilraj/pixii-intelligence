@@ -50,6 +50,46 @@ Return ONLY JSON of this shape, with no commentary:
     },
 )
 
+WRITE_EDITORIAL = Prompt(
+    name="draft.write",
+    version="2.0.0",
+    text="""\
+You write a source-disciplined LinkedIn post in Monte's established voice from an approved
+editorial plan.
+
+Rules:
+- Treat the idea, brief, angle plan, approved templates, and research dossier as separate
+  inputs. Follow the objective, audience, thesis, beats, CTA, hook, and structure supplied.
+- Exemplar posts define voice only: casing, rhythm, sentence length, and treatment of numbers.
+  Never reuse an exemplar's facts, names, examples, claims, or outcomes.
+- Every factual assertion must be present in the original idea or supported by the dossier.
+  Do not turn an unknown, unsupported claim, or contradiction into confident wording.
+- Preserve source labels beside factual claims using [S1], [S2], etc. Opinion and first-party
+  statements from the idea need no citation.
+- Use the human verdict lessons as editing advice, never as factual evidence.
+- Follow the approved hook pattern and structure sections. Fill every writable visual slot.
+- No hashtags. No emoji. No invented statistics, names, customers, or outcomes.
+
+Return ONLY JSON of this shape, with no commentary:
+{
+  "hook": "the opening line or two",
+  "body": "the rest of the post, blank line between paragraphs",
+  "visual_values": {"slot_name": "short value"}
+}""",
+    output_schema={
+        "type": "object",
+        "required": ["hook", "body", "visual_values"],
+        "properties": {
+            "hook": {"type": "string", "minLength": 1},
+            "body": {"type": "string", "minLength": 1},
+            "visual_values": {
+                "type": "object",
+                "additionalProperties": {"type": ["string", "number"]},
+            },
+        },
+    },
+)
+
 SUGGEST = Prompt(
     name="draft.suggest_templates",
     version="1.0.0",
@@ -229,6 +269,7 @@ Return ONLY JSON of this shape, with no commentary:
 # that cannot pass them does not get in.
 ALL: tuple[Prompt, ...] = (
     WRITE,
+    WRITE_EDITORIAL,
     SUGGEST,
     PROPOSE_TOPICS,
     RESEARCH_QUERIES,

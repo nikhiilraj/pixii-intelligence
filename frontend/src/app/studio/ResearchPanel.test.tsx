@@ -506,7 +506,7 @@ describe("order", () => {
   });
 });
 
-// --- the three states with no dossier ------------------------------------------------------------
+// --- persisted states with no dossier ------------------------------------------------------------
 
 describe("with no dossier", () => {
   it("says no run is linked rather than that none exists", () => {
@@ -515,7 +515,7 @@ describe("with no dossier", () => {
     );
 
     expect(screen.getByText(/No research run is linked to this draft/)).toBeInTheDocument();
-    expect(screen.getByText(/No research has been run/)).toBeInTheDocument();
+    expect(screen.getByText(/expected when the brief selected/)).toBeInTheDocument();
   });
 
   it("reports a failed read as a failed read, not as an absence of research", () => {
@@ -527,11 +527,11 @@ describe("with no dossier", () => {
     );
 
     expect(screen.getByRole("alert")).toHaveTextContent("no research job 9");
-    expect(screen.getByText(/could not be read/)).toBeInTheDocument();
-    expect(screen.queryByText(/No research has been run/)).not.toBeInTheDocument();
+    expect(screen.getByText(/could not be opened/)).toBeInTheDocument();
+    expect(screen.queryByText(/expected when the brief selected/)).not.toBeInTheDocument();
   });
 
-  it("links a listed run back to the draft it was opened from", () => {
+  it("does not offer unrelated runs as draft lineage", () => {
     render(
       <ResearchPanel
         draftId={7}
@@ -552,10 +552,8 @@ describe("with no dossier", () => {
       />,
     );
 
-    expect(screen.getByRole("link", { name: "What did the Act change?" })).toHaveAttribute(
-      "href",
-      "/studio?draft=7&research=4",
-    );
+    expect(screen.queryByRole("link", { name: "What did the Act change?" })).not.toBeInTheDocument();
+    expect(screen.getByText(/never selected from the URL/)).toBeInTheDocument();
   });
 });
 

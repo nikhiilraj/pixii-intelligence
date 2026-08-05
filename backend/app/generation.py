@@ -1,14 +1,19 @@
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass
+from difflib import SequenceMatcher
+from typing import Any
 
 from sqlmodel import Session, col, select
 
-from app import prompts
+from app import gates, prompts
 from app.assets import resolve_asset_values
 from app.config import settings
 from app.llm import LLM
 from app.models.draft import Draft
 from app.models.post import Post
 from app.models.template import Template, TemplateKind
+from app.output_schema import validate as validate_output
+from app.prompts.tracing import new_correlation_id, traced_call
 from app.rendering import HtmlRenderer, ImageRenderer, render_visual
 from app.templates import usable_templates
 
@@ -108,6 +113,7 @@ def render_values(draft: Draft) -> dict[str, str]:
 # `prompts.get` takes the version because there is no "latest" to take instead; see its
 # docstring. Bumping either of these is a deliberate edit to one line, which is the point.
 _WRITE = prompts.get("draft.write", "1.0.0")
+_EDITORIAL_WRITE = prompts.get("draft.write", "2.0.0")
 _SUGGEST = prompts.get("draft.suggest_templates", "1.0.0")
 
 
@@ -141,7 +147,14 @@ def _by_name(templates: list[Template], name: str | None) -> Template:
     return templates[0]
 
 
-def suggest_templates(session: Session, llm: LLM, idea: str) -> Suggestion:
+def suggest_templates(
+    session: Session,
+    llm: LLM,
+    idea: str,
+    *,
+    correlation_id: str | None = None,
+    enforce_schema: bool = False,
+) -> Suggestion:
     """Propose a hook, structure and visual for an idea. Every choice is overridable."""
     hooks = _approved(session, TemplateKind.HOOK)
     structures = _approved(session, TemplateKind.STRUCTURE)
@@ -155,11 +168,19 @@ def suggest_templates(session: Session, llm: LLM, idea: str) -> Suggestion:
 
         return "\n".join(f"- {t.name}: {gist(t)}" for t in templates)
 
-    chosen = llm.complete_json(
-        _SUGGEST.text,
+    chosen = traced_call(
+        session,
+        llm,
+        _SUGGEST,
         f"Idea: {idea}\n\nHooks:\n{describe(hooks)}\n\n"
         f"Structures:\n{describe(structures)}\n\nVisuals:\n{describe(visuals)}",
+        correlation_id=correlation_id or new_correlation_id(),
     )
+    # The legacy generation helpers keep their tolerant fallback for historical API/tests.
+    # The Studio workflow opts into strict output below, where an incomplete selection is a
+    # recoverable planning failure rather than a silently different template choice.
+    if enforce_schema:
+        validate_output(chosen, _SUGGEST.output_schema)
     return Suggestion(
         hook=_by_name(hooks, chosen.get("hook")),
         structure=_by_name(structures, chosen.get("structure")),
@@ -168,9 +189,7 @@ def suggest_templates(session: Session, llm: LLM, idea: str) -> Suggestion:
     )
 
 
-def variant_combinations(
-    session: Session, count: int
-) -> list[tuple[Template, Template, Template]]:
+def variant_combinations(session: Session, count: int) -> list[tuple[Template, Template, Template]]:
     """Up to `count` distinct approved (hook, structure, visual) combinations to write one idea
     through — in the order they are produced, which is the only order this slice may have.
 
@@ -418,21 +437,30 @@ def generate_draft(
     fall back to the slot's `default_asset_id`, which is what lets an unattended run — which
     passes none — still render a visual carrying images.
     """
+    correlation = new_correlation_id()
     hook = _resolve(session, TemplateKind.HOOK, hook_id)
     structure = _resolve(session, TemplateKind.STRUCTURE, structure_id)
     visual = _resolve(session, TemplateKind.VISUAL, visual_id)
 
     if hook is None or structure is None or visual is None:
-        suggested = suggest_templates(session, llm, idea)
+        suggested = suggest_templates(session, llm, idea, correlation_id=correlation)
         hook = hook or suggested.hook
         structure = structure or suggested.structure
         visual = visual or suggested.visual
 
-    written = llm.complete_json(
-        _WRITE.text,
+    written = traced_call(
+        session,
+        llm,
+        _WRITE,
         _write_prompt(
             idea, hook, structure, visual, _exemplars(session, hook), verdict_lessons(session)
         ),
+        correlation_id=correlation,
+        input_artifact_ids={
+            "hook": f"{hook.family_id}/{hook.version}",
+            "structure": f"{structure.family_id}/{structure.version}",
+            "visual": f"{visual.family_id}/{visual.version}",
+        },
     )
 
     draft = Draft(
@@ -448,9 +476,329 @@ def generate_draft(
         body_text=str(written.get("body") or "").strip(),
         visual_values=_written_values(written, visual),
         asset_values=chosen_assets(visual, asset_values or {}),
+        correlation_id=correlation,
+        write_prompt_name=_WRITE.name,
+        write_prompt_version=_WRITE.version,
     )
     _draw_visual(session, draft, visual, renderer)
 
+    session.add(draft)
+    session.flush()
+    return draft
+
+
+def _recent_posts(session: Session, limit: int = 20) -> list[str]:
+    statement = (
+        select(Post.content)
+        .where(Post.account_username == settings.voice_account)
+        .order_by(col(Post.published_at).desc(), col(Post.id).desc())
+        .limit(limit)
+    )
+    return [text for text in session.exec(statement).all() if text.strip()]
+
+
+def _editorial_context(
+    *,
+    brief,
+    plan,
+    planned: list,
+    dossier: Any | None,
+    hook: Template,
+    structure: Template,
+    visual: Template,
+    exemplars: list[Post],
+    lessons: list[str],
+) -> str:
+    """Everything the source-disciplined write prompt is allowed to use."""
+    sections = "\n".join(
+        f"{index}. {section.get('name', '')}: {section.get('guidance', '')}"
+        for index, section in enumerate(structure.body.get("sections") or [], 1)
+    )
+    parts = [
+        f"Original idea:\n{brief.idea}",
+        f"\nEditorial objective: {brief.objective}",
+        f"Audience: {brief.audience}",
+        f"Desired action: {brief.desired_action}",
+        f"\nThesis: {plan.thesis}",
+        f"Tension: {plan.tension}",
+        f"Audience stake: {plan.audience_stake}",
+        f"CTA: {plan.cta}",
+        "Planned beats:\n" + "\n".join(f"- {beat}" for beat in plan.beats),
+        "Planned claims:\n" + "\n".join(f"- {claim.text}" for claim in planned),
+        f"\nApproved hook template: {hook.name} v{hook.version}\n{hook.body.get('pattern', '')}",
+        f"Approved structure template: {structure.name} v{structure.version}\n{sections}",
+        f"Approved visual template: {visual.name} v{visual.version}",
+        f"Writable visual slots: {', '.join(writable_slots(visual)) or '(none)'}",
+    ]
+    if dossier is None:
+        parts.append("\nResearch depth: none. Use no factual content beyond the original idea.")
+    else:
+        source_labels = {source.id: f"S{index}" for index, source in enumerate(dossier.sources, 1)}
+        source_lines = [
+            f"[{source_labels[source.id]}] {source.title or source.url} — {source.url}"
+            for source in dossier.sources
+        ]
+        citation_by_id = {citation.id: citation for citation in dossier.citations}
+        claim_lines = []
+        for claim in dossier.claims:
+            labels = []
+            for citation_id in claim.supporting_citation_ids:
+                citation = citation_by_id.get(citation_id)
+                if citation and citation.source_id in source_labels:
+                    labels.append(source_labels[citation.source_id])
+            claim_lines.append(
+                f"- ({claim.status}) {claim.text}"
+                + (f" [{', '.join(labels)}]" if labels else " [no supporting citation]")
+            )
+        parts.extend(
+            [
+                f"\nResearch depth: {dossier.mode}. Floor: {dossier.recommended_mode}.",
+                "Sources:\n" + ("\n".join(source_lines) or "(none fetched)"),
+                "Dossier claims:\n" + ("\n".join(claim_lines) or "(none extracted)"),
+                "Unknowns:\n" + "\n".join(f"- {item.text}" for item in dossier.unknowns),
+            ]
+        )
+    parts.extend(lesson_lines(lessons))
+    if exemplars:
+        parts.append("\nMonte voice exemplars — imitate voice only, never factual content:")
+        parts.extend(f"---\n{post.content.strip()[:1500]}" for post in exemplars)
+    return "\n".join(parts)
+
+
+def _review_dict(report: Any) -> dict[str, Any]:
+    return {
+        "rubric_version": report.rubric_version,
+        "prompt_name": report.prompt_name,
+        "prompt_version": report.prompt_version,
+        "readiness_points": report.readiness_points,
+        "decision": report.readiness.value,
+        "summary": report.summary,
+        "deductions": [asdict(item) for item in report.deductions],
+    }
+
+
+def _findings_dict(findings: list[gates.Finding] | tuple[gates.Finding, ...]) -> list[dict]:
+    return [asdict(finding) for finding in findings]
+
+
+def _research_findings(planned: list, dossier: Any | None) -> tuple[list[str], list[str]]:
+    from app.models.research import DISPUTED, REFUTED, SUPPORTED, UNSUPPORTED
+
+    if dossier is None:
+        return [], []
+    supported = [claim.text for claim in dossier.claims if claim.status == SUPPORTED]
+    unsupported = [claim.text for claim in dossier.claims if claim.status in (UNSUPPORTED, REFUTED)]
+    contradicted = [claim.text for claim in dossier.claims if claim.status in (DISPUTED, REFUTED)]
+    # Planned claims are the contract research was asked to settle. If the dossier never
+    # produced a close supported claim, writing it as fact is an evidence failure.
+    for item in planned:
+        backed = any(
+            SequenceMatcher(None, item.text.lower(), text.lower()).ratio() >= 0.62
+            for text in supported
+        )
+        if not backed:
+            unsupported.append(item.text)
+    return list(dict.fromkeys(unsupported)), list(dict.fromkeys(contradicted))
+
+
+def generate_reviewed_draft(
+    session: Session,
+    llm: LLM,
+    search: Any,
+    renderer: HtmlRenderer | ImageRenderer,
+    *,
+    idea: str,
+    hook_id: int | None = None,
+    structure_id: int | None = None,
+    visual_id: int | None = None,
+    asset_values: dict[str, str] | None = None,
+    requested_mode: str | None = None,
+    mode: str = "directed",
+    research_fetcher: Any | None = None,
+) -> Draft:
+    """Run the complete Studio pipeline and persist every stage on one draft."""
+    from app import editorial, research, revision, rubric
+
+    correlation = new_correlation_id()
+    hook = _resolve(session, TemplateKind.HOOK, hook_id)
+    structure = _resolve(session, TemplateKind.STRUCTURE, structure_id)
+    visual = _resolve(session, TemplateKind.VISUAL, visual_id)
+    if hook is None or structure is None or visual is None:
+        suggestion = suggest_templates(
+            session, llm, idea, correlation_id=correlation, enforce_schema=True
+        )
+        hook, structure, visual = (
+            hook or suggestion.hook,
+            structure or suggestion.structure,
+            visual or suggestion.visual,
+        )
+
+    draft = Draft(
+        idea=idea,
+        mode=mode,
+        hook_family=hook.family_id,
+        hook_version=hook.version,
+        structure_family=structure.family_id,
+        structure_version=structure.version,
+        visual_family=visual.family_id,
+        visual_version=visual.version,
+        asset_values=chosen_assets(visual, asset_values or {}),
+        correlation_id=correlation,
+        generation_stage="planning",
+        write_prompt_name=_EDITORIAL_WRITE.name,
+        write_prompt_version=_EDITORIAL_WRITE.version,
+    )
+    session.add(draft)
+    session.flush()
+
+    try:
+        brief = editorial.build_brief(
+            session, llm, idea=idea, requested_mode=requested_mode, correlation_id=correlation
+        )
+        plan = editorial.plan_angle(
+            session, llm, brief, recent_topics=_recent_posts(session), correlation_id=correlation
+        )
+        planned = editorial.planned_claims(session, plan)
+        draft.editorial_brief_id = brief.id
+        draft.angle_plan_id = plan.id
+    except Exception as exc:  # a stored failure is recoverable from Studio
+        draft.generation_stage = "failed"
+        draft.generation_error = f"planning: {type(exc).__name__}: {exc}"
+        session.add(draft)
+        session.flush()
+        return draft
+
+    found: research.ResearchDossier | None = None
+    if brief.research_mode != research.NONE:
+        draft.generation_stage = "researching"
+        session.flush()
+        try:
+            research_args: dict[str, Any] = {
+                "question": editorial.research_question(idea, [item.text for item in planned]),
+                "mode": brief.research_mode,
+                "correlation_id": correlation,
+            }
+            if research_fetcher is not None:
+                research_args["fetcher"] = research_fetcher
+            found = research.run_research(session, llm, search, **research_args)
+            draft.research_job_id = found.job_id
+        except Exception as exc:
+            job = session.exec(
+                select(research.ResearchJob)
+                .where(research.ResearchJob.correlation_id == correlation)
+                .order_by(col(research.ResearchJob.id).desc())
+            ).first()
+            draft.research_job_id = job.id if job else None
+            draft.generation_stage = "failed"
+            draft.generation_error = f"researching: {type(exc).__name__}: {exc}"
+            session.add(draft)
+            session.flush()
+            return draft
+
+    draft.generation_stage = "drafting"
+    message = _editorial_context(
+        brief=brief,
+        plan=plan,
+        planned=planned,
+        dossier=found,
+        hook=hook,
+        structure=structure,
+        visual=visual,
+        exemplars=_exemplars(session, hook),
+        lessons=verdict_lessons(session),
+    )
+    try:
+        written: Mapping[str, Any] = traced_call(
+            session,
+            llm,
+            _EDITORIAL_WRITE,
+            message,
+            correlation_id=correlation,
+            input_artifact_ids={
+                "draft": draft.id,
+                "editorial_brief": brief.id,
+                "angle_plan": plan.id,
+                "research_job": found.job_id if found else None,
+                "hook": f"{hook.family_id}/{hook.version}",
+                "structure": f"{structure.family_id}/{structure.version}",
+                "visual": f"{visual.family_id}/{visual.version}",
+            },
+        )
+        validate_output(written, _EDITORIAL_WRITE.output_schema)
+    except Exception as exc:
+        draft.generation_stage = "failed"
+        draft.generation_error = f"drafting: {type(exc).__name__}: {exc}"
+        session.add(draft)
+        session.flush()
+        return draft
+
+    recent = _recent_posts(session)
+    unsupported, contradicted = _research_findings(planned, found)
+    findings = gates.check(
+        written,
+        template=visual,
+        recent_posts=recent,
+        asset_values=draft.asset_values,
+        unsupported_claims=unsupported,
+        contradicted_claims=contradicted,
+    )
+    evidence_failure = any(
+        finding.gate in {"uncited_claim", "contradicted_claim"} for finding in findings
+    )
+    if findings and not evidence_failure:
+        try:
+            revised = revision.revise(
+                written,
+                template=visual,
+                recent_posts=recent,
+                idea=idea,
+                llm=llm,
+                session=session,
+                correlation_id=correlation,
+                asset_values=draft.asset_values,
+                unsupported_claims=unsupported,
+                contradicted_claims=contradicted,
+            )
+            written = revised.candidate
+            findings = list(revised.findings)
+            draft.revision_rounds = revised.rounds
+        except Exception as exc:
+            draft.generation_error = f"revision: {type(exc).__name__}: {exc}"
+
+    draft.hook_text = str(written.get("hook") or "").strip()
+    draft.body_text = str(written.get("body") or "").strip()
+    draft.visual_values = _written_values(dict(written), visual)
+    draft.gate_results = _findings_dict(findings)
+    draft.generation_stage = "evaluating"
+
+    if findings:
+        draft.generation_stage = "failed_review"
+        draft.generation_error = draft.generation_error or "deterministic quality gates failed"
+    else:
+        try:
+            report = rubric.evaluate(
+                written,
+                template=visual,
+                recent_posts=recent,
+                idea=idea,
+                llm=llm,
+                session=session,
+                correlation_id=correlation,
+                asset_values=draft.asset_values,
+            )
+            draft.readiness_result = _review_dict(report)
+            draft.generation_stage = (
+                "ready"
+                if report.readiness is rubric.Readiness.READY_FOR_EDITORIAL_REVIEW
+                else "failed_review"
+            )
+            if draft.generation_stage == "failed_review":
+                draft.generation_error = "editorial-readiness evaluation requires revision"
+        except Exception as exc:
+            draft.generation_stage = "failed_review"
+            draft.generation_error = f"evaluating: {type(exc).__name__}: {exc}"
+
+    _draw_visual(session, draft, visual, renderer)
     session.add(draft)
     session.flush()
     return draft
@@ -471,15 +819,28 @@ def regenerate_text(session: Session, llm: LLM, draft: Draft) -> Draft:
     structure = generated_from(session, draft.structure_family, draft.structure_version)
     visual = generated_from(session, draft.visual_family, draft.visual_version)
 
-    written = llm.complete_json(
-        _WRITE.text,
+    correlation = draft.correlation_id or new_correlation_id()
+    written = traced_call(
+        session,
+        llm,
+        _WRITE,
         # Lessons are fetched here too, not only in `generate_draft`. Passing them at one
         # call site would make every rewrite silently drop them — the draft would improve
         # once and un-improve the moment anyone pressed regenerate.
         _write_prompt(
             draft.idea, hook, structure, visual, _exemplars(session, hook), verdict_lessons(session)
         ),
+        correlation_id=correlation,
+        input_artifact_ids={
+            "draft": draft.id,
+            "hook": f"{hook.family_id}/{hook.version}",
+            "structure": f"{structure.family_id}/{structure.version}",
+            "visual": f"{visual.family_id}/{visual.version}",
+        },
     )
+    draft.correlation_id = correlation
+    draft.write_prompt_name = _WRITE.name
+    draft.write_prompt_version = _WRITE.version
     draft.hook_text = str(written.get("hook") or "").strip()
     draft.body_text = str(written.get("body") or "").strip()
     draft.visual_values = _written_values(written, visual)
