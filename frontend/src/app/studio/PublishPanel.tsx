@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { stamp } from "@/lib/stamp";
 import {
   Dialog,
   DialogContent,
@@ -149,17 +150,16 @@ export function utcLabel(when: Date): string {
   return `${when.toISOString().slice(0, 16).replace("T", " ")} UTC`;
 }
 
-/** A naive ISO timestamp from the API, shown as the UTC instant it is.
- *
- *  **Never `new Date(value)`.** Every datetime column in this database is `timestamp without
- *  time zone`, so these arrive with no offset — and an offsetless ISO string with a time in it
- *  is parsed by JavaScript as *local*, which would silently shift every timestamp on this
- *  panel by the reader's own offset and label the result UTC. Sliced as text instead, which
- *  cannot be wrong in a way nobody notices. */
-export function stamp(value: string | null): string {
-  if (!value) return "—";
-  return `${value.slice(0, 16).replace("T", " ")} UTC`;
-}
+/* Moved to `lib/stamp.ts` and re-exported here, so every existing importer is untouched.
+   This file is `"use client"`, and a *server* component that imports across that boundary gets
+   a client reference rather than the function — calling it throws at render. `/operations`
+   does exactly that from three panels, which is why it served a skeleton and nothing else.
+   The full account, and why no test could have caught it, is on the new module.
+
+   **A server component must import from `@/lib/stamp`, not from here.** This re-export is for
+   the client callers that already had it; routing a server import through this module still
+   crosses the boundary and still throws. */
+export { stamp } from "@/lib/stamp";
 
 /** One refusal, in the words this screen owes it.
  *

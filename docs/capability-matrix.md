@@ -13,8 +13,9 @@ with, not a gap someone forgot.
 when generation was one synchronous request and `POST /drafts` was still what `/variants`
 called. Three things changed underneath it and are corrected below: generation returns at
 `planning` and is watched by polling rather than waited on, four of the five paths that write a
-draft now run the same reviewed workflow, and `GET /daily-runs` exists. Findings 1–4 stay as
-they were recorded; findings 5–9 are re-checked against the tree rather than carried forward.
+draft now run the same reviewed workflow, and `GET /daily-runs` exists and now has a screen.
+Findings 1–4 stay as they were recorded; findings 5–9 are re-checked against the tree rather
+than carried forward.
 
 **One thing the call-site audit gets wrong on its own, worth knowing before reading the table.**
 Grepping for `getJson`/`postJson`/`postForm`/`postBlob` misses every route reached by the
@@ -123,10 +124,10 @@ would report full coverage while the two things that run without anyone asking s
 
 | Capability | Trigger | Entry point | Status & result shown | Recovery | Tests | Justification |
 |---|---|---|---|---|---|---|
-| Periodic metrics sync | `scheduler.run_metrics_sync`, every `METRICS_SYNC_HOURS`, gated on `ENABLE_SCHEDULER` | **None** — log line only | Nothing on screen | Run `/operations` → Sync metrics by hand | `test_metrics.py` (the function), none for the schedule | **Finding, not a decision.** See below. |
-| Publication reconciliation | `reconcile.reconcile_publications`, inside the same tick | **None** — log line only | Nothing on screen; a reconciled command's row does change in `/studio` | Reload the draft | `test_reconcile.py` | Same finding. |
-| Daily editorial slot | `scheduler.tick_daily_slot` → `daily.run_daily_slot`, gated on `ENABLE_AUTONOMOUS` | **None** — its drafts appear in the Inbox | Nothing on any screen says a run happened, or failed. `GET /daily-runs` reads the `DailyRun` rows and no screen calls it | `/operations` → Run generation now | `test_daily.py` | Same finding, now half-closed: the route exists, the screen does not. Task #17. |
-| **Read the daily run log** | `GET /daily-runs` | **API-only** | Newest first; NULL counts pass through as null, because `0` would say a run finished and produced nothing | — | `test_daily.py` | **Finding, not a decision.** Built so that finding 7 stops being unanswerable, and left unconnected because `/operations` was already the largest new screen in that pass. Returns `[]` against the live database — no daily run has ever executed here. |
+| Periodic metrics sync | `scheduler.run_metrics_sync`, every `METRICS_SYNC_HOURS`, gated on `ENABLE_SCHEDULER` | **None** — log line only | Nothing on screen. It writes no `DailyRun` row, so `/operations` → Daily editorial runs does **not** cover it, and that panel says so | Run `/operations` → Sync metrics by hand | `test_metrics.py` (the function), none for the schedule | **Finding, not a decision, and still open.** See below. |
+| Publication reconciliation | `reconcile.reconcile_publications`, inside the same tick | **None** — log line only | Nothing on screen; a reconciled command's row does change in `/studio`. Writes no `DailyRun` row either, so the daily run panel is silent about it by construction | Reload the draft | `test_reconcile.py` | Same finding, same blind spot. |
+| Daily editorial slot | `scheduler.tick_daily_slot` → `daily.run_daily_slot`, gated on `ENABLE_AUTONOMOUS` | `/operations` → Daily editorial runs (read-only) | Per run: the day it claimed, `complete`/`failed`/`claimed-unfinished`, the three counts, the recorded error and the per-draft detail, and whether the Teams card was delivered | `/operations` → Run generation now | `test_daily.py`, `DailyRunHistory.test.tsx` | **Closed.** Task #17 built the screen against the route Stage E added. A failed run and a quiet one no longer render alike. |
+| **Read the daily run log** | `GET /daily-runs` | `/operations` → Daily editorial runs | Newest first; NULL counts pass through as null and print `—`, `0` prints `0`, because `0` would otherwise say a run finished and produced nothing | — | `test_daily.py`, `DailyRunHistory.test.tsx` | **Connected.** Returns `[]` against the live database — no daily run has ever executed here — and the panel renders that as "no daily run has been recorded", which is a third state distinct from a failed read. |
 | Teams notification | `notify.notify`, called by `run_autonomous` and `daily.notify_run` | **None** | Nothing; the webhook is the only output | — | `test_daily.py` | Configuration, not an operation. Nothing to press. |
 | Publishing kill switch | `PUBLISHING_ENABLED` | `/studio` states it; **not settable from the UI** | The panel says publishing is off up front | — | `test_publishing.py` | **Deliberate.** ADR 0002: turning publishing on is a decision made in configuration, by a person, out of band. A UI toggle for it is the thing the ADR exists to prevent. |
 
@@ -201,9 +202,23 @@ because a matrix whose only purpose is to make itself look complete is worth not
    `/operations` is where it belongs — that page already holds the work that is not writing —
    and until it exists this remains invisible to anyone not holding a terminal. Task #17.
 
-   **Still open, and re-checked rather than carried forward.** No `page.tsx` calls
-   `/daily-runs`; `GET /daily-runs` returns `[]` against the live database, so nobody would
-   currently see anything on that screen either.
+   **Closed for one of the three, and open for two — the split is the point.** Task #17 built
+   `/operations` → Daily editorial runs (`DailyRunHistory.tsx`) on the route above. A run that
+   failed and a run that quietly produced nothing now render differently, and a count nobody
+   took prints `—` while a measured zero prints `0`.
+
+   What that screen **cannot** report is the other two thirds of this finding. `DailyRun` rows
+   are written by `daily.run_daily_slot` and by nothing else: `scheduler.run_metrics_sync` and
+   `reconcile.reconcile_publications` update posts and publications and log a line, and record
+   no run of their own. So the metrics sync and the reconciliation pass appear nowhere on that
+   list, and their absence from it is not evidence either way about whether they ran. The panel
+   states this in its own lede rather than letting a full-looking list imply coverage it does
+   not have. Closing it needs a row per unattended pass — a `SchedulerRun` or a widened
+   `DailyRun.slot` — which is a schema decision and not a screen.
+
+   Also unchanged: `GET /daily-runs` returns `[]` against the live database, because no daily
+   run has ever executed here. The panel renders that as "no daily run has been recorded",
+   which is deliberately a third state, distinct from both a populated list and a failed read.
 8. **`POST /drafts` is reachable and unreviewed.** Not a UI gap — a deliberate omission,
    recorded here so that nobody "connects" it later on the grounds that it appears in this
    table with no entry point.

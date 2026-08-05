@@ -55,6 +55,10 @@ function route(handlers: Record<string, () => Response>) {
 const OK = {
   "/health": () => jsonResponse(200, HEALTH),
   "/research": () => jsonResponse(200, []),
+  // Answered even where a test is about something else. Left out, this read falls through to
+  // the 404 above and every one of these tests would quietly render a failed-read notice —
+  // passing, while asserting nothing about a page that is reporting a broken read.
+  "/daily-runs": () => jsonResponse(200, []),
 };
 
 async function open(params: Record<string, string> = {}) {
@@ -110,6 +114,49 @@ describe("the screen", () => {
   });
 });
 
+describe("the daily run log", () => {
+  it("is read on load, so the page can say whether unattended work ran", async () => {
+    route(OK);
+    await open();
+
+    const requested = (globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.map(
+      (call) => String(call[0]),
+    );
+    expect(requested.some((url) => url.includes("/daily-runs"))).toBe(true);
+    // Reading the log must never be a way to start a run. Every request this page makes on
+    // load is a GET; the one control that generates is a click behind a confirmation.
+    const methods = (globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.map(
+      (call) => (call[1] as RequestInit | undefined)?.method ?? "GET",
+    );
+    expect(new Set(methods)).toEqual(new Set(["GET"]));
+  });
+
+  it("keeps its own failure, rather than taking the research list with it", async () => {
+    route({
+      ...OK,
+      "/daily-runs": () => jsonResponse(500, { detail: "daily_run does not exist" }),
+      "/research": () =>
+        jsonResponse(200, [
+          {
+            job_id: 4,
+            question: "how fast is adoption?",
+            mode: "light",
+            recommended_mode: "light",
+            state: "completed",
+            researched_at: "2026-08-04T10:05:00",
+          },
+        ]),
+    });
+    await open();
+
+    // Four separate reads, four separate results. A single try/catch around the `Promise.all`
+    // would have made one broken table blank the whole screen.
+    expect(screen.getByText("daily_run does not exist")).toBeInTheDocument();
+    expect(screen.getByText("how fast is adoption?")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run generation…" })).toBeEnabled();
+  });
+});
+
 describe("a /health read that failed", () => {
   it("reports the failure and leaves every control enabled", async () => {
     route({ ...OK, "/health": () => jsonResponse(500, { detail: "the database went away" }) });
@@ -126,6 +173,7 @@ describe("a /health read that failed", () => {
   it("does not take the research list down with it", async () => {
     route({
       "/health": () => jsonResponse(500, { detail: "the database went away" }),
+      "/daily-runs": () => jsonResponse(200, []),
       "/research": () =>
         jsonResponse(200, [
           {
@@ -172,6 +220,7 @@ describe("the ?job= parameter", () => {
           },
         }),
       "/research": () => jsonResponse(200, []),
+      "/daily-runs": () => jsonResponse(200, []),
     });
     await open({ job: "4" });
 

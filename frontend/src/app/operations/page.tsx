@@ -1,8 +1,15 @@
 import { ApiFailureNotice } from "@/components/api-failure";
 import { Card } from "@/components/ui/card";
-import { getJson, type Dossier, type Health, type ResearchJobSummary } from "@/lib/api";
+import {
+  getJson,
+  type DailyRunSummary,
+  type Dossier,
+  type Health,
+  type ResearchJobSummary,
+} from "@/lib/api";
 
 import AutonomousRunPanel from "./AutonomousRunPanel";
+import { DailyRunHistory } from "./DailyRunHistory";
 import LinkedInImportPanel from "./LinkedInImportPanel";
 import { ResearchHistory } from "./ResearchHistory";
 import { CorpusIngestPanel, MetricsSyncPanel } from "./ZernioPanels";
@@ -14,7 +21,14 @@ export const dynamic = "force-dynamic";
  *  Everything here was reachable only by `curl` before — the README's own end-to-end walk told
  *  you to run `curl -X POST http://localhost:8000/metrics/sync` in step 6, in the middle of an
  *  otherwise-clickable circuit. Four operations that cost money or reach outside, plus the
- *  research runs those operations and Studio produce.
+ *  research runs those operations and Studio produce, plus the record of what the scheduler
+ *  did while nobody was here.
+ *
+ *  **The unattended work reports itself here too, not only the controls.** Until
+ *  `DailyRunHistory` was added, a daily run that failed every morning for a week was
+ *  indistinguishable from a week in which nobody wrote anything: the rows existed, no screen
+ *  read them. It is on this page and not the Inbox for the reason below — a failed scheduled
+ *  job is not an item waiting on a person, it is a fact about the machine.
  *
  *  **A screen, not a control panel.** Nothing here schedules anything, and nothing here can
  *  reach a publish command: `POST /drafts/autonomous-run` produces drafts and cannot push,
@@ -36,14 +50,16 @@ export default async function OperationsPage({
   const jobId = /^\d+$/.test(typed) ? Number(typed) : null;
 
   // `/health` for the credential flags and the autonomous ceiling; `/research` for the run
-  // list. In one `Promise.all` because neither depends on the other and both are on the page's
-  // critical path. A failed `/health` is carried as `null` rather than as "nothing is
-  // configured" — see `ConfirmedAction`, where that distinction decides whether a control is
-  // disabled.
-  const [health, jobs, dossier] = await Promise.all([
+  // list; `/daily-runs` for what the scheduler did without being asked. In one `Promise.all`
+  // because none depends on the others and all are on the page's critical path. A failed
+  // `/health` is carried as `null` rather than as "nothing is configured" — see
+  // `ConfirmedAction`, where that distinction decides whether a control is disabled. Each read
+  // keeps its own `ApiResult`, so one of them failing takes down one section and not the page.
+  const [health, jobs, dossier, dailyRuns] = await Promise.all([
     getJson<Health>("/health"),
     getJson<ResearchJobSummary[]>("/research"),
     jobId === null ? Promise.resolve(null) : getJson<Dossier>(`/research/${jobId}`),
+    getJson<DailyRunSummary[]>("/daily-runs"),
   ]);
 
   const credentials = health.ok ? health.data.credentials : null;
@@ -108,6 +124,12 @@ export default async function OperationsPage({
           </div>
           <AutonomousRunPanel credentials={credentials} ceiling={ceiling} />
         </section>
+
+        {/* Directly under the control that runs the same batch by hand, because the two answer
+            one question between them: "run it now" and "did it already run on its own". Split
+            across two screens, a person who could not remember whether the morning slot fired
+            would press the button — and pay for a second batch to find out. */}
+        <DailyRunHistory runs={dailyRuns} />
 
         <ResearchHistory jobs={jobs} dossier={dossier} selected={jobId} />
 

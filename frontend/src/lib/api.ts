@@ -669,6 +669,37 @@ export function calls(n: number, unit: string): string {
   return `${n} ${unit}${n === 1 ? "" : "s"}`;
 }
 
+/** One row of `GET /daily-runs` — `DailyRunOut` in backend/app/main.py, one unattended
+ *  editorial run for one local day.
+ *
+ *  **Every count is `number | null` and must stay that way.** `daily.run_daily_slot` writes
+ *  NULL until the run finishes: NULL is "nobody counted", `0` is "it counted and there were
+ *  none". So render with an explicit `=== null` test, exactly as `ResearchSpend` above says —
+ *  `{run.drafts_created || "—"}` prints `—` for a run that finished and produced nothing,
+ *  which turns a measured zero back into an absence and looks entirely correct on screen.
+ *
+ *  `status` is `running`, `complete` or `failed`, and `running` is **ambiguous by design**: a
+ *  run in flight and a process that died after claiming the day are the same row until a later
+ *  tick buries it (`daily.STALE_RUN_HOURS`). Nothing here can tell them apart, so nothing
+ *  rendering it may claim to.
+ *
+ *  `notified_at` NULL is an undelivered Teams card, which the next tick retries — a pending
+ *  state, not a failed run. `detail` is the per-draft messages newline-joined. */
+export type DailyRunSummary = {
+  id: number;
+  run_date: string;
+  slot: string;
+  status: string;
+  started_at: string;
+  finished_at: string | null;
+  drafts_created: number | null;
+  topics_failed: number | null;
+  visuals_failed: number | null;
+  error: string | null;
+  detail: string | null;
+  notified_at: string | null;
+};
+
 /* The result of a request, where failing is not the same as having nothing.
  *
  * The previous helper returned `T | null`, so a network error, a 500, a 404 and a

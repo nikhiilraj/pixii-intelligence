@@ -289,7 +289,7 @@ you, records your answer and your reason, and feeds your words back into the nex
 | **Templates** (`/templates`) | The library. Approve or retire proposals, author new templates, edit existing ones. **This is the main bottleneck** — 50 proposals are waiting. |
 | **Assets** (`/assets`) | Images that templates can use. Upload, tag, delete. |
 | **Scoreboard** (`/scoreboard`) | What each template version has actually done. Mostly empty, honestly so. |
-| **Operations** (`/operations`) | The work that isn't writing: pull the corpus from Zernio, pull engagement back, import a LinkedIn scrape, run a capped unattended batch, and browse every research run. Each operation says what it needs configured, what it will spend and what it will do, before it does it. None of them publishes, schedules or pushes. |
+| **Operations** (`/operations`) | The work that isn't writing: pull the corpus from Zernio, pull engagement back, import a LinkedIn scrape, run a capped unattended batch, and browse every research run. Each operation says what it needs configured, what it will spend and what it will do, before it does it. None of them publishes, schedules or pushes. It also reports back: every daily editorial run the scheduler recorded, newest first, with what it produced and why it stopped if it did. |
 
 ### The four Inbox queues
 
@@ -613,7 +613,7 @@ drafts:      6, every one `ready` and every one `editorial: null`
 research:    0 jobs
 daily runs:  0
 verdicts:    0
-tests:       1196 backend · 470 frontend
+tests:       1196 backend · 471 frontend
 ```
 
 The two zeros in the middle are the ones worth reading. **The reviewed workflow has never
@@ -695,13 +695,25 @@ Written plainly because the alternative is discovering it in production.
 - **`AddExternal`** (the "add a post from elsewhere" form on `/posts`) had no test file at all
   for two versions, which mattered because it writes to the corpus. It has three tests now.
   Three is a floor, not coverage.
-- **Nothing on any screen says that unattended work ran.** The metrics scheduler, the
-  publication reconciliation pass and the daily editorial slot produce log lines and nothing
-  else, so a daily run that has been failing for a week looks like a quiet week. There is a
-  route now — `GET /daily-runs` reads the `DailyRun` rows — and no screen calls it, so this is
-  answerable from a terminal and from nowhere else. Full audit in
+- **Two of the three unattended passes still say nothing on any screen.** The daily editorial
+  slot now reports itself: `/operations` lists every recorded run — the day it claimed, what it
+  produced, and the error if it failed — so a run failing every morning for a week no longer
+  looks like a quiet week. The metrics scheduler and the publication reconciliation pass are
+  still log lines only, and they write no run row, so that list cannot report them and says so
+  on screen. Closing the rest needs a row per pass, which is a schema decision. Full audit in
   [`docs/capability-matrix.md`](docs/capability-matrix.md), which lists every backend
   capability against the screen that reaches it — and the ones no screen reaches.
+- **`/operations` had been serving nothing but its loading skeleton, and 460 green tests said
+  otherwise.** It is a server component, and it imported `stamp` — the UTC timestamp
+  formatter — from `studio/PublishPanel.tsx`, which is `"use client"`. That import does not
+  fail; it succeeds and hands back a client *reference*, and calling it throws
+  `Attempted to call stamp() from the server` while the page is rendering. Every panel below
+  the fold was gone. **No test in this project could ever have caught it**, because jsdom
+  renders server and client components identically and enforces no boundary between them — the
+  suite was green the entire time. It was found by running `pnpm build`, starting the server,
+  curling the page and reading the log, which is the fourth defect in this project's history
+  that only rendering the page found. `stamp` now lives in `lib/stamp.ts`, which has no
+  directive and can be called from either side.
 
 ---
 

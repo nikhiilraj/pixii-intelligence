@@ -4,9 +4,13 @@ import { ApiFailureNotice } from "@/components/api-failure";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import type { ApiResult, Dossier, ResearchJobSummary } from "@/lib/api";
+/* From `lib/`, never from `../studio/PublishPanel` where it used to live: this component is
+   server-rendered, and importing a function out of a `"use client"` module hands back a client
+   reference that throws when called. `DossierPanel` below is fine — a server component may
+   *render* a client component, it just may not call one of its functions. */
+import { stamp } from "@/lib/stamp";
 
 import { DossierPanel } from "../studio/ResearchPanel";
-import { stamp } from "../studio/PublishPanel";
 
 /** Which runs are worth looking at differently. A `failed` run is the one that died, and
  *  `GET /research`'s own docstring says why it carries `state` on every row: collapsing a
