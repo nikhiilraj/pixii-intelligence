@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 from sqlmodel import col, desc, select
 
-from app import research
+from app import research, workflow
 from app.api_research import _out as research_out
 from app.autonomous import AutonomousRunFailed, SpendMeter, run_autonomous
 from app.config import settings
@@ -250,12 +250,21 @@ def _renderer(session: SessionDep, draft: Draft, html_renderer, image_renderer):
 
 @router.get("")
 def list_drafts(session: SessionDep, limit: int = 100) -> list[DraftOut]:
+    workflow.sweep_stalled(session)
     statement = select(Draft).order_by(desc(col(Draft.created_at))).limit(limit)
     return [_out(session, d) for d in session.exec(statement).all()]
 
 
 @router.get("/{draft_id}")
 def get_draft(session: SessionDep, draft_id: int) -> DraftOut:
+    """One draft, with any run that has stopped moving reported as failed before it is read.
+
+    The sweep is here rather than in a scheduled job because this is the route that cares:
+    Studio polls it once a second for the whole of a run, so a dead run is noticed by the
+    only party waiting on it, at the moment they ask, with nothing to deploy or keep alive.
+    See `workflow.sweep_stalled` for why it writes rather than only reporting.
+    """
+    workflow.sweep_stalled(session)
     return _out(session, _load(session, draft_id))
 
 
@@ -328,51 +337,67 @@ def create_draft(
 
 
 @router.post("/workflow", status_code=201)
-def create_workflow_draft(
-    session: SessionDep,
-    llm: LLMDep,
-    search: SearchDep,
-    html_renderer: HtmlRendererDep,
-    image_renderer: ImageRendererDep,
-    payload: IdeaIn,
-) -> DraftOut:
-    """Run the persisted editorial-to-review Studio workflow. Nothing publishes here.
+def create_workflow_draft(session: SessionDep, llm: LLMDep, payload: IdeaIn) -> DraftOut:
+    """Start the persisted editorial-to-review Studio workflow. Nothing publishes here.
 
-    Both renderers, chosen from inside once the visual is settled — `payload.visual_id` is
-    optional, and reading the renderer off it here is what handed every suggested `ai`
-    template to the HTML renderer. See `generation._renderer_for`.
+    **Answers at `planning`, before the run has done anything.** It used to run the whole
+    pipeline inside the request and commit at the end: a minute or more during which the
+    stages were written but only flushed, so no other connection could read one — the browser
+    had a spinner, the database had nothing, and a reload lost the attempt. Studio polls
+    `GET /drafts/{id}` now, and every stage this answers with is a stage some other connection
+    has already committed.
+
+    No renderers and no search adapter are taken here, and that is not an omission: FastAPI
+    closes a generator dependency when the response is sent, which is before the worker has
+    started. `workflow.resources` builds the run its own. The LLM is taken because template
+    resolution happens in this request — see `generation.new_reviewed_draft` for why a draft
+    cannot exist before its lineage does.
+
+    A second press returns the running draft rather than a second run. The claim is a UNIQUE
+    index, so that holds against a double-click and not merely against a slow one.
     """
+    key = workflow.claim_key(
+        idea=payload.idea,
+        hook_id=payload.hook_id,
+        structure_id=payload.structure_id,
+        visual_id=payload.visual_id,
+        asset_values=payload.asset_values,
+        research_mode=payload.research_mode,
+    )
     try:
-        draft = generate_reviewed_draft(
+        draft, started = workflow.claim(
             session,
             llm,
-            search,
-            html_renderer,
-            image_renderer,
+            key=key,
             idea=payload.idea,
             hook_id=payload.hook_id,
             structure_id=payload.structure_id,
             visual_id=payload.visual_id,
             asset_values=payload.asset_values,
-            requested_mode=payload.research_mode,
         )
     except NoUsableTemplates as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    session.commit()
-    session.refresh(draft)
+    if started:
+        # After the commit inside `claim`, never before. A thread started against an
+        # uncommitted row opens its own connection, finds no draft, and returns silently —
+        # leaving a row nothing is working on and a Studio poll that never moves.
+        workflow.start(draft.id or 0, requested_mode=payload.research_mode)
     return _out(session, draft)
 
 
 @router.post("/{draft_id}/retry", status_code=201)
-def retry_draft(
-    session: SessionDep,
-    llm: LLMDep,
-    search: SearchDep,
-    html_renderer: HtmlRendererDep,
-    image_renderer: ImageRendererDep,
-    draft_id: int,
-) -> DraftOut:
-    """Retry a failed workflow as a new attempt, preserving the failed row for audit."""
+def retry_draft(session: SessionDep, llm: LLMDep, draft_id: int) -> DraftOut:
+    """Retry a failed workflow as a new attempt, preserving the failed row for audit.
+
+    `retryable`, not a hand-written pair of stage comparisons: both failures may be retried,
+    an in-flight run may not — retrying one buys a second set of billed calls for a run that
+    is still going — and a stage this version cannot name is not one it can restart.
+
+    The new attempt starts in the background exactly as `POST /drafts/workflow` does, against
+    the source's own recorded versions through `generated_from`. Not the newest version of
+    each family: a retry reproduces the attempt that failed, and resolving forward would
+    quietly retry something else.
+    """
     source = _load(session, draft_id)
     if not retryable(source.generation_stage):
         raise HTTPException(status_code=409, detail="only a failed workflow can be retried")
@@ -383,22 +408,27 @@ def retry_draft(
     if source.editorial_brief_id is not None:
         brief = session.get(EditorialBrief, source.editorial_brief_id)
         requested_mode = brief.requested_mode if brief else None
-    retried = generate_reviewed_draft(
-        session,
-        llm,
-        search,
-        html_renderer,
-        image_renderer,
+    key = workflow.claim_key(
         idea=source.idea,
         hook_id=hook.id,
         structure_id=structure.id,
         visual_id=visual.id,
         asset_values=source.asset_values,
-        requested_mode=requested_mode,
+        research_mode=requested_mode,
+    )
+    retried, started = workflow.claim(
+        session,
+        llm,
+        key=key,
+        idea=source.idea,
+        hook_id=hook.id,
+        structure_id=structure.id,
+        visual_id=visual.id,
+        asset_values=source.asset_values,
         mode=source.mode,
     )
-    session.commit()
-    session.refresh(retried)
+    if started:
+        workflow.start(retried.id or 0, requested_mode=requested_mode)
     return _out(session, retried)
 
 

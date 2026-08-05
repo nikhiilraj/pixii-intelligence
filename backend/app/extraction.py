@@ -7,11 +7,13 @@ from PIL import Image
 from sqlalchemy import func
 from sqlmodel import Session, col, select
 
+from app import prompts
 from app.config import settings
 from app.generation import render_template
 from app.llm import LLM
 from app.models.post import Post
 from app.models.template import Template, TemplateKind
+from app.prompts.tracing import new_correlation_id, traced_call
 from app.rendering import DEFAULT_HEIGHT, DEFAULT_WIDTH, SLOT, HtmlRenderer
 from app.templates import create_template, usable_templates
 
@@ -36,66 +38,14 @@ _STILL_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 # The opening is the hook. Sending whole posts buries it and wastes context.
 HOOK_CHARS = 220
 
-_SYSTEM = """\
-You extract reusable hook patterns from social posts that already performed well.
-
-A hook is the opening — the first line or two that decides whether someone keeps reading.
-Your job is to find the *repeatable shape* underneath specific wording, so it can be reused
-for different subject matter.
-
-Rules:
-- Abstract only what genuinely repeats or is genuinely transferable. Do not invent patterns.
-- Express each pattern with {slot_name} placeholders for the parts that change.
-- Ground every pattern in the posts that justify it, by their id. Never cite an id you were
-  not given.
-- Describe tone concretely (casing, rhythm, whether it leads with a number), not as praise.
-- Prefer fewer, sharper patterns over many overlapping ones.
-
-Return ONLY JSON of this shape, with no commentary:
-{
-  "hooks": [
-    {
-      "name": "short-kebab-name",
-      "pattern": "{slot} literal text {slot}",
-      "tone": "concrete description",
-      "slots": [{"name": "slot", "example": "a real example"}],
-      "source_post_ids": ["id", "..."],
-      "rationale": "why this works, one sentence"
-    }
-  ]
-}"""
-
-
-_STRUCTURE_SYSTEM = """\
-You extract reusable post structures from social posts that already performed well.
-
-A structure is the ordered shape of a whole post — what the beginning, middle and end each
-do — independent of the subject matter. It is what gives a draft a shape to follow.
-
-Rules:
-- Give each section a short name and concrete guidance on what belongs there. Guidance must
-  be actionable ("state the cost in dollars"), never vague ("be engaging").
-- Sections are ordered: beginning first, end last.
-- Base every structure on what the strongest posts actually do. Do not invent a shape.
-- Name the post type you are describing, e.g. "offer-reward" (a post that gives something
-  away in exchange for a comment or follow) or "deep-research" (a post presenting original
-  findings or a teardown).
-- In "compatible_hooks", name only hooks from the supplied list of available hook templates.
-  If none fit, return an empty list.
-- Prefer two or three sharply different structures over many similar ones.
-
-Return ONLY JSON of this shape, with no commentary:
-{
-  "structures": [
-    {
-      "name": "short-kebab-name",
-      "post_type": "offer-reward",
-      "sections": [{"name": "hook", "guidance": "what this section must do"}],
-      "compatible_hooks": ["hook-template-name"],
-      "rationale": "one sentence"
-    }
-  ]
-}"""
+# The three prompts this file sends, from the registry rather than from constants here. Named
+# once, at module level, for the reason `generation.py` gives beside its own: the version a
+# file sends is then a fact about the file, and the trace row a call writes cannot name a
+# prompt some other line chose. `prompts/extraction.py` carries the texts and the brand rules
+# they interpolate.
+_HOOKS = prompts.get("extraction.hooks", "1.0.0")
+_STRUCTURES = prompts.get("extraction.structures", "1.0.0")
+_VISUALS = prompts.get("extraction.visuals", "1.0.0")
 
 # Whole posts, since a structure is about the shape of the entire thing. The corpus
 # averages ~818 characters, so this rarely truncates.
@@ -195,73 +145,6 @@ def _visual_sample(
         if len(pairs) == sample_size:
             break
     return pairs
-
-
-# A transcription of monte-workshop/bots-and-tools/brand/brand.json's colors, fonts and
-# quick_rules (version 2026-06-10), rather than read across repositories at runtime.
-# ponytail: one constant, re-copied when the brand changes. Make it a fetch when a second
-# tool in this repo needs the same values.
-BRAND = """\
-Colours: #d65831 primary orange is the ONLY saturated colour — everything else is neutral.
-#FAFAF8 page background (warm smoke, not cold white). #FFFFFF card surface. #1A1816 text.
-#7A756D muted text. #E0DFDB borders. On an orange background use white text, with
-rgba(0,0,0,0.1-0.15) for any card overlay.
-Type: Cabinet Grotesk Bold or Extrabold for headlines, set large and tight. No full stops
-in headlines. Use digits, never spelled-out numbers.
-Layout: rounded corners — 12-20px on cards, 8-10px on buttons. No heavy drop shadows.
-Clean whitespace. No eyebrow or kicker tag above a headline.
-The logo is never typed as text in any font. It arrives as a real file through an image
-slot."""
-
-_VISUAL_SYSTEM = f"""\
-You extract reusable visual layouts from the images of social posts that already
-performed well.
-
-You are given those images, strongest first. Your job is to express the *repeatable
-layout* underneath the specific subject matter as HTML, so it can be reused for a
-different subject next week.
-
-The output is rendered by a headless browser at the size of the source image. It is not
-sent to an image model, so every word and number in it is exact.
-
-Rules:
-- Return complete, self-contained HTML: one root element with an inline <style>. No
-  external stylesheets, no <img> src you invent, no JavaScript, no web fonts.
-- Put a {{slot_name}} placeholder wherever the content changes between posts. Every
-  placeholder in the markup must appear in "slots", and every slot must appear in the
-  markup. This is checked, and a mismatch discards the proposal.
-- Slot "type" is "text" for words and numbers, "image_url" for a picture. An "image_url"
-  slot renders as <img src="{{slot}}">.
-- If the source image carries a brand mark, give that slot "role": "logo". It is filled
-  from a real logo file, never drawn.
-- Do not reproduce the source's words. The example values are illustrations of the shape.
-- Abstract only what genuinely repeats. Do not invent a layout no image shows.
-- Ground every layout in the images that justify it, by their id. Never cite an id you
-  were not given.
-- Prefer two or three sharply different layouts over many similar ones.
-- The brand rules below outrank the source image. Some posts that performed well break
-  them — a kicker above the headline, a full stop at the end of one. Do not carry that
-  across: follow the rule, and name the rule the source broke in the rationale.
-  brand.json is where the brand is decided; the corpus is only where shapes are found.
-
-Brand:
-{BRAND}
-
-Return ONLY JSON of this shape, with no commentary:
-{{
-  "visuals": [
-    {{
-      "name": "short-kebab-name",
-      "html": "<div style=…>{{kicker}}</div><h1>{{headline}}</h1>",
-      "slots": [
-        {{"name": "kicker", "type": "text", "example": "a real example"}},
-        {{"name": "logo", "type": "image_url", "role": "logo", "example": "https://…"}}
-      ],
-      "source_post_ids": ["id"],
-      "rationale": "why this shape works, one sentence"
-    }}
-  ]
-}}"""
 
 
 class _RejectedProposal(RuntimeError):
@@ -458,6 +341,7 @@ def propose_visuals(
     platform: str = "linkedin",
     sample_size: int = VISUAL_SAMPLE_SIZE,
     cohort: Cohort = Cohort.VOICE,
+    correlation_id: str | None = None,
 ) -> list[Template]:
     """Propose visual layouts from the images of the strongest posts. Proposals only.
 
@@ -476,8 +360,21 @@ def propose_visuals(
     if not sample:
         return []
 
-    result = llm.complete_json(
-        _VISUAL_SYSTEM, _visual_prompt(sample), [raw for _, raw in sample]
+    result = traced_call(
+        session,
+        llm,
+        _VISUALS,
+        _visual_prompt(sample),
+        correlation_id=correlation_id or new_correlation_id(),
+        input_artifact_ids={
+            "posts": ",".join(post.zernio_id for post, _ in sample),
+            "cohort": cohort.value,
+            "platform": platform,
+        },
+        # The images go down as they always did. `traced_call` takes them because this call
+        # site exists: a tracing wrapper that could not carry images would have left the one
+        # vision prompt in the application as the one prompt nothing recorded.
+        images=[raw for _, raw in sample],
     )
     proposals = result.get("visuals")
     if not isinstance(proposals, list):
@@ -584,6 +481,11 @@ def propose_hooks(
     platform: str = "linkedin",
     sample_size: int = DEFAULT_SAMPLE_SIZE,
     cohort: Cohort = Cohort.VOICE,
+    # Minted here when the caller does not supply one, so a trace row always groups the
+    # calls of one extraction rather than sitting alone. `POST /templates/extract` runs one
+    # kind at a time, so one call is usually the whole operation — but the id is the seam
+    # that makes "everything one extract route bought" answerable the day it runs two.
+    correlation_id: str | None = None,
 ) -> list[Template]:
     """Propose hook templates from the strongest posts. Proposals only — a human approves.
 
@@ -599,7 +501,22 @@ def propose_hooks(
     if not posts:
         return []
 
-    result = llm.complete_json(_SYSTEM, _build_prompt(posts))
+    result = traced_call(
+        session,
+        llm,
+        _HOOKS,
+        _build_prompt(posts),
+        correlation_id=correlation_id or new_correlation_id(),
+        # The posts the proposal is grounded in, so a template a human later approves can be
+        # traced back to the sample that produced it. Zernio ids, joined, because that is what
+        # `Template.provenance` stores and what `_to_template` checks the model's citations
+        # against — a different identifier here would not join to anything.
+        input_artifact_ids={
+            "posts": ",".join(p.zernio_id for p in posts),
+            "cohort": cohort.value,
+            "platform": platform,
+        },
+    )
     proposals = result.get("hooks")
     if not isinstance(proposals, list):
         raise ExtractionError(f"expected a 'hooks' list, got keys {sorted(result)}")
@@ -672,6 +589,7 @@ def propose_structures(
     sample_size: int = DEFAULT_SAMPLE_SIZE,
     focus: str = "",
     cohort: Cohort = Cohort.VOICE,
+    correlation_id: str | None = None,
 ) -> list[Template]:
     """Propose post structures from the strongest posts. Proposals only — a human approves.
 
@@ -689,7 +607,23 @@ def propose_structures(
         return []
 
     hooks = usable_templates(session, TemplateKind.HOOK)
-    result = llm.complete_json(_STRUCTURE_SYSTEM, _structure_prompt(posts, hooks, focus))
+    result = traced_call(
+        session,
+        llm,
+        _STRUCTURES,
+        _structure_prompt(posts, hooks, focus),
+        correlation_id=correlation_id or new_correlation_id(),
+        input_artifact_ids={
+            "posts": ",".join(p.zernio_id for p in posts),
+            # The hooks the model was allowed to cite. A structure naming a hook family is a
+            # pairing a later draft is generated through, so which list it was shown is part
+            # of how that pairing came about.
+            "hooks": ",".join(f"{h.family_id}/{h.version}" for h in hooks),
+            "cohort": cohort.value,
+            "platform": platform,
+            "focus": focus,
+        },
+    )
     proposals = result.get("structures")
     if not isinstance(proposals, list):
         raise ExtractionError(f"expected a 'structures' list, got keys {sorted(result)}")

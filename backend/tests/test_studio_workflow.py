@@ -320,7 +320,15 @@ def test_visual_failure_preserves_reviewed_written_content(session):
     assert "render unavailable" in (draft.visual_error or "")
 
 
-def test_workflow_api_returns_persisted_lineage_and_blocks_failed_push(session):
+def test_workflow_api_returns_persisted_lineage_and_blocks_failed_push(session, spawned):
+    """The route hands back a `planning` draft; the run it started fills the lineage in.
+
+    Two halves that used to be one: the request no longer waits for the pipeline, so the
+    lineage assertions read the row *after* the run rather than out of the 201. The run is
+    driven here by calling `generate_reviewed_draft` the way the worker does, because what
+    this test is about is the persisted result and the push boundary — `tests/test_workflow.py`
+    is where the worker's own commits are exercised.
+    """
     hook, structure, visual = templates(session)
     llm = QueuedLLM(BRIEF, ANGLE_NONE, WRITE_NONE, VERIFIED, READY)
     app.dependency_overrides[get_session] = lambda: session
@@ -340,9 +348,25 @@ def test_workflow_api_returns_persisted_lineage_and_blocks_failed_push(session):
         )
         assert response.status_code == 201, response.text
         body = response.json()
-        assert body["generation_stage"] == "ready"
-        assert body["editorial"]["brief"]["research_mode"] == "none"
-        assert body["editorial"]["planned_claims"]
+        assert body["generation_stage"] == "planning"
+        assert body["editorial"] is None
+        assert spawned == [(body["id"], None)]
+
+        generate_reviewed_draft(
+            session,
+            llm,
+            Search(),
+            Renderer(),
+            ImageRenderer(),
+            idea="why clearer product writing matters",
+            draft=session.get(Draft, body["id"]),
+        )
+        session.commit()
+
+        read = client.get(f"/drafts/{body['id']}").json()
+        assert read["generation_stage"] == "ready"
+        assert read["editorial"]["brief"]["research_mode"] == "none"
+        assert read["editorial"]["planned_claims"]
 
         stored = session.get(Draft, body["id"])
         stored.generation_stage = "failed_review"

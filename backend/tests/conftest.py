@@ -5,7 +5,31 @@ from sqlalchemy import delete
 from sqlmodel import Session, SQLModel
 
 import app.models  # noqa: F401  — registers every table on SQLModel.metadata
+from app import workflow
 from app.db import engine
+
+
+@pytest.fixture(autouse=True)
+def spawned(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, str | None]]:
+    """Every background run a test asked for, and not one of them actually started.
+
+    **Autouse, so no test can start a real thread by forgetting to.** `POST /drafts/workflow`
+    hands its run to a daemon thread that builds a real `AzureChat`, a real search provider
+    and two real renderers — against the shared database, outside the transaction this
+    module's `session` fixture rolls back. One unpatched route call would talk to a live
+    endpoint and leave rows behind.
+
+    The list is the assertion surface: a route that spawned once appended once, and duplicate
+    protection means the second press appends nothing. `tests/test_workflow.py` is where the
+    run itself is exercised, synchronously, against a database of its own.
+    """
+    calls: list[tuple[int, str | None]] = []
+
+    def record(draft_id: int, requested_mode: str | None) -> None:
+        calls.append((draft_id, requested_mode))
+
+    monkeypatch.setattr(workflow, "_spawn", record)
+    return calls
 
 
 @pytest.fixture

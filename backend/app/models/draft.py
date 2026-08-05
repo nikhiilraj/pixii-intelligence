@@ -60,6 +60,25 @@ class Draft(SQLModel, table=True):
         default=GenerationStage.UNREVIEWED, index=True, nullable=False
     )
     generation_error: str | None = None
+
+    # The workflow request this row is currently *claiming*, derived from the request's own
+    # inputs — see `workflow.claim_key`. UNIQUE, so a double-click or a refresh that fires
+    # `POST /drafts/workflow` twice loses the second insert to the index rather than buying a
+    # second minute-long run. `distribution._record`'s reason applies unchanged: a
+    # read-then-insert races with itself under exactly the input this defends against.
+    #
+    # **NULL means "claiming nothing", and Postgres lets any number of rows say that** — which
+    # is why the claim is cleared the moment the run reaches a terminal stage instead of
+    # needing a partial index or a sentinel. Clearing it is what lets the same idea, through
+    # the same templates, be generated again tomorrow; holding it forever would make the
+    # duplicate guard into a permanent refusal. The timeout sweep clears it too, so a worker
+    # that died with the process does not lock its request out for good.
+    #
+    # Deliberately **not** in `DraftOut`, following `zernio_media_url` rather than the
+    # hand-mapping warning above it: this is an internal claim token, not something a reviewer
+    # reads about a draft, and nothing in Studio acts on it.
+    workflow_key: str | None = Field(default=None, unique=True)
+
     gate_results: list = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
     readiness_result: dict | None = Field(
         default=None, sa_column=Column(JSONB, nullable=True)

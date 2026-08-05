@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -442,3 +442,97 @@ def test_an_unconfigured_webhook_is_not_a_delivery(monkeypatch):
     from app.notify import deliver
 
     assert deliver(card("hello", [])) is False
+
+
+# --- the route that finally reads these rows ------------------------------------------------
+
+
+@pytest.fixture
+def client(session):
+    from fastapi.testclient import TestClient
+
+    from app.db import get_session
+    from app.main import app
+
+    app.dependency_overrides[get_session] = lambda: session
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+def test_the_daily_runs_route_reports_what_ran(session, client):
+    """`DailyRun` rows existed and no endpoint read them, so a run failing for a week looked
+    exactly like a quiet week from every screen a person opens. This is the connection."""
+    session.add(
+        DailyRun(
+            run_date=date(2026, 8, 4),
+            status="complete",
+            drafts_created=2,
+            topics_failed=1,
+            visuals_failed=0,
+            detail="topic 3: no approved visual",
+        )
+    )
+    session.commit()
+
+    (row,) = client.get("/daily-runs").json()
+
+    assert row["run_date"] == "2026-08-04"
+    assert row["status"] == "complete"
+    assert (row["drafts_created"], row["topics_failed"], row["visuals_failed"]) == (2, 1, 0)
+    assert row["detail"] == "topic 3: no approved visual"
+
+
+def test_a_run_that_never_finished_reports_null_counts_and_not_zero(session, client):
+    """The rule that is easiest to break here: `0` says it finished and produced nothing.
+
+    A row still on `running` has counted nothing at all, and `DailyRun` is deliberately
+    nullable for exactly this. A `?? 0` anywhere between the column and the screen would turn
+    "nobody counted" into "the daily run produced no drafts", which is a different sentence
+    and the only one of the two that reads as normal.
+    """
+    session.add(DailyRun(run_date=date(2026, 8, 5), status="running"))
+    session.commit()
+
+    (row,) = client.get("/daily-runs").json()
+
+    assert row["status"] == "running"
+    assert row["drafts_created"] is None
+    assert row["topics_failed"] is None
+    assert row["visuals_failed"] is None
+    assert row["finished_at"] is None
+    # NULL here means the card has not been delivered yet, which the next tick retries.
+    assert row["notified_at"] is None
+
+
+def test_a_failed_run_carries_its_error(session, client):
+    session.add(
+        DailyRun(run_date=date(2026, 8, 3), status="failed", error="no approved templates")
+    )
+    session.commit()
+
+    (row,) = client.get("/daily-runs").json()
+
+    assert row["status"] == "failed"
+    assert row["error"] == "no approved templates"
+
+
+def test_runs_are_newest_first_by_the_date_that_identifies_them(session, client):
+    for day in (1, 3, 2):
+        session.add(DailyRun(run_date=date(2026, 8, day), status="complete", drafts_created=0))
+    session.commit()
+
+    rows = client.get("/daily-runs").json()
+
+    assert [row["run_date"] for row in rows] == ["2026-08-03", "2026-08-02", "2026-08-01"]
+
+
+def test_no_runs_is_an_empty_list_rather_than_a_failure(session, client):
+    assert client.get("/daily-runs").json() == []
+
+
+def test_reading_the_runs_does_not_start_one(session, client):
+    """Asking whether the unattended work ran must never be a way to make it run."""
+    client.get("/daily-runs")
+
+    assert session.exec(select(DailyRun)).all() == []
+    assert session.exec(select(Draft)).all() == []

@@ -44,7 +44,17 @@ def output_hash(parsed: dict) -> str:
     stops meaning anything at all — the failure would look like the model being unstable.
     """
     canonical = json.dumps(parsed, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    # `surrogatepass`, and it is load-bearing rather than defensive. `"\ud800"` is a legal JSON
+    # escape, so `complete_json` can hand back a perfectly ordinary dict holding a lone
+    # surrogate — and a plain `.encode("utf-8")` raises on it. That raise happens *inside*
+    # tracing, so it would turn a response the caller was about to reject cleanly into a
+    # `UnicodeEncodeError` from a layer that promises to change no behaviour: extraction's
+    # `_unstorable` exists precisely to survive this input, and one bad proposal would have
+    # cost every sibling in the batch its slot. Found the day extraction started being traced.
+    #
+    # Byte-identical to the old encoding for every input without a surrogate, so no hash this
+    # column already holds moves.
+    return hashlib.sha256(canonical.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def traced_call(

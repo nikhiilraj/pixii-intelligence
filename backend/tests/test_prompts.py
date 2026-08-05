@@ -12,6 +12,7 @@ import pytest
 
 from app import prompts
 from app.autonomous import _TOPICS
+from app.extraction import _HOOKS, _STRUCTURES, _VISUALS
 from app.generation import _SUGGEST, _WRITE
 from app.prompts.registry import DuplicatePrompt, Prompt, index
 
@@ -65,6 +66,17 @@ FROZEN_DIGESTS = {
     "draft.write": "1fe2f85d6cb8054014bc9343215bf667b10c34398ed77c6311657fad583fc9ed",
     "draft.suggest_templates": "e75b978e9ebfd994be439e45a3a1dfcc87e8e08d09482b50c788e7c9fae8cd7e",
     "topics.propose": "29c5e00f7fc6e2c47f3330a0dff0878e2502e38f9a5bfdf489d0a099e8952981",
+    # Extraction's three, hashed on 2026-08-05 off `extraction.py`'s module constants in the
+    # commit before they moved. Digests and no literal, unlike the three above, for one real
+    # reason and one practical one. `extraction.visuals` is composed from `BRAND` — a literal
+    # copy of the rendered text would fork the brand rules into a second place that can
+    # silently disagree with the one the prompt actually interpolates, which is worse than no
+    # copy at all. And the three run to 5.3KB between them; a diff nobody reads is not a
+    # readable diff. What the digest buys is unchanged: editing `BRAND`, or a space anywhere
+    # in any of the three, fails here rather than quietly proposing something different.
+    "extraction.hooks": "6efd4bc4d244bc150eb54ecb77a8fc19ea471493eaca6df6616fd676e4868e4a",
+    "extraction.structures": "0e1d752f8b597fd6eb0f988825819aefe05f4d0a14a76973af3068656a9ecede",
+    "extraction.visuals": "dd2c2803f1b0dd440a8fadc13da00dda41f716aeb07fb2bd700be54df2436fe9",
 }
 
 
@@ -90,10 +102,17 @@ def test_a_registered_prompt_still_hashes_to_what_it_did_before_the_move(name, d
 
 @pytest.mark.parametrize(
     ("pinned", "name"),
-    [(_WRITE, "draft.write"), (_SUGGEST, "draft.suggest_templates"), (_TOPICS, "topics.propose")],
+    [
+        (_WRITE, "draft.write"),
+        (_SUGGEST, "draft.suggest_templates"),
+        (_TOPICS, "topics.propose"),
+        (_HOOKS, "extraction.hooks"),
+        (_STRUCTURES, "extraction.structures"),
+        (_VISUALS, "extraction.visuals"),
+    ],
 )
 def test_the_call_sites_send_the_registered_prompt_and_not_a_copy(pinned, name):
-    """`generation` and `autonomous` hold the registry's own object, not a duplicate of it.
+    """`generation`, `autonomous` and `extraction` hold the registry's own object, not a copy.
 
     Together with the pinned texts above, this is what makes the byte-identity claim reach the
     model rather than stopping at the registry: the constant these modules pass to

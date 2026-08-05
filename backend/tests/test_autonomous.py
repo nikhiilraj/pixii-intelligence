@@ -11,6 +11,7 @@ from app.db import get_session
 from app.deps import get_html_renderer, get_llm
 from app.main import app
 from app.models.draft import Draft
+from app.models.generation_trace import GenerationTrace
 from app.models.post import Post, Verdict
 from app.models.template import TemplateKind
 from app.templates import approve, create_template
@@ -734,3 +735,38 @@ def test_a_run_that_could_not_start_still_reports_what_it_spent(client, session)
     assert detail["image_calls"] == 0
     assert detail["search_calls"] == 0
     assert "model unavailable" in detail["error"]
+
+
+def test_the_topic_proposal_is_traced(session):
+    """The prompt was registered and the call was not. Half a trace is not a trace.
+
+    `topics.propose` has been in the registry since prompts moved there, so a reader looking
+    for it would have found a version and no evidence any call ever used it — which is worse
+    than an absence, because the registry entry implies a record exists.
+    """
+    library(session)
+    add_post(session, "p1", engaged=185)
+
+    propose_topics(session, FakeLLM(), count=2, correlation_id="corr-topics")
+    session.flush()
+
+    (trace,) = session.exec(select(GenerationTrace)).all()
+    assert (trace.prompt_name, trace.prompt_version) == ("topics.propose", "1.0.0")
+    assert trace.correlation_id == "corr-topics"
+    assert trace.input_artifact_ids == {"posts": "p1", "lessons": 0, "requested": 2}
+
+
+def test_the_spend_meter_still_counts_a_traced_topic_call(session):
+    """Routing the call through `traced_call` must not stop the meter seeing it.
+
+    `_Metered` wraps `complete_json` on the adapter, and `traced_call` calls that same method
+    on whatever it is handed — so the count survives. Asserted rather than reasoned about: a
+    spend field that silently reads zero is precisely what `SpendMeter` exists to prevent.
+    """
+    library(session)
+    add_post(session, "p1", engaged=185)
+    meter = SpendMeter()
+
+    propose_topics(session, meter.watch(FakeLLM()), count=2)
+
+    assert meter.spend()["llm_calls"] == 1

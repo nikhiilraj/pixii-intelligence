@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from difflib import SequenceMatcher
 from typing import Any
@@ -615,29 +615,38 @@ def _research_findings(planned: list, dossier: Any | None) -> tuple[list[str], l
     return list(dict.fromkeys(unsupported)), list(dict.fromkeys(contradicted))
 
 
-def generate_reviewed_draft(
+def new_reviewed_draft(
     session: Session,
     llm: LLM,
-    search: Any,
-    html_renderer: HtmlRenderer,
-    image_renderer: ImageRenderer,
     *,
     idea: str,
     hook_id: int | None = None,
     structure_id: int | None = None,
     visual_id: int | None = None,
     asset_values: dict[str, str] | None = None,
-    requested_mode: str | None = None,
     mode: str = "directed",
-    research_fetcher: Any | None = None,
+    workflow_key: str | None = None,
 ) -> Draft:
-    """Run the complete Studio pipeline and persist every stage on one draft.
+    """The row a run will be written onto, at `planning`, with its lineage already settled.
 
-    Both renderers, for the reason `_renderer_for` gives: the visual can be suggested here,
-    and the route calling this cannot know which renderer draws it until that has happened.
+    Split out of `generate_reviewed_draft` so `POST /drafts/workflow` can answer with a draft
+    id before the run that fills it in has started. **Templates are resolved here rather than
+    in the background, and that is deliberate**: `hook_family` and `structure_family` are NOT
+    NULL, and making them nullable so a row could exist before its lineage was chosen would
+    put "a draft whose templates are unknown" into the schema — in an application whose
+    central claim is that every draft names exactly what produced it, and whose `retry` route
+    reads those columns back through `generated_from`.
+
+    So the route's 201 waits for at most one `suggest_templates` completion, and only when the
+    operator picked nothing. That is seconds; the run behind it is minutes, and the minutes are
+    what this whole slice exists to stop blocking on.
+
+    Built and **not added to the session**, which `start_reviewed_draft` below does instead.
+    `workflow.claim` needs the finished row's values before it inserts them, because its insert
+    is an `ON CONFLICT DO NOTHING` that may find the claim already taken — and an object added
+    here would then be flushed anyway by the next statement, creating the second draft the
+    claim exists to prevent.
     """
-    from app import editorial, research, revision, rubric, verification
-
     correlation = new_correlation_id()
     hook = _resolve(session, TemplateKind.HOOK, hook_id)
     structure = _resolve(session, TemplateKind.STRUCTURE, structure_id)
@@ -664,11 +673,78 @@ def generate_reviewed_draft(
         asset_values=chosen_assets(visual, asset_values or {}),
         correlation_id=correlation,
         generation_stage=GenerationStage.PLANNING,
+        workflow_key=workflow_key,
         write_prompt_name=_EDITORIAL_WRITE.name,
         write_prompt_version=_EDITORIAL_WRITE.version,
     )
+    return draft
+
+
+def start_reviewed_draft(session: Session, llm: LLM, **kwargs: Any) -> Draft:
+    """`new_reviewed_draft`, persisted. The one-line half every caller but the claim wants."""
+    draft = new_reviewed_draft(session, llm, **kwargs)
     session.add(draft)
     session.flush()
+    return draft
+
+
+def _flush(session: Session) -> None:
+    """The default checkpoint: the caller's transaction still owns everything written here."""
+    session.flush()
+
+
+def generate_reviewed_draft(
+    session: Session,
+    llm: LLM,
+    search: Any,
+    html_renderer: HtmlRenderer,
+    image_renderer: ImageRenderer,
+    *,
+    idea: str,
+    hook_id: int | None = None,
+    structure_id: int | None = None,
+    visual_id: int | None = None,
+    asset_values: dict[str, str] | None = None,
+    requested_mode: str | None = None,
+    mode: str = "directed",
+    research_fetcher: Any | None = None,
+    draft: Draft | None = None,
+    checkpoint: Callable[[Session], None] = _flush,
+) -> Draft:
+    """Run the complete Studio pipeline and persist every stage on one draft.
+
+    Both renderers, for the reason `_renderer_for` gives: the visual can be suggested here,
+    and the route calling this cannot know which renderer draws it until that has happened.
+
+    `draft` resumes a row `start_reviewed_draft` already wrote — which is how the background
+    worker gets a draft id in front of a reviewer before the run finishes. Its lineage is read
+    back through `generated_from`, never re-resolved: the row already names the exact versions
+    it was created against, and choosing again here would let the newest version of an edited
+    family write words the draft's own columns credit to the old one.
+
+    `checkpoint` is how far each stage transition travels. It flushes by default, so every
+    existing caller — variants, retopic, the autonomous run, the daily slot — keeps landing or
+    rolling back with the request that made it. The background worker passes a commit, which is
+    what makes an intermediate stage visible to the connection Studio is polling on, and what
+    makes a failed stage's `GenerationTrace` rows outlive the run that failed.
+    """
+    from app import editorial, research, revision, rubric, verification
+
+    if draft is None:
+        draft = start_reviewed_draft(
+            session,
+            llm,
+            idea=idea,
+            hook_id=hook_id,
+            structure_id=structure_id,
+            visual_id=visual_id,
+            asset_values=asset_values,
+            mode=mode,
+        )
+    correlation = draft.correlation_id or new_correlation_id()
+    hook = generated_from(session, draft.hook_family, draft.hook_version)
+    structure = generated_from(session, draft.structure_family, draft.structure_version)
+    visual = generated_from(session, draft.visual_family, draft.visual_version)
 
     try:
         brief = editorial.build_brief(
@@ -684,13 +760,17 @@ def generate_reviewed_draft(
         draft.generation_stage = GenerationStage.FAILED
         draft.generation_error = f"planning: {type(exc).__name__}: {exc}"
         session.add(draft)
-        session.flush()
+        # Checkpointed on the failure path exactly as on the success paths, and this is the
+        # half that matters most: under the background worker this is what lands the failed
+        # stage *and* the `GenerationTrace` rows for the calls that led to it. Without it an
+        # uncaught error would take the only record of the calls it made down with it.
+        checkpoint(session)
         return draft
 
     found: research.ResearchDossier | None = None
     if brief.research_mode != research.NONE:
-        draft.generation_stage = GenerationStage.RESEARCHING
-        session.flush()
+        draft.generation_stage = advance(draft.generation_stage, GenerationStage.RESEARCHING)
+        checkpoint(session)
         try:
             research_args: dict[str, Any] = {
                 "question": editorial.research_question(idea, [item.text for item in planned]),
@@ -711,10 +791,11 @@ def generate_reviewed_draft(
             draft.generation_stage = GenerationStage.FAILED
             draft.generation_error = f"researching: {type(exc).__name__}: {exc}"
             session.add(draft)
-            session.flush()
+            checkpoint(session)
             return draft
 
-    draft.generation_stage = GenerationStage.DRAFTING
+    draft.generation_stage = advance(draft.generation_stage, GenerationStage.DRAFTING)
+    checkpoint(session)
     message = _editorial_context(
         brief=brief,
         plan=plan,
@@ -748,7 +829,7 @@ def generate_reviewed_draft(
         draft.generation_stage = GenerationStage.FAILED
         draft.generation_error = f"drafting: {type(exc).__name__}: {exc}"
         session.add(draft)
-        session.flush()
+        checkpoint(session)
         return draft
 
     recent = _recent_posts(session)
@@ -801,7 +882,7 @@ def generate_reviewed_draft(
         # `VERIFYING` before it, so a run that recorded the revision loop as a stage could
         # never legally reach this one. The loop above deliberately leaves the stage alone.
         draft.generation_stage = advance(draft.generation_stage, GenerationStage.VERIFYING)
-        session.flush()
+        checkpoint(session)
         try:
             review = verification.verify(
                 session,
@@ -843,7 +924,8 @@ def generate_reviewed_draft(
         draft.generation_stage = GenerationStage.FAILED_REVIEW
         draft.generation_error = draft.generation_error or "deterministic quality gates failed"
     elif not unverified:
-        draft.generation_stage = GenerationStage.EVALUATING
+        draft.generation_stage = advance(draft.generation_stage, GenerationStage.EVALUATING)
+        checkpoint(session)
         try:
             report = rubric.evaluate(
                 written,
@@ -856,20 +938,35 @@ def generate_reviewed_draft(
                 asset_values=draft.asset_values,
             )
             draft.readiness_result = _review_dict(report)
-            draft.generation_stage = (
-                GenerationStage.READY
-                if report.readiness is rubric.Readiness.READY_FOR_EDITORIAL_REVIEW
-                else GenerationStage.FAILED_REVIEW
-            )
-            if draft.generation_stage == GenerationStage.FAILED_REVIEW:
+            if report.readiness is rubric.Readiness.READY_FOR_EDITORIAL_REVIEW:
+                # `RENDERING`, and only on this branch. Every other outcome is already
+                # terminal, and `advance` refuses to move a terminal stage anywhere — which is
+                # the right refusal: a `failed_review` draft still gets its picture drawn
+                # below, but it is not "rendering", it is finished and being illustrated.
+                draft.generation_stage = advance(
+                    draft.generation_stage, GenerationStage.RENDERING
+                )
+            else:
+                draft.generation_stage = GenerationStage.FAILED_REVIEW
                 draft.generation_error = "editorial-readiness evaluation requires revision"
         except Exception as exc:
             draft.generation_stage = GenerationStage.FAILED_REVIEW
             draft.generation_error = f"evaluating: {type(exc).__name__}: {exc}"
 
+    # Checkpointed *before* the draw. A render is a network call to Cloudflare or Azure with
+    # its own backoff, so it is the longest single step a reviewer waits through with nothing
+    # on screen — and `rendering` is the stage that says so. Committing after it instead would
+    # make the one stage that lasts long enough to be worth reporting the one that never is.
+    checkpoint(session)
     _draw_visual(session, draft, visual, _renderer_for(visual, html_renderer, image_renderer))
+    if draft.generation_stage == GenerationStage.RENDERING:
+        # A render failure does **not** move this to `failed`. `_draw_visual` records
+        # `visual_error` and keeps the words, and a reviewed post whose picture did not draw
+        # is a redraw away from being publishable — settled behaviour, and turning it into a
+        # terminal failure here would quietly un-settle it.
+        draft.generation_stage = GenerationStage.READY
     session.add(draft)
-    session.flush()
+    checkpoint(session)
     return draft
 
 

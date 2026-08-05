@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import text
-from sqlmodel import col, select
+from sqlmodel import col, desc, select
 
 from app.api_assets import router as assets_router
 from app.api_drafts import DraftOut, _out
@@ -27,6 +27,7 @@ from app.db import engine, utc
 from app.deps import SessionDep
 from app.distribution import scheduled_draft_ids
 from app.metrics import draft_for_post, sync_metrics, template_performance
+from app.models.daily_run import DailyRun
 from app.models.draft import Draft
 from app.models.metric import MetricSnapshot
 from app.models.post import Post, PostSource, Verdict
@@ -670,4 +671,70 @@ def template_scoreboard(session: SessionDep) -> list[dict]:
             "min_sample_size": settings.min_sample_size,
         }
         for row in template_performance(session)
+    ]
+
+
+class DailyRunOut(BaseModel):
+    """One unattended run, as it actually went.
+
+    **Every count is nullable and nothing here coerces a NULL to `0`.** `DailyRun` writes NULL
+    for a run that has not finished, and `0` would say it finished and produced nothing — the
+    same absence-versus-measurement distinction the corpus and the scoreboard print `—` for.
+    The rule is easiest to break here, where a `?? 0` in a caller would look like tidying up.
+
+    `status` is `running`, `complete` or `failed`. `notified_at` is NULL when the Teams card
+    has not been delivered, which is a retriable state rather than a failure.
+    """
+
+    id: int
+    run_date: date
+    slot: str
+    status: str
+    started_at: datetime
+    finished_at: datetime | None
+    drafts_created: int | None
+    topics_failed: int | None
+    visuals_failed: int | None
+    error: str | None
+    detail: str | None
+    notified_at: datetime | None
+
+
+@app.get("/daily-runs")
+def daily_runs(session: SessionDep, limit: int = 30) -> list[DailyRunOut]:
+    """Every unattended run, newest first. The one thing no screen could say.
+
+    `DailyRun` rows have existed since the daily slot was made durable and **no endpoint read
+    them**, so the metrics scheduler, the reconciliation pass and the daily editorial slot
+    produced log lines and nothing else. A daily run failing for a week looked exactly like a
+    quiet week from every surface a person actually opens. This is the route that connects.
+
+    Read-only, and it triggers nothing: asking whether the unattended work ran must not be a
+    way to make it run. `POST /drafts/autonomous-run` is the deliberate, confirmed control.
+
+    Ordered by `run_date` and not by `started_at`: the date *is* the identity of a run — one
+    row per local day per slot — and a recovered run that started late still belongs on its
+    own day. Thirty days by default, which is the window a person reads back over.
+    """
+    rows = (
+        session.exec(
+            select(DailyRun).order_by(desc(col(DailyRun.run_date))).limit(limit)
+        ).all()
+    )
+    return [
+        DailyRunOut(
+            id=row.id or 0,
+            run_date=row.run_date,
+            slot=row.slot,
+            status=row.status,
+            started_at=row.started_at,
+            finished_at=row.finished_at,
+            drafts_created=row.drafts_created,
+            topics_failed=row.topics_failed,
+            visuals_failed=row.visuals_failed,
+            error=row.error,
+            detail=row.detail,
+            notified_at=row.notified_at,
+        )
+        for row in rows
     ]

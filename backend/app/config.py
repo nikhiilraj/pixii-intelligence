@@ -86,6 +86,18 @@ class Settings(BaseSettings):
     daily_slot_timezone: str = "Asia/Kolkata"
     daily_tick_minutes: int = 30
 
+    # How long a Studio workflow may stay in a non-terminal stage before a reader is told it
+    # failed. `POST /drafts/workflow` hands the run to a daemon thread, and a thread that dies
+    # with its process leaves the row exactly as it was — `researching` forever, with Studio
+    # polling a stage that will never move. This is the number that turns that silence into a
+    # stated failure; `workflow.sweep_stalled` applies it on read.
+    #
+    # Fifteen minutes because a `deep` run is several searches, several fetches and several
+    # completions, and a live run declared dead is a worse lie than a dead run declared late:
+    # the sweep is terminal, so a run swept while it was merely slow can never come back and
+    # say `ready`. Generous on purpose, therefore, rather than tight.
+    workflow_timeout_minutes: int = 15
+
     # Where a Teams card's link points. Not a credential and not a secret — it is the
     # address of this app's own web UI, which authorises on its own when the link opens.
     pixii_base_url: str = "http://localhost:3000"

@@ -9,6 +9,7 @@ import hashlib
 import json
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from sqlmodel import SQLModel, col, select
@@ -333,3 +334,30 @@ def test_the_timestamp_reads_back_naive_and_compares_through_db_utc(session):
     with pytest.raises(TypeError):
         assert trace.created_at <= datetime.now(UTC)
     assert utc(trace.created_at) <= datetime.now(UTC)
+
+
+# --- no model call this application makes is untraced ---------------------------------------
+
+
+def test_no_model_call_bypasses_tracing():
+    """The audit, as a test rather than as a `grep` somebody has to remember to run.
+
+    `llm.complete_json` is the one method that spends money, and every call to it should come
+    from `traced_call`. Two bypasses survived the first tracing wave — `extraction.py`'s three
+    prompts and `autonomous.propose_topics` — and both were invisible from anywhere but the
+    source, because a bypassed call works perfectly and simply writes no row.
+
+    Source text, not behaviour, which is the honest limitation: this catches a *new* call
+    site, not a call routed through something clever. That is the failure that has actually
+    happened here twice, and the one a reviewer is most likely to miss.
+    """
+    root = Path(__file__).resolve().parents[1] / "app"
+    offenders = {
+        path.relative_to(root).as_posix(): line.strip()
+        for path in root.rglob("*.py")
+        for line in path.read_text().splitlines()
+        if ".complete_json(" in line and not line.lstrip().startswith("#")
+    }
+    # `tracing.py` is the only place that calls it. `llm.py` merely defines it, which this
+    # match does not catch — `def complete_json(` carries no dot.
+    assert set(offenders) == {"prompts/tracing.py"}, offenders

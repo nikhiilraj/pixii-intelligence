@@ -6,11 +6,14 @@ against a literal written independently of this file, so a stray space is a fail
 not a quietly different draft. Editing one of these is not an edit: it is a new version,
 because a trace row naming `1.0.0` has to mean the same words next month as it did today.
 
-`extraction.py`'s three prompts are deliberately still module constants. They belong here
-too and the move is mechanical, but it is a separate file with a separate owner this wave.
+`extraction.py`'s three prompts were the one deliberate exception — a mechanical move deferred
+because that file had a separate owner. They are in `prompts/extraction.py` now, registered and
+traced like everything else, so there is no longer a prompt this application sends that a
+`GenerationTrace` row cannot name.
 """
 
 from app.prompts.editorial import PROMPTS as EDITORIAL_PROMPTS
+from app.prompts.extraction import PROMPTS as EXTRACTION_PROMPTS
 from app.prompts.registry import Prompt
 from app.prompts.revision import PROMPTS as REVISION_PROMPTS
 from app.prompts.rubric import PROMPTS as RUBRIC_PROMPTS
@@ -276,6 +279,7 @@ ALL: tuple[Prompt, ...] = (
     RESEARCH_QUERIES,
     RESEARCH_CLAIMS,
     *EDITORIAL_PROMPTS,
+    *EXTRACTION_PROMPTS,
     *RUBRIC_PROMPTS,
     *REVISION_PROMPTS,
     *VERIFICATION_PROMPTS,

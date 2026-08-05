@@ -1,9 +1,11 @@
 from datetime import datetime
 
 import pytest
+from sqlmodel import select
 
 from app.config import settings
 from app.extraction import Cohort, ExtractionError, propose_hooks
+from app.models.generation_trace import GenerationTrace
 from app.models.post import Post
 from app.models.template import TemplateKind, TemplateStatus
 from app.templates import latest_versions, usable_templates
@@ -370,3 +372,45 @@ def test_a_proposal_missing_its_pattern_is_rejected(session):
 
     with pytest.raises(ExtractionError):
         propose_hooks(session, FakeLLM({"hooks": [{"name": "nameless"}]}))
+
+
+# --- the calls extraction makes are recorded ------------------------------------------------
+
+
+def test_the_hook_proposal_writes_a_trace_naming_the_registered_prompt(session):
+    """Extraction was the last stage whose model calls left no record at all.
+
+    It matters more here than the name "audit trail" suggests: a human approves what this call
+    proposes, and every draft generated afterwards is generated *from* that template. "Which
+    prompt, at which version, proposed this" is therefore a lineage question — the same kind
+    `(family_id, version)` answers one layer down — and it had no answer.
+    """
+    add_post(session, "win-1", 185)
+
+    propose_hooks(session, FakeLLM(TWO_HOOKS))
+    session.flush()
+
+    (trace,) = session.exec(select(GenerationTrace)).all()
+    assert (trace.prompt_name, trace.prompt_version) == ("extraction.hooks", "1.0.0")
+    assert trace.input_artifact_ids["posts"] == "win-1"
+    assert trace.input_artifact_ids["cohort"] == "voice"
+    assert trace.output_hash is not None and trace.error is None
+    # Never claimed, because nothing at this layer has seen a token count.
+    assert (trace.prompt_tokens, trace.completion_tokens) == (None, None)
+
+
+def test_a_failed_extraction_call_is_recorded_with_its_error(session):
+    class Broken:
+        def complete_json(self, system, user, images=()):
+            raise RuntimeError("vision endpoint unavailable")
+
+    add_post(session, "win-1", 185)
+
+    with pytest.raises(RuntimeError):
+        propose_hooks(session, Broken())
+    session.flush()
+
+    (trace,) = session.exec(select(GenerationTrace)).all()
+    assert trace.error == "RuntimeError: vision endpoint unavailable"
+    assert trace.output_hash is None
+    assert trace.latency_ms is not None

@@ -15,6 +15,7 @@ from app.generation import (
 from app.llm import LLM
 from app.models.post import Post
 from app.models.stage import review_ready
+from app.prompts.tracing import new_correlation_id, traced_call
 from app.rendering import HtmlRenderer, ImageRenderer
 
 log = logging.getLogger("pixii.autonomous")
@@ -172,7 +173,9 @@ def _log_notify(message: str) -> None:
     log.warning("autonomous: %s", message)
 
 
-def propose_topics(session: Session, llm: LLM, count: int) -> list[dict]:
+def propose_topics(
+    session: Session, llm: LLM, count: int, *, correlation_id: str | None = None
+) -> list[dict]:
     """Ask for angles the corpus has not already covered.
 
     Grounded in what has actually been posted, so unattended output follows from the real
@@ -194,9 +197,25 @@ def propose_topics(session: Session, llm: LLM, count: int) -> list[dict]:
     # `lesson_lines` contributes nothing when there are no verdicts, which keeps this prompt
     # byte-identical to the one sent before any ruling existed.
     parts = [f"Propose {count} topics."]
-    parts.extend(lesson_lines(verdict_lessons(session)))
+    lessons = verdict_lessons(session)
+    parts.extend(lesson_lines(lessons))
     parts.append(f"\nRecent posts:\n{shown}")
-    result = llm.complete_json(_TOPICS.text, "\n".join(parts))
+    result = traced_call(
+        session,
+        llm,
+        _TOPICS,
+        "\n".join(parts),
+        correlation_id=correlation_id or new_correlation_id(),
+        # The posts the proposal was grounded in, and how many rulings were carried with them.
+        # The count rather than the notes: a lesson is a person's sentence about a post, and a
+        # trace row is not where a human's writing should be duplicated. What it answers is
+        # "did this run see the verdicts", which is the thing that was unanswerable.
+        input_artifact_ids={
+            "posts": ",".join(post.zernio_id for post in recent),
+            "lessons": len(lessons),
+            "requested": count,
+        },
+    )
     topics = result.get("topics")
     return [t for t in topics if t.get("idea")] if isinstance(topics, list) else []
 
