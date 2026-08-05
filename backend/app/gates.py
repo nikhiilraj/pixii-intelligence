@@ -33,7 +33,16 @@ GATES = (
     "visual_slot_missing",
     "near_duplicate",
     "forbidden_claim",
+    "uncited_claim",
+    "contradicted_claim",
 )
+
+# How close a candidate's wording has to be to a claim's for this to call it the same
+# assertion. Below 1.0 because a post never restates a claim verbatim — the researcher
+# writes "Amazon's ad revenue grew 19% in Q2" and the post writes "Amazon's ad revenue
+# grew nineteen percent last quarter". Well above the near-duplicate threshold, though:
+# this gate blocks a post, so a false positive costs a person an argument with the tool.
+CLAIM_ECHO_RATIO = 0.72
 
 # LinkedIn refuses a post longer than this. Checked here, on a candidate, so the refusal
 # costs nothing — by the time `publishing.push_draft` sends it the media is already
@@ -145,6 +154,8 @@ def check(
     template: Template,
     recent_posts: Sequence[str],
     asset_values: Mapping[str, str] | None = None,
+    unsupported_claims: Sequence[str] = (),
+    contradicted_claims: Sequence[str] = (),
 ) -> list[Finding]:
     """Every hard gate over one candidate. An empty list means all of them passed.
 
@@ -167,6 +178,18 @@ def check(
     `generation.lesson_lines` states about `lessons`: a default lets a caller quietly stop
     passing them with nothing failing. A caller with no recent corpus passes `[]` and says
     so at the call site.
+
+    `unsupported_claims` and `contradicted_claims` are the research half — the claim texts
+    a dossier settled as `UNSUPPORTED`, and the ones its sources disagree about. They are
+    plain strings rather than a `ResearchDossier` on purpose: this module does no I/O and
+    imports no model, and taking the dossier type would drag `fetching` and `llm` in behind
+    it. The caller holds the dossier and hands over the two lists.
+
+    **These two do carry a default, and it is the one weak spot in this signature.** Most
+    posts need no research, so `()` is the honest common case — but it also means a caller
+    that *did* research and forgets to pass the claims gets a silent pass on the gate that
+    exists to catch exactly that. `ponytail:` acceptable while `generation` is the only
+    caller. Make them required, and update the callers, the day a second one appears.
 
     Raises `ValueError` if handed anything but a VISUAL template — see below.
     """
@@ -209,6 +232,7 @@ def check(
         *_visual_slots(template, written, assets),
         *_near_duplicate(full_text, recent_posts),
         *_forbidden_claims(full_text, written),
+        *_echoed_claims(full_text, unsupported_claims, contradicted_claims),
     ]
 
 
@@ -402,6 +426,65 @@ def _near_duplicate(full_text: str, recent_posts: Sequence[str]) -> list[Finding
                 )
             ]
     return []
+
+
+def _echoed_claims(
+    full_text: str,
+    unsupported: Sequence[str],
+    contradicted: Sequence[str],
+) -> list[Finding]:
+    """The candidate asserts something the research could not stand behind.
+
+    This is the gate that makes a dossier *enforce* rather than merely inform. Without it,
+    `research.py` can settle a claim as `UNSUPPORTED`, store that faithfully, show it on the
+    review screen — and the post goes out saying it anyway.
+
+    Matched by similarity rather than substring, because a post never restates a claim
+    verbatim: the researcher writes "Amazon's ad revenue grew 19% in Q2" and the post writes
+    "Amazon's ad revenue grew nineteen percent last quarter". `CLAIM_ECHO_RATIO` sits well
+    above the near-duplicate threshold for the opposite reason that one sits low — this gate
+    blocks a post, so a false positive costs a person an argument with the tool.
+
+    Compared against the whole post rather than sentence by sentence, matching how
+    `_near_duplicate` works, and that is a real limit: a single claim echoed inside a long
+    post dilutes below the ratio. Stated rather than hidden — see the ceiling below.
+
+    **`ponytail:` this gate catches an echo of a claim the plan already made, and nothing
+    else.** A candidate that invents a fresh factual assertion nobody researched passes it
+    untouched, because deciding "is this sentence a checkable fact" is not a thing
+    `difflib` can do. That is the model-driven half of the evaluation, and it is a later
+    slice. The upgrade path is a claim-extraction pass over the finished text, checked
+    against the dossier — not a bigger regex here.
+    """
+    candidate = _normalised(full_text)
+    if not candidate:
+        # Same reason `_near_duplicate` guards this: `SequenceMatcher` scores two empty
+        # strings 1.0, so an empty candidate would echo every claim ever made.
+        return []
+
+    findings = []
+    for gate, claims, verb in (
+        ("uncited_claim", unsupported, "nothing in the research supports"),
+        ("contradicted_claim", contradicted, "the sources disagree about"),
+    ):
+        for claim in claims:
+            # No guard for an empty claim, deliberately. `_near_duplicate` states the
+            # reasoning for its own mirror case and it holds here: an empty string against
+            # real text scores 0.0 and fails the threshold on its own, so the guard is one
+            # no test could distinguish. It was written, and a mutation removing it passed
+            # every test — which is what the comment predicts and the reason it is gone.
+            ratio = SequenceMatcher(
+                None, candidate, _normalised(claim), autojunk=False
+            ).ratio()
+            if ratio >= CLAIM_ECHO_RATIO:
+                findings.append(
+                    Finding(
+                        gate,
+                        f"the post states something {verb} "
+                        f'(reads {ratio:.2f} alike): "{claim.strip()[:80]}…"',
+                    )
+                )
+    return findings
 
 
 def _normalised(text: str) -> str:

@@ -521,3 +521,98 @@ def test_a_claim_inside_a_visual_slot_is_a_finding():
     )
     assert "forbidden_claim" in gates_of(findings)
     assert any("headline" in f.detail for f in findings if f.gate == "forbidden_claim")
+
+
+# --- the gate that makes a dossier enforce rather than merely inform ---------------------
+
+# Deliberately close to the post `BODY` above without being it: the same assertion in the
+# researcher's words rather than the writer's. Substring matching would miss it, which is
+# why the gate compares by similarity.
+ECHOED = (
+    "We rebuilt the intake form last quarter and the thing that moved the needle was not "
+    "the copy. It was removing two fields nobody in support had read. Three weeks arguing "
+    "about button colour, and the fix was deletion. If you are staring at a form that "
+    "converts badly, count the fields you cannot name a reader for. That number is usually "
+    "the answer, and usually larger than anyone wants to admit out loud."
+)
+
+
+def test_a_claim_the_research_could_not_support_is_refused():
+    """Without this, `research.py` can settle a claim as UNSUPPORTED, store it faithfully,
+    show it on the review screen — and the post goes out saying it anyway."""
+    findings = check(
+        a_candidate(),
+        template=a_visual([]),
+        recent_posts=[],
+        unsupported_claims=[ECHOED],
+    )
+
+    assert gates_of(findings) == ["uncited_claim"]
+    assert "nothing in the research supports" in findings[0].detail
+
+
+def test_a_claim_the_sources_disagree_about_is_refused_separately():
+    findings = check(
+        a_candidate(),
+        template=a_visual([]),
+        recent_posts=[],
+        contradicted_claims=[ECHOED],
+    )
+
+    assert gates_of(findings) == ["contradicted_claim"]
+    assert "disagree" in findings[0].detail
+
+
+def test_a_claim_the_post_does_not_make_is_not_a_finding():
+    """The gate must fire on what the post says, not on what the dossier failed to settle.
+
+    A run that could not support a claim the writer then dropped is a research result, not
+    a defect in the post — flagging it would train a reader to ignore the gate.
+    """
+    assert (
+        check(
+            a_candidate(),
+            template=a_visual([]),
+            recent_posts=[],
+            unsupported_claims=["Amazon's ad revenue grew 19% in the second quarter."],
+        )
+        == []
+    )
+
+
+def test_a_supported_claim_reaches_the_gate_as_nothing_at_all():
+    """Only unsupported and contradicted claims are passed in. A supported one is absent
+    from both lists, so an echo of it must produce no finding."""
+    assert check(a_candidate(), template=a_visual([]), recent_posts=[]) == []
+
+
+def test_an_empty_claim_is_not_a_finding():
+    """A claim row whose text never got written must not flag the post.
+
+    It passes because an empty string scores 0.0 against real prose, not because anything
+    guards it — the first version of this test claimed a guard was load-bearing and a
+    mutation deleting that guard passed every test. `_near_duplicate` had already written
+    down why: a redundant second guard is one no test can distinguish. The guard is gone;
+    this pins the behaviour that actually holds.
+    """
+    assert (
+        check(
+            a_candidate(),
+            template=a_visual([]),
+            recent_posts=[],
+            unsupported_claims=["", "   "],
+        )
+        == []
+    )
+
+
+def test_an_empty_candidate_does_not_echo_every_claim():
+    """The mirror of the above, and the reason `_near_duplicate` carries the same guard."""
+    findings = check(
+        {"hook": "", "body": ""},
+        template=a_visual([]),
+        recent_posts=[],
+        unsupported_claims=[""],
+    )
+
+    assert "uncited_claim" not in gates_of(findings)
