@@ -187,11 +187,19 @@ def plan_angle(
     **The claims decide the depth, not only the idea.** A brief reading "why our onboarding
     changed" trips no floor signal; a plan that intends to assert "Stripe cut activation time
     by a third in 2025" plainly does. So the depth is resolved again over the idea *and* the
-    claims, through the same `research.resolve_mode`, and written back to the brief. It can
-    only move upwards: `research_question` appends, so the question only ever grows, and
-    `resolve_mode` never lowers a mode below its floor. If the operator asked for a depth the
-    claims have now outgrown, `ModeBelowFloor` propagates and the plan is not written — the
-    same refusal `build_brief` makes, at the stage that learned the new fact.
+    claims, through the same `research.resolve_mode`, and written back to the brief. If the
+    operator asked for a depth the claims have now outgrown, `ModeBelowFloor` propagates and
+    the plan is not written — the same refusal `build_brief` makes, at the stage that learned
+    the new fact.
+
+    **Every claim already planned for this brief is in that question, not merely this plan's.**
+    A brief may have more than one plan, and re-planning must not be able to lower its depth:
+    plan 1 intending to assert a company fact, followed by a blander plan 2, would otherwise
+    re-resolve the brief back to `none` while plan 1's rows — and any draft written from them —
+    still exist. That is the silent downgrade blueprint §12 forbids, reached through this
+    module's own front door. Including the earlier claims makes the question grow across
+    re-plans exactly as it grows within one, which is what makes "this can only move upwards"
+    true rather than merely intended.
 
     **The plan is written after the depth is settled**, for that reason: a stored plan whose
     brief still claims a depth its own claims forbid is a row that reads as fine and is not.
@@ -219,7 +227,8 @@ def plan_angle(
     # Before the plan row, deliberately — see the docstring. A `ModeBelowFloor` from here
     # leaves no plan behind.
     resolved = research.resolve_mode(
-        research_question(brief.idea, claims), brief.requested_mode
+        research_question(brief.idea, [*_claims_so_far(session, brief), *claims]),
+        brief.requested_mode,
     )
     brief.recommended_mode = resolved.recommended
     brief.research_mode = resolved.mode
@@ -262,6 +271,22 @@ def planned_claims(session: Session, plan: AnglePlan) -> list[PlannedClaim]:
     statement = (
         select(PlannedClaim)
         .where(PlannedClaim.plan_id == plan.id)
+        .order_by(col(PlannedClaim.id))
+    )
+    return list(session.exec(statement).all())
+
+
+def _claims_so_far(session: Session, brief: EditorialBrief) -> list[str]:
+    """Every claim already planned for this brief, across all of its plans.
+
+    Ordered by id — insertion order — so that appending this plan's claims to it produces a
+    question that only ever grows. Ordering by anything else would put an earlier claim after
+    a later one and quietly break the monotonicity the caller depends on.
+    """
+    statement = (
+        select(PlannedClaim.text)
+        .join(AnglePlan, col(PlannedClaim.plan_id) == AnglePlan.id)
+        .where(AnglePlan.brief_id == brief.id)
         .order_by(col(PlannedClaim.id))
     )
     return list(session.exec(statement).all())

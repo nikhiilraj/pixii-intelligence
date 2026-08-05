@@ -442,6 +442,27 @@ def test_claims_that_add_nothing_leave_the_depth_where_it_was(session):
     assert brief.recommended_mode == LIGHT
 
 
+def test_re_planning_a_brief_cannot_lower_the_depth_an_earlier_plan_raised(session):
+    """The downgrade a second plan could otherwise walk the brief back through.
+
+    A brief may have more than one plan. The first intends to assert a company fact and moves
+    the depth to `light`; the second is blander. Re-resolving from the second plan's claims
+    alone would put the brief back to `none` while the first plan's claims — and anything
+    written from them — still exist, which is the silent downgrade the floor exists to prevent.
+    """
+    brief = _brief(session)
+    first = FakeLLM(
+        {**PLAN_ANSWER, "claims": [{"text": "Microsoft cut its meeting length in 2025"}]}
+    )
+    plan_angle(session, first, brief)
+    assert brief.research_mode == LIGHT
+
+    plan_angle(session, FakeLLM(PLAN_ANSWER), brief)
+
+    assert brief.research_mode == LIGHT
+    assert brief.recommended_mode == LIGHT
+
+
 def test_a_plan_whose_claims_outgrow_the_requested_depth_is_refused(session):
     """The floor bypass this stage could most easily have shipped.
 
