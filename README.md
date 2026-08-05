@@ -17,10 +17,20 @@ their newest versions happen to be.
 
 Two boundaries are fundamental:
 
-- **It never publishes automatically.** It can send a post to Zernio only as a draft; a human
-  publishes it there.
+- **It never publishes on its own.** Nothing automated — not the daily run, not the
+  scheduler — can put a post in front of an audience. A person schedules or publishes it,
+  deliberately, against the exact version of the words they read. That used to mean opening
+  Zernio; now it can happen here, behind a switch that is off by default. The guarantee is
+  the same one; see [ADR 0002](docs/adr/0002-human-publication-authority.md).
 - **It does not rank templates as "best."** There is not enough lineage-attributed performance
   data yet to make that statistically reliable.
+
+The proposed next-generation architecture—including team authentication, durable daily automation,
+Teams notifications, publishing and scheduling from Pixii, compliant reference capture, deep
+research, and multi-provider image generation—is documented in the
+[Pixii Platform Blueprint](docs/architecture/2026-08-04-pixii-platform-blueprint.md). Its external
+API assumptions are backed by the companion
+[official platform research](docs/research/2026-08-04-platform-api-research.md).
 
 ---
 
@@ -37,11 +47,13 @@ Two boundaries are fundamental:
 - Render deterministic HTML visuals or use AI-generated imagery.
 - Upload and reuse logos, screenshots, product images, and other brand assets.
 - Push a chosen result to Zernio as a draft, idempotently.
+- Schedule it, publish it now, or cancel a schedule — from here, once publishing is enabled.
 - Detect when that draft has subsequently been published by a human.
 - Synchronize metrics and preserve engagement snapshots over time.
 - Record a verdict — **Worked**, **Didn't**, or **Mixed** — and its reasoning.
 - Feed those human-written lessons into future generation.
 - Produce capped autonomous draft batches without pushing them anywhere.
+- Run that batch once per local day, claimed durably, and report it as a Teams card.
 - Show every point where the workflow is waiting on a human in one Inbox.
 
 ## How to use it
@@ -58,8 +70,15 @@ The normal workflow is:
 3. Open **Studio**, enter an idea, and choose templates or ask the application to suggest them.
 4. Generate a draft and inspect its text, image, and exact template versions under **Lineage**.
 5. Regenerate individual parts or create variants if the first result is not right.
-6. Push the chosen result to Zernio. Pixii sends a draft only.
-7. Have a human review and publish that exact draft inside Zernio.
+6. Push the chosen result to Zernio. Pixii sends a draft.
+7. Schedule or publish it. Studio shows a publication panel for any draft that has reached
+   Zernio. Nothing fires from the button that names it: Schedule, Publish now and Cancel
+   schedule each open a confirmation showing the action, the destination account, the local
+   time as typed, the timezone, and the UTC instant those two resolve to, alongside every
+   command already issued against the draft. A command is refused if it was confirmed against
+   an older version of the words. With `PUBLISHING_ENABLED` off — still the default — the
+   panel says so up front and the three buttons are disabled, rather than letting you compose
+   a command and then refusing it; publishing happens in Zernio by hand.
 8. Synchronize metrics after the post has accumulated meaningful engagement.
 9. Record a verdict and explain why it worked, did not work, or produced a mixed result.
 10. Return to **Inbox** and confirm the item moved to the next gate or completed the circuit.
@@ -80,8 +99,8 @@ graph LR
     A[Past posts<br/>107 in the corpus] -->|extract| B[Templates<br/>hooks · structures · visuals]
     B -->|a human approves| C[Approved library]
     C -->|generate| D[Draft<br/>text + image]
-    D -->|push| E[Zernio<br/>as a DRAFT, never live]
-    E -->|a human publishes| F[Live post]
+    D -->|push| E[Zernio<br/>as a DRAFT]
+    E -->|a human commands it| F[Live post]
     F -->|sync metrics| G[Engagement]
     G -->|a human rules on it| H[Verdict<br/>worked / didn't / mixed]
     H -->|lessons| C
@@ -130,7 +149,10 @@ These are the four points where the circuit stops and waits for a person:
 
 1. **Proposals awaiting review** — extraction suggested a template; only you can approve it.
 2. **Built, awaiting push** — a draft exists locally and hasn't been sent to Zernio.
-3. **Pushed, awaiting Monte** — it's sitting in Zernio as a draft. Only a human publishes.
+3. **Pushed, awaiting a human** — it's sitting in Zernio as a draft, waiting on a person to
+   schedule or publish it. A draft already scheduled is *not* here: it is waiting on a clock,
+   and a queue that promises "these are waiting on you" must not hold things you cannot act
+   on.
 4. **Published, awaiting verdict** — it went live; nobody has ruled on it yet.
 
 ---

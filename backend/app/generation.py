@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 from sqlmodel import Session, col, select
 
+from app import prompts
 from app.assets import resolve_asset_values
 from app.config import settings
 from app.llm import LLM
@@ -96,32 +97,18 @@ def render_values(draft: Draft) -> dict[str, str]:
     """
     return {**draft.visual_values, **draft.asset_values}
 
-_WRITE_SYSTEM = """\
-You write LinkedIn posts in an established voice, following a given hook pattern and post
-structure.
 
-Rules:
-- Follow the hook pattern's shape. Do not copy its example wording.
-- Follow the structure's sections in order. Each section's guidance is a requirement.
-- Match the voice of the exemplar posts: their casing, rhythm, sentence length and how they
-  handle numbers. Imitate the manner, never the content.
-- Use only facts present in the idea. Invent no statistics, names, or outcomes.
-- No hashtags. No emoji. No "in today's fast-paced world" openings.
-- Fill every visual slot you are given with a short value drawn from the post.
-
-Return ONLY JSON of this shape, with no commentary:
-{
-  "hook": "the opening line or two",
-  "body": "the rest of the post, blank line between paragraphs",
-  "visual_values": {"slot_name": "short value"}
-}"""
-
-_SUGGEST_SYSTEM = """\
-You choose which templates suit an idea.
-
-Pick exactly one hook, one structure and one visual from the supplied lists, by name.
-Choose on fit between the idea and what each template is for. Return ONLY JSON:
-{"hook": "name", "structure": "name", "visual": "name", "reason": "one sentence"}"""
+# The prompts this module sends, pinned to an exact version at import.
+#
+# **Named here, once, rather than at each `complete_json`.** The version a file sends is then
+# one greppable line, and the three call sites below cannot drift apart — `regenerate_text`
+# quietly sending a different version of the write prompt from `generate_draft` is the same
+# class of defect as `regenerate_visual` redrawing from the newest template row.
+#
+# `prompts.get` takes the version because there is no "latest" to take instead; see its
+# docstring. Bumping either of these is a deliberate edit to one line, which is the point.
+_WRITE = prompts.get("draft.write", "1.0.0")
+_SUGGEST = prompts.get("draft.suggest_templates", "1.0.0")
 
 
 class NoUsableTemplates(RuntimeError):
@@ -169,7 +156,7 @@ def suggest_templates(session: Session, llm: LLM, idea: str) -> Suggestion:
         return "\n".join(f"- {t.name}: {gist(t)}" for t in templates)
 
     chosen = llm.complete_json(
-        _SUGGEST_SYSTEM,
+        _SUGGEST.text,
         f"Idea: {idea}\n\nHooks:\n{describe(hooks)}\n\n"
         f"Structures:\n{describe(structures)}\n\nVisuals:\n{describe(visuals)}",
     )
@@ -399,6 +386,16 @@ def _draw_visual(
         draft.visual_image = None
         draft.visual_error = f"{type(exc).__name__}: {exc}"
 
+    # `zernio_media_url` describes bytes that no longer exist here, so it cannot survive a
+    # redraw. `push_draft` re-sends a stored URL to reproduce Zernio's duplicate hash, and a
+    # draft that was pushed unsuccessfully, redrawn, and pushed again would otherwise create
+    # the post carrying the *previous* picture — silently, with the right image on screen.
+    #
+    # Cleared unconditionally, including on the failure branch where the caller may put the
+    # old image back: over-clearing costs one repeated upload, under-clearing publishes the
+    # wrong picture. Only one of those is worth guarding against.
+    draft.zernio_media_url = None
+
 
 def generate_draft(
     session: Session,
@@ -432,7 +429,7 @@ def generate_draft(
         visual = visual or suggested.visual
 
     written = llm.complete_json(
-        _WRITE_SYSTEM,
+        _WRITE.text,
         _write_prompt(
             idea, hook, structure, visual, _exemplars(session, hook), verdict_lessons(session)
         ),
@@ -475,7 +472,7 @@ def regenerate_text(session: Session, llm: LLM, draft: Draft) -> Draft:
     visual = generated_from(session, draft.visual_family, draft.visual_version)
 
     written = llm.complete_json(
-        _WRITE_SYSTEM,
+        _WRITE.text,
         # Lessons are fetched here too, not only in `generate_draft`. Passing them at one
         # call site would make every rewrite silently drop them — the draft would improve
         # once and un-improve the moment anyone pressed regenerate.

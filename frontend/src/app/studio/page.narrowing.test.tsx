@@ -77,4 +77,60 @@ describe("what crosses into the client component", () => {
 
     vi.unstubAllGlobals();
   });
+
+  it("hands down a null publishing target rather than inventing one when the read fails", async () => {
+    /* The failure mode this exists for is a *substituted default*, not a crash. `PublishPanel`
+     * is built on `null` meaning "we could not read it" — that is what leaves the commands
+     * enabled and prints `—` for the account — so a fallback object here would quietly convert
+     * a failed request into a confident claim about the switch and the destination, and every
+     * assertion inside the panel would still pass. Only the boundary can catch it. */
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        const path = String(url).replace(/^https?:\/\/[^/]+/, "");
+        if (path === "/publishing") return Promise.resolve(jsonResponse(500, { detail: "boom" }));
+        if (path === "/drafts") return Promise.resolve(jsonResponse(200, []));
+        if (path === "/health")
+          return Promise.resolve(
+            jsonResponse(200, { status: "ok", database: true, credentials: {}, variants_max: 7 }),
+          );
+        return Promise.resolve(jsonResponse(200, []));
+      }),
+    );
+
+    render(await StudioPage({ searchParams: Promise.resolve({}) }));
+
+    expect(props.mock.calls.at(-1)?.[0].publishing).toBeNull();
+
+    vi.unstubAllGlobals();
+  });
+
+  it("hands the publishing target straight down when it reads", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        const path = String(url).replace(/^https?:\/\/[^/]+/, "");
+        if (path === "/publishing")
+          return Promise.resolve(
+            jsonResponse(200, { enabled: false, platform: "linkedin", account_id: "abc123" }),
+          );
+        if (path === "/health")
+          return Promise.resolve(
+            jsonResponse(200, { status: "ok", database: true, credentials: {}, variants_max: 7 }),
+          );
+        return Promise.resolve(jsonResponse(200, []));
+      }),
+    );
+
+    render(await StudioPage({ searchParams: Promise.resolve({}) }));
+
+    // Verbatim. The panel is what interprets `enabled: false`; this page must not pre-digest it.
+    expect(props.mock.calls.at(-1)?.[0].publishing).toEqual({
+      enabled: false,
+      platform: "linkedin",
+      account_id: "abc123",
+    });
+
+    vi.unstubAllGlobals();
+  });
 });

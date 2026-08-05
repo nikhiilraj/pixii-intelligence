@@ -20,8 +20,13 @@ Single tests: `cd backend && .venv/bin/pytest tests/test_x.py -q` · `cd fronten
 
 ## Rules that are not style preferences
 
-**Never publish.** A draft reaches Zernio as a draft. A human publishes it there, by hand.
-Nothing in this codebase may change that.
+**Never publish without an explicit human command in Pixii.** This narrows the older
+`Never publish` rule and keeps what it protected: no machine decision reaches an audience
+unless a person said so. Automation prepares — the daily run, the scheduler and
+`run_autonomous` cannot reach a publish command, and must not learn how. Only an HTTP route
+a human hits can, only when `PUBLISHING_ENABLED` is on, and only against the exact draft
+revision the reviewer confirmed. See `docs/adr/0002-human-publication-authority.md`; it also
+names the condition that voids the arrangement (a second user, or anything but localhost).
 
 **Never rank.** No "best", "top" or "recommended", and no sort-by-performance control. Each
 template has ~3 samples across a 12.7× engagement spread; any ranking is noise wearing a
@@ -42,7 +47,7 @@ authored before `type` existed carry no key at all.
 never add one to `.env.example` with a value.
 
 **Every datetime column is `timestamp without time zone`.** An aware value reads back naive,
-and comparing the two *raises*. Normalise through `main._utc`.
+and comparing the two *raises*. Normalise through `db.utc`.
 
 ## Testing
 

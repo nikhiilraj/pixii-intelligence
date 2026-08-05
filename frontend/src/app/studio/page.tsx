@@ -3,8 +3,12 @@ import {
   API_BASE,
   getJson,
   type Asset,
+  type Dossier,
   type Draft,
   type Health,
+  type Publication,
+  type PublishingTarget,
+  type ResearchJobSummary,
   type Template,
 } from "@/lib/api";
 
@@ -12,20 +16,50 @@ import Studio, { type DraftSummary } from "./Studio";
 
 export const dynamic = "force-dynamic";
 
+/** One query parameter, as typed and as a row id — `["21", "21"]`, or `["abc", null]`.
+ *
+ *  `?draft=<id>` is the whole of US-012's addressability, and it is validated here rather than
+ *  handed to the API. It is not distrust of the backend — `GET /drafts/abc` answers 422 with a
+ *  usable message — it is that a query string has more shapes than a path segment does.
+ *  `?draft=` is empty and would read as a request for `/drafts/`, and `?draft=1&draft=2`
+ *  arrives as an array; both would otherwise become a request nobody meant to make.
+ *
+ *  A function, and not the regex written out twice. `?research=` needs exactly this and both
+ *  copies would have to be corrected together for as long as they both existed — the second
+ *  reader of a rule is where the rule starts to drift.
+ *
+ *  Returns both halves because the caller needs both: the id to fetch with, and the raw text to
+ *  say *"abc" is not a draft id* with. Reconstructing what was typed from a `null` is not
+ *  possible, and reporting nothing is how a mistyped link becomes a blank screen.
+ *
+ *  ponytail: one regex, no parser. Ceiling: a real one the day a screen takes a parameter that
+ *  is not a positive integer. */
+function idParam(
+  params: { [key: string]: string | string[] | undefined },
+  name: string,
+): { typed: string; id: string | null } {
+  const raw = params[name];
+  const typed = (Array.isArray(raw) ? raw[0] : (raw ?? "")).trim();
+  return { typed, id: /^\d+$/.test(typed) ? typed : null };
+}
+
 export default async function StudioPage({
   searchParams,
 }: {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
-  /* `?draft=<id>` — the whole of US-012's addressability, and it is validated here rather than
-     handed to the API.
-     ponytail: one regex, no parser. It is not distrust of the backend — `GET /drafts/abc`
-     answers 422 with a usable message — it is that a query string has more shapes than a path
-     segment does. `?draft=` is empty and would read as `/drafts/`, and `?draft=1&draft=2`
-     arrives as an array; both would otherwise become a request nobody meant to make. */
-  const raw = (await searchParams).draft;
-  const wanted = (Array.isArray(raw) ? raw[0] : (raw ?? "")).trim();
-  const id = /^\d+$/.test(wanted) ? wanted : null;
+  const params = await searchParams;
+  const { typed: wanted, id } = idParam(params, "draft");
+
+  /* `?research=<id>` — which research run to show under the draft.
+     **This is the whole of the draft→research link, and it is in the address bar because it is
+     nowhere else.** `Draft` has no `research_job_id` column: nothing in the schema connects a
+     draft to the research behind it, so there is no id to read off the draft. Nor is that link
+     obviously the right one — the chain is brief → dossier → candidate, so the true foreign key
+     is likely to hang off the editorial brief and a draft would reach research *through* it.
+     Resolving the id here rather than inside the panel is what keeps that an open question: the
+     day the column lands, whichever one it is, this line changes and the panel does not. */
+  const { typed: wantedResearch, id: researchId } = idParam(params, "research");
 
   // The library is read here so the picker has something to offer. A failed read is handed on
   // as `null` rather than as `[]`: only the templates are load-bearing enough to replace the
@@ -36,12 +70,40 @@ export default async function StudioPage({
   // rather than awaited after it: it is on the page's critical path and depends on nothing
   // here. A failed read is handed on as `null` and the control then says nothing about the
   // count; it never takes the page down, and it never falls back to 3.
-  const [templates, assets, drafts, requested, health] = await Promise.all([
+  // The requested draft's command history rides alongside the draft itself rather than being
+  // fetched by the panel after it mounts. A Publish button rendered before its history has
+  // arrived is a Publish button rendered without the history, and `GET /publications`' own
+  // docstring names that as how one post gets commanded twice. A failed read is handed on as
+  // `null` and the panel says so — it never renders as "nothing has been commanded".
+  // The dossier `?research=` named, and the index of runs that exist. Both in the `Promise.all`
+  // rather than after it: neither depends on anything here, and a research panel that fills in
+  // after the draft has painted is a panel a reviewer reads the page without.
+  const [
+    templates,
+    assets,
+    drafts,
+    requested,
+    health,
+    publications,
+    publishing,
+    dossier,
+    jobs,
+  ] = await Promise.all([
     getJson<Template[]>("/templates"),
     getJson<Asset[]>("/assets"),
     getJson<Draft[]>("/drafts"),
     id === null ? Promise.resolve(null) : getJson<Draft>(`/drafts/${id}`),
     getJson<Health>("/health"),
+    id === null ? Promise.resolve(null) : getJson<Publication[]>(`/drafts/${id}/publications`),
+    // Where a command would go and whether it may go at all. Read unconditionally — it is one
+    // small response and the panel needs both fields before the first button is pressed, not
+    // after a command comes back 403.
+    getJson<PublishingTarget>("/publishing"),
+    researchId === null ? Promise.resolve(null) : getJson<Dossier>(`/research/${researchId}`),
+    // The index is read whether or not a run was named, because it is what a reviewer looking
+    // at an unresearched draft needs in order to reach one. A failed read is handed on as
+    // `null` and the panel says so: "no runs exist" is a claim a failed request cannot support.
+    getJson<ResearchJobSummary[]>("/research"),
   ]);
 
   /* Why the requested draft is not on screen, in words, or `null` when none was asked for.
@@ -58,6 +120,20 @@ export default async function StudioPage({
             : `HTTP ${requested.status}: ${requested.message}`
           : null;
 
+  /* Why the requested research run is not on screen — the same three-way distinction `missing`
+     makes for the draft, because "none was asked for", "that id is not a number" and "the read
+     failed" are three different things to tell a reviewer and only one of them is an error. */
+  const researchUnavailable =
+    wantedResearch === ""
+      ? null
+      : researchId === null
+        ? `"${wantedResearch}" is not a research job id. A job id is a number, as in ?research=4.`
+        : dossier && !dossier.ok
+          ? dossier.kind === "network"
+            ? `Could not reach ${API_BASE} (${dossier.message}).`
+            : `HTTP ${dossier.status}: ${dossier.message}`
+          : null;
+
   /* Narrowed to three fields before it crosses into the client component. `GET /drafts` answers
      with every draft's full `DraftOut`, base64 PNG included — 530KB for the seven rows in the
      database today — and all of it would otherwise be serialized into the page just to render a
@@ -72,7 +148,8 @@ export default async function StudioPage({
       <h1 className="mt-2 text-display font-semibold tracking-[-0.04em]">Studio</h1>
       <p className="mt-2 max-w-2xl text-body text-muted">
         Turn one clear point into a reviewable draft, with the exact templates and assets that
-        produced it kept visible. Nothing publishes from here.
+        produced it kept visible. Nothing publishes on its own — a person commands it, against
+        the exact revision they read, and is asked to confirm first.
       </p>
       {templates.ok ? (
         /* Keyed by the requested id so a link from one draft to another remounts the component.
@@ -90,6 +167,21 @@ export default async function StudioPage({
           initialDraft={requested?.ok ? requested.data : null}
           missing={missing}
           variantsMax={health.ok ? health.data.variants_max : null}
+          publications={publications?.ok ? publications.data : null}
+          /* `null` when the read failed, which is deliberately not the same as either field's
+             own falsy value. An unread flag is not "publishing is off" and an unread account is
+             not "there is no account" — the panel says which, and only a *read* `false`
+             disables anything. */
+          publishing={publishing.ok ? publishing.data : null}
+          research={{
+            dossier: dossier?.ok ? dossier.data : null,
+            unavailable: researchUnavailable,
+            // `null` when the index read failed, which is not "no research has been run" — the
+            // same distinction the assets and drafts reads above carry, and it matters more
+            // here: a panel saying nothing has been researched, on a failed request, is the
+            // input that gets an uncited draft pushed.
+            jobs: jobs.ok ? jobs.data : null,
+          }}
         />
       ) : (
         <ApiFailureNotice failure={templates} className="mt-8" />

@@ -115,7 +115,178 @@ export type Draft = {
   visual_png: string | null;
   has_previous_visual: boolean;
   zernio_post_id: string | null;
+  // What a publication command has to be confirmed against — `Draft.revision` counts
+  // human-visible changes only. Required on every schedule/publish/cancel body and given no
+  // default anywhere in this file for the reason `ScheduleIn` gives on the backend: a client
+  // that may omit it can publish words nobody approved.
+  revision: number;
   lineage: { hook: LineageEntry; structure: LineageEntry; visual: LineageEntry };
+};
+
+/** The three things a human can command against a post that already exists in Zernio —
+ *  `ACTIONS` in backend/app/models/publication.py. */
+export type PublicationAction = "schedule" | "publish_now" | "cancel_schedule";
+
+/** `GET /publishing` — where a command would go, and whether it may go at all.
+ *
+ *  Its own route rather than keys on `/health`, which states the rule that would break:
+ *  presence flags and scalar ceilings, never a value. The Inbox footer renders `credentials`
+ *  row-per-key as a health light, so a string in there draws a junk boolean.
+ *
+ *  `account_id` is **an opaque Zernio id, not a display name** — the label lives in Zernio
+ *  behind an accounts call this app does not speak. Render it as an identifier, never as a
+ *  person. `null` means `GETLATE_LINKEDIN_ID` is unset, which is a real state (pushes fail),
+ *  and is not the same as the read having failed. */
+export type PublishingTarget = {
+  enabled: boolean;
+  platform: string;
+  account_id: string | null;
+};
+
+/** `PublicationOut` (api_drafts.py) — one command and what became of it. `GET
+ *  /drafts/{id}/publications` returns these newest first, and that list *is* the audit trail;
+ *  there is no separate audit table.
+ *
+ *  **The three time fields are `null` for `publish_now` and `cancel_schedule`, which name no
+ *  future time.** That is an absence, not a time of midnight, and it renders as `—`.
+ *  `attempts` is the opposite case: a row is committed before the first attempt is counted, so
+ *  `0` there is a measurement and printing it as `—` would hide a command that was written
+ *  down and never sent. */
+export type Publication = {
+  id: number;
+  draft_id: number;
+  draft_revision: number;
+  action: PublicationAction;
+  requested_local_time: string | null;
+  timezone: string | null;
+  scheduled_utc: string | null;
+  // `requested` — written down, not yet sent. `accepted` — Zernio took it. `failed` — Zernio
+  // refused. None of the three claims the post is live; that is `Draft.went_live_at`.
+  state: "requested" | "accepted" | "failed";
+  attempts: number;
+  last_error: string | null;
+  created_at: string;
+  accepted_at: string | null;
+};
+
+/* --- research ---------------------------------------------------------------------------- */
+
+/** `CLAIM_STATUSES` in backend/app/models/research.py — what the evidence did to one claim.
+ *
+ *  **`unsupported` is a recorded state, not an empty citation list.** `research.py` restructured
+ *  a table so that "nothing supports this" is a value you can filter on rather than a silence a
+ *  reader has to notice, and a client that infers it from `supporting_citation_ids.length === 0`
+ *  undoes that: a `refuted` claim has an empty supporting list too, and calling one two sources
+ *  actively contradict "uncited" says the opposite of what happened to it. Read `status`. */
+export type ClaimStatus = "supported" | "disputed" | "refuted" | "unsupported";
+
+/** `supports` or `contradicts`. A contradiction is a citation, not a failure. */
+export type Stance = "supports" | "contradicts";
+
+/** One page a research run actually fetched — `SourceOut` in backend/app/api_research.py.
+ *
+ *  **Fetched means read, never verified.** `trust_tier` and `published_at` are `null` on every
+ *  row this application writes — nothing assigns a tier, and the fetcher's parser never reads
+ *  the attributes a publication date lives in — so they render as `—`, and a fallback of
+ *  `"unknown"` would put a measurement on screen that nobody took. `publisher` is the hostname
+ *  of the final URL and no masthead was ever read.
+ *
+ *  **Link `url`, never `requested_url`.** `url` is the address that served the bytes, after
+ *  redirects; a citation naming the requested one cites a page nobody read. Both are here so a
+ *  reviewer can see the hop, and they are equal when there was none. */
+export type ResearchSource = {
+  id: number;
+  url: string;
+  requested_url: string;
+  title: string | null;
+  publisher: string | null;
+  published_at: string | null;
+  fetched_at: string;
+  trust_tier: string | null;
+  // sha256 of the bytes as served — what lets a reviewer re-fetch and prove whether they are
+  // reading what the model read. The only sense in which any of this is checkable.
+  content_hash: string;
+};
+
+/** The words in one source that bear on one claim — `CitationOut`. */
+export type Citation = {
+  id: number;
+  claim_id: number;
+  source_id: number;
+  stance: Stance;
+  span: string;
+  // The source's hash when this span was taken, which can differ from the source row's own if
+  // that page were ever re-fetched. That difference is the audit trail doing its job.
+  source_content_hash: string;
+};
+
+export type Claim = {
+  id: number;
+  text: string;
+  status: ClaimStatus;
+  supporting_citation_ids: number[];
+  contradicting_citation_ids: number[];
+};
+
+/** Something the run could not settle. `claim_id` is `null` for a question the model raised and
+ *  made no claim about — both are unknowns, only one has a row to look at. */
+export type Unknown = { text: string; claim_id: number | null };
+
+/** What the run cost. **Every field is `number | null` and the null is the point.**
+ *
+ *  `null` is "that step never ran"; `0` is a measurement. `queries: 0` is a search loop that
+ *  issued nothing, `null` is a `none`-mode run where there was no loop. So render with an
+ *  explicit `=== null` test: `{spend.queries || "—"}` prints `—` for a measured zero, which is
+ *  the same absence-as-measurement error read backwards, and it looks correct. */
+export type ResearchSpend = {
+  queries: number | null;
+  sources_found: number | null;
+  sources_fetched: number | null;
+  llm_calls: number | null;
+  // Which ceiling stopped the run early — `"queries"`, `"fetches"`, `"seconds"` — or `null` when
+  // none did. "Four sources because the fetch ceiling bit" and "four sources is all there were"
+  // are the same number and a different fact.
+  budget_exhausted: string | null;
+};
+
+/** `GET /research/{job_id}` — one run: what it asked, what it read, what it concluded.
+ *
+ *  `unknowns` and `contradictions` overlap `claims` deliberately; every unsupported claim is in
+ *  two of them. The lists are in the run's own insertion order and **must not be re-sorted** —
+ *  `research.dossier()`'s docstring refuses ordering by status or support for the reason the
+ *  project's never-rank rule gives. Prominence on screen is a badge and a summary, not a sort. */
+export type Dossier = {
+  job_id: number;
+  question: string;
+  // What ran, and what the floor detector said was needed. Both, because one field would make
+  // "the system asked for light and the run did none" unanswerable afterwards.
+  mode: string;
+  recommended_mode: string;
+  mode_signals: string[];
+  // `completed` with five unsupported claims is a **success** — the run found out that nothing
+  // supports them. `failed` is the run that died, and the dossier does not carry its reason.
+  state: string;
+  researched_at: string;
+  freshness_days: number | null;
+  sources: ResearchSource[];
+  claims: Claim[];
+  citations: Citation[];
+  unknowns: Unknown[];
+  contradictions: Claim[];
+  spend: ResearchSpend;
+};
+
+/** One row of `GET /research` — enough to recognise a run by, and nothing it concluded.
+ *
+ *  No counts, deliberately: two counts side by side read as a comparison of the runs, and there
+ *  is nothing here to compare. Newest first is a chronology, not a ranking. */
+export type ResearchJobSummary = {
+  job_id: number;
+  question: string;
+  mode: string;
+  recommended_mode: string;
+  state: string;
+  researched_at: string;
 };
 
 /** `MetricSnapshot` in backend/app/models/metric.py, as `GET /posts/{id}/history` returns it —
@@ -227,7 +398,26 @@ export function calls(n: number, unit: string): string {
  * optimistic updates or shared client-side cache — none of which exists yet.
  */
 export type ApiFailure =
-  | { ok: false; kind: "http"; status: number; message: string }
+  | {
+      ok: false;
+      kind: "http";
+      status: number;
+      message: string;
+      /* FastAPI's own `detail`, parsed and unflattened, beside the sentence `messageFrom` made
+       * of it. A fourth fact, added for one consumer that cannot do its job without it: the
+       * publication routes answer 409 two ways — `{error, current_revision}` when the draft
+       * moved under the reviewer, and a plain string when it was never pushed — and only the
+       * first can offer a reload. Both arrive here as status 409, and `messageFrom` renders the
+       * object as "…, current_revision: 5", so the number survives only as text. Telling them
+       * apart off `message` means regexing a sentence, which is the `[object Object]` class of
+       * bug this module's other comments exist to prevent.
+       *
+       * `unknown`, never a typed shape: `detail` is a string, a list of `{loc,msg}` or an
+       * object depending on the endpoint and on whether FastAPI or a handler raised it, and a
+       * type asserting one of those would be a lie the compiler enforces. `null` when the body
+       * was not JSON at all — a proxy answering 502 with HTML. */
+      detail?: unknown;
+    }
   | { ok: false; kind: "network"; message: string };
 
 export type ApiResult<T> = { ok: true; data: T } | ApiFailure;
@@ -304,7 +494,16 @@ async function request<T>(
     // this throw would land in the network branch above and report a live 500 as an
     // unreachable backend, which is the exact conflation this module exists to remove.
     const body = (await res.json().catch(() => null)) as { detail?: unknown } | null;
-    return { ok: false, kind: "http", status: res.status, message: messageFrom(body?.detail, res.status) };
+    return {
+      ok: false,
+      kind: "http",
+      status: res.status,
+      message: messageFrom(body?.detail, res.status),
+      // The same value `messageFrom` was given, kept alongside what it made of it rather than
+      // instead of it — see `ApiFailure`. Every existing call site reads `message` and is
+      // untouched.
+      detail: body?.detail,
+    };
   }
 
   try {

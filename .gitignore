@@ -8,3 +8,14 @@ node_modules/
 .pytest_cache/
 .scratch/tmp/
 media/
+
+# Raw corpus material: post text and creator images. Purged from history 2026-08-05 —
+# this repository is public and a publicly viewable post is not a licence to redistribute
+# its media. See docs/adr/0001-public-corpus-material.md.
+.scratch/corpus-widening/
+
+# App screenshots. Kept as review evidence — the visual defects this project has had were
+# all found by looking at a rendered page — but the Corpus and Scoreboard shots show real
+# post titles with their engagement and impression counts, which is business data and not
+# something a public repository should carry. Purged in the same rewrite.
+.scratch/v3/shots/

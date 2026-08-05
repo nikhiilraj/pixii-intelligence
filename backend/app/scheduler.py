@@ -1,13 +1,15 @@
 import logging
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from app.autonomous import run_autonomous
 from app.config import settings
+from app.daily import run_daily_slot
 from app.db import engine
 from app.llm import AzureChat
 from app.metrics import sync_metrics
-from app.notify import notify
+from app.reconcile import reconcile_publications
 from app.rendering import CloudflareRenderer
 from app.zernio import ZernioClient
 
@@ -19,7 +21,20 @@ scheduler = BackgroundScheduler(timezone="UTC")
 
 
 def run_metrics_sync() -> None:
-    """Refresh every post's metrics. Failures are logged, never raised into the scheduler."""
+    """Refresh every post's metrics, then reconcile what Zernio accepted but never delivered.
+
+    Failures are logged, never raised into the scheduler.
+
+    Two questions on one tick rather than a second job, and in this order. The sync asks what
+    every post has done; reconciliation asks what became of the handful of commands still
+    unaccounted for — and it asks **after** the sync has committed, with its own commits, so a
+    reconciliation that dies cannot roll back a metrics sync that already succeeded. It also
+    means a post the sync just observed live is skipped rather than asked about.
+
+    ponytail: not a third scheduler entry. The note above still holds — two periodic jobs do
+    not justify a broker, and a third would only add a way for these to disagree about how
+    recent "recent" is.
+    """
     from sqlmodel import Session
 
     client = ZernioClient()
@@ -27,6 +42,7 @@ def run_metrics_sync() -> None:
         with Session(engine) as session:
             result = sync_metrics(session, client)
             session.commit()
+            result["reconciled"] = reconcile_publications(session, client)
         log.info("scheduled metrics sync complete: %s", result)
     except Exception:
         # A scheduler that dies on one bad run stops refreshing silently, which is the
@@ -36,24 +52,30 @@ def run_metrics_sync() -> None:
         client.close()
 
 
-def run_autonomous_generation() -> None:
-    """Produce drafts unattended. Never reaches Zernio; review stays a human step."""
+def tick_daily_slot() -> None:
+    """Ask whether today's editorial slot is due and unclaimed. Usually the answer is no.
+
+    Called far more often than it runs. `run_daily_slot` owns every decision — whether the
+    slot has arrived, whether another process already took it, and whether a card still
+    needs delivering — because a guard split between the trigger and the function is a guard
+    with two versions of the truth.
+
+    The adapters are constructed before that question is asked, which buys a pair of idle
+    HTTP clients on most ticks and keeps the `finally` that closes them honest. A run is
+    minutes of paid work; the clients are microseconds.
+    """
     from sqlmodel import Session
 
     llm, renderer = AzureChat(), CloudflareRenderer()
     try:
         with Session(engine) as session:
-            result = run_autonomous(
-                session,
-                llm,
-                renderer,
-                cap=settings.autonomous_max_drafts,
-                notify=notify,
-            )
-            session.commit()
-        log.info("scheduled autonomous run complete: %s", result)
+            run = run_daily_slot(session, llm, renderer)
+        if run is not None:
+            log.info("daily slot %s finished: %s", run.run_date, run.status)
     except Exception:
-        log.exception("scheduled autonomous run failed")
+        # `run_daily_slot` records and notifies its own failures. This catches what happens
+        # around it — a database that will not connect — which has no row to record against.
+        log.exception("daily slot tick failed")
     finally:
         llm.close()
         renderer.close()
@@ -74,16 +96,30 @@ def start() -> None:
         max_instances=1,
     )
     if settings.enable_autonomous:
+        # Here, not on the first tick. `slot_date` builds this on every call inside
+        # `tick_daily_slot`'s try, so a typo in `DAILY_SLOT_TIMEZONE` would disable the daily
+        # run permanently while `start()` logged the bad string as though it meant something.
+        # Failing at boot is the difference between a misconfiguration and a silent outage.
+        ZoneInfo(settings.daily_slot_timezone)
         scheduler.add_job(
-            run_autonomous_generation,
+            tick_daily_slot,
             "interval",
-            hours=settings.autonomous_interval_hours,
-            id="autonomous-generation",
+            minutes=settings.daily_tick_minutes,
+            id="daily-slot",
             replace_existing=True,
             coalesce=True,
             max_instances=1,
+            # Immediately, not one interval from now. A process that starts at 11:00 having
+            # been down since 08:00 has a slot to catch up on, and waiting half an hour to
+            # ask is half an hour of a run that was already late.
+            next_run_time=datetime.now(UTC),
         )
-        log.info("autonomous generation every %sh", settings.autonomous_interval_hours)
+        log.info(
+            "daily slot %02d:00 %s, checked every %smin",
+            settings.daily_slot_hour,
+            settings.daily_slot_timezone,
+            settings.daily_tick_minutes,
+        )
     else:
         log.info("autonomous generation disabled")
 

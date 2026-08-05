@@ -28,6 +28,13 @@ class ZernioClient:
             timeout=30.0,
             transport=transport,
         )
+        # A second client for one job: the PUT to a presigned storage URL in `upload_media`.
+        # It cannot be `self._client`, which carries a `base_url` and an `Authorization`
+        # header. The presigned URL is absolute and already signed, and the signature covers
+        # a fixed set of headers — an unexpected `Authorization` is what the signature was
+        # computed without, so the store rejects the request. Same transport so a test can
+        # intercept both halves of the upload.
+        self._uploads = httpx.Client(timeout=60.0, transport=transport)
 
     def fetch_posts(self, platform: str | None = None) -> list[dict]:
         """Every post the account can report on, paged.
@@ -77,6 +84,106 @@ class ZernioClient:
             )
         return response.json()
 
+    def update_post(self, post_id: str, payload: dict, request_id: str | None = None) -> dict:
+        """Change a post that already exists. This is how a draft stops being a draft.
+
+        **`isDraft: false` is what takes it out of draft state, not `scheduledFor`.** Sending
+        a time alone leaves an existing draft sitting in draft — it acquires a schedule it
+        will never act on, and the post looks scheduled in Pixii and is not in Zernio. The
+        docs are explicit about it and it is the single easiest way to ship a publishing
+        feature that silently does nothing.
+
+        `x-request-id` for the same reason `create_post` takes one: a retry after a timeout
+        must be the same logical command, not a second one.
+
+        A refusal raises with the service's own words. A validation refusal and a network
+        timeout are different events and only one of them may be retried, which is why this
+        does not swallow either into a bare False.
+        """
+        headers = {"x-request-id": request_id} if request_id else None
+        response = self._client.put(f"/posts/{post_id}", json=payload, headers=headers)
+        if response.status_code >= 400:
+            raise ZernioRefused(
+                f"Zernio refused the update ({response.status_code}): {response.text[:300]}"
+            )
+        return dict(response.json())
+
+    def get_post(self, post_id: str) -> dict:
+        """One post as Zernio currently sees it. The reconciler's only question.
+
+        Not `list_posts`: that walks every page of the account to answer "what exists",
+        where this answers "what happened to this one". Not `/analytics` either — that is a
+        recent 50-row window and 11 published posts in the live account have no row in it at
+        all, so an absence there is not evidence that a post did not publish.
+
+        This method was written once before and deleted the same hour for having no caller.
+        It is back with one: `reconcile.reconcile_publications`.
+        """
+        response = self._client.get(f"/posts/{post_id}")
+        if response.status_code >= 400:
+            raise ZernioRefused(
+                f"Zernio would not return post {post_id} ({response.status_code}): "
+                f"{response.text[:300]}"
+            )
+        body = response.json()
+        # The single-post route returns the post either bare or wrapped in `post`; both
+        # shapes are documented across versions and neither is an error.
+        post = body.get("post") if isinstance(body, dict) else None
+        return dict(post if isinstance(post, dict) else body)
+
+    def upload_media(self, data: bytes, filename: str, content_type: str) -> str:
+        """Put these bytes where a post can reference them. Returns the public URL.
+
+        Media reaches a post **by URL only**: `mediaItems[].url` is the sole way in, and the
+        schema requires it be "publicly reachable over HTTPS". There is no multipart upload
+        on `/posts` and no base64 field, so a picture we hold as bytes has to become a URL
+        first — two calls, presign then PUT, before the post can be created at all.
+
+        `/media/upload-direct` looks like the same thing in one call and is not: it is the
+        inbox-attachment endpoint, capped at 25 MB, and its files auto-delete after seven
+        days with no path to permanent storage. Presigned uploads are copied to permanent
+        storage when a post using them publishes. For a picture meant to outlive the push,
+        the one-call route is the wrong one.
+
+        ponytail: the returned URL is not stored, so a re-push (`force=True`) uploads again
+        and gets a new URL. That is what makes a re-push after a redraw carry the new image
+        rather than the old one — but it also means the retry of an ambiguous create is no
+        longer caught by the API's own 24-hour duplicate hash, which is keyed on content
+        **plus media URLs**. Storing the URL against a hash of the image bytes fixes both;
+        it costs a column and a migration, and nothing has needed it yet.
+        """
+        response = self._client.post(
+            "/media/presign",
+            # `size` is optional and pre-validates against the 5 GB ceiling. Sent because a
+            # rejection here costs one round trip, where a rejection at PUT time costs the
+            # upload itself.
+            json={"filename": filename, "contentType": content_type, "size": len(data)},
+        )
+        if response.status_code >= 400:
+            raise ZernioRefused(
+                f"Zernio refused the upload ({response.status_code}): {response.text[:300]}"
+            )
+
+        body = response.json()
+        upload_url, public_url = body.get("uploadUrl"), body.get("publicUrl")
+        if not upload_url or not public_url:
+            raise ZernioResponseError(
+                f"/media/presign returned no upload target: {str(body)[:200]}"
+            )
+
+        # The Content-Type must be the one presign was asked for, byte for byte: it is part
+        # of what the URL was signed over, so a mismatch fails the signature rather than the
+        # upload, and the error comes back from the storage host in its own vocabulary.
+        stored = self._uploads.put(
+            upload_url, content=data, headers={"Content-Type": content_type}
+        )
+        if stored.status_code >= 400:
+            raise ZernioRefused(
+                f"The media store refused the upload ({stored.status_code}): "
+                f"{stored.text[:300]}"
+            )
+        return str(public_url)
+
     def list_posts(self) -> list[dict]:
         """Every post on the account, paged to completion.
 
@@ -108,3 +215,4 @@ class ZernioClient:
 
     def close(self) -> None:
         self._client.close()
+        self._uploads.close()

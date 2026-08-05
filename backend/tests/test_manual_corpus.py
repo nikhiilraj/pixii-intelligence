@@ -114,6 +114,22 @@ def test_a_manual_post_with_no_content_is_rejected(session):
     app.dependency_overrides.clear()
 
 
+def test_a_manual_post_rejects_negative_counts(session):
+    client = client_with(session)
+
+    engaged = client.post(
+        "/corpus/manual", json={"content": "A real post.", "engaged_actions": -1}
+    )
+    impressions = client.post(
+        "/corpus/manual", json={"content": "Another real post.", "impressions": -1}
+    )
+
+    assert engaged.status_code == 422
+    assert impressions.status_code == 422
+    assert session.exec(select(Post)).all() == []
+    app.dependency_overrides.clear()
+
+
 def test_adding_a_manual_post_through_the_api(session):
     body = client_with(session).post("/corpus/manual", json=CREATOR_POST).json()
 

@@ -1,4 +1,4 @@
-.PHONY: dev up down api web install migrate test lint check
+.PHONY: dev up down api web install migrate test lint build check
 
 # One command to get everything running locally.
 dev: up
@@ -38,4 +38,7 @@ lint:
 	cd backend && .venv/bin/ruff check . && .venv/bin/mypy app
 	cd frontend && pnpm lint && pnpm exec tsc --noEmit
 
-check: lint test
+build:
+	cd frontend && pnpm build
+
+check: lint test build

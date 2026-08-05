@@ -42,6 +42,10 @@ describe("getJson", () => {
       kind: "http",
       status: 500,
       message: "the database went away mid-query",
+      // The parsed `detail` beside the sentence made of it, not instead of it. Here it is the
+      // same string twice; on the 409 the publication panel reads it is an object whose
+      // `current_revision` survives only in this field.
+      detail: "the database went away mid-query",
     });
   });
 
@@ -146,6 +150,7 @@ describe("postJson", () => {
       kind: "http",
       status: 409,
       message: "a retired template cannot be edited",
+      detail: "a retired template cannot be edited",
     });
   });
 

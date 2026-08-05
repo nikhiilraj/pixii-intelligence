@@ -84,6 +84,7 @@ function draft(overrides: Partial<Draft> = {}): Draft {
     visual_png: null,
     has_previous_visual: false,
     zernio_post_id: "6a289584ed8bce87c92f5466",
+    revision: 1,
     lineage: {
       hook: { family: "eb93614c", version: 1, name: "open-question-then-tested" },
       structure: { family: "e8742a6d", version: 2, name: "case-study-loop" },

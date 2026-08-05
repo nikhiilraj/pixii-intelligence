@@ -73,7 +73,50 @@ class Settings(BaseSettings):
     # cannot flood the review queue. Off by default — unattended generation is opt-in.
     enable_autonomous: bool = False
     autonomous_max_drafts: int = 2
-    autonomous_interval_hours: int = 24
+
+    # The daily editorial slot. The hour is **local** to `daily_slot_timezone`, and the run
+    # is keyed on the local date — see `daily.slot_date` for why a UTC date runs the slot
+    # twice on some days and never on others.
+    #
+    # The tick is not the slot. It asks "is today's slot due and unclaimed", which is why a
+    # process that was asleep at 09:00 still runs the day's slot when it wakes. Thirty
+    # minutes is one indexed lookup on a table with one row per day; the interval bounds how
+    # late a recovered run can be, not how much work is done.
+    daily_slot_hour: int = 9
+    daily_slot_timezone: str = "Asia/Kolkata"
+    daily_tick_minutes: int = 30
+
+    # Where a Teams card's link points. Not a credential and not a secret — it is the
+    # address of this app's own web UI, which authorises on its own when the link opens.
+    pixii_base_url: str = "http://localhost:3000"
+
+    # The publishing kill switch. Off by default, and that default is the feature: the
+    # schedule/publish/cancel code can ship and sit inert until someone deliberately turns
+    # it on, and can be turned off again during an incident without a code rollback.
+    #
+    # It stops **external commands only**. Generation, review, and pushing a draft to Zernio
+    # all continue — the switch exists so a publishing problem does not take the rest of the
+    # tool down with it.
+    #
+    # This is the runtime half of the decision recorded in
+    # `docs/adr/0002-human-publication-authority.md`: automation prepares, a human commands,
+    # and on localhost with one operator that human is the authorisation boundary. The day
+    # this runs anywhere else, authentication comes before this flag may be true.
+    publishing_enabled: bool = False
+
+    # Reconciliation: how long after a post's own moment — its scheduled instant, or the
+    # moment a `publish_now` was accepted — before Zernio is asked what actually happened.
+    #
+    # A grace period rather than an immediate check, because a post that is one second past
+    # its schedule and still `scheduled` is a queue doing its job, not a drift. Fifteen
+    # minutes is comfortably beyond any publish latency and far inside the interval that
+    # matters to a person.
+    reconcile_grace_minutes: int = 15
+    # How long an accepted command may sit with no clear answer before someone is told that
+    # Pixii cannot confirm it. Longer than the metrics tick, so at least one check has
+    # happened and come back unclear before the card goes out; short enough that the news
+    # still arrives on the day. This does **not** end the polling — see `reconcile.py`.
+    reconcile_stale_hours: int = 12
 
     # How many drafts one idea may be written as at `POST /drafts/variants`. **A ceiling, not a
     # default**: N variants is N times the paid completions and N renders inside one request, and

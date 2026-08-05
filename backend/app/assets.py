@@ -222,11 +222,12 @@ def resolve_asset_values(
 ) -> dict[str, str]:
     """`values` with every `image_url` slot turned into something the renderer can load.
 
-    The one place asset resolution happens. All three render paths go through it —
-    `generation._draw_visual` (reached from both `generate_draft` and `regenerate_visual`)
-    and `api_templates.preview_visual` — because a slot that resolves when a draft is
-    generated and not when it is previewed or re-rendered is worse than one that never
-    resolves: the failure is invisible until someone looks at the picture.
+    The one place asset resolution happens. All four render paths go through it —
+    `generation._draw_visual` (reached from both `generate_draft` and `regenerate_visual`),
+    `api_templates.preview_visual`, `api_templates.preview_unsaved`, and `extraction._must_render` —
+    because a slot that resolves when a draft is generated and not when it is previewed or
+    re-rendered is worse than one that never resolves: the failure is invisible until someone
+    looks at the picture.
 
     An `image_url` slot may hold:
 

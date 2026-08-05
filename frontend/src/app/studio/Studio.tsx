@@ -28,9 +28,14 @@ import {
   type Asset,
   type AssetKind,
   type Draft,
+  type Publication,
+  type PublishingTarget,
   type Spend,
   type Template,
 } from "@/lib/api";
+
+import PublishPanel from "./PublishPanel";
+import ResearchPanel, { type ResearchView } from "./ResearchPanel";
 
 type Picked = { hook: number | null; structure: number | null; visual: number | null };
 
@@ -531,7 +536,7 @@ function Variants({
           three and choose. This batch spent {calls(batch.llm_calls, "chat completion")} and{" "}
           {calls(batch.image_calls, "image render")}. Keeping one <strong>deletes</strong> the
           rest, so they do not sit in the Inbox as work nobody is waiting on; the kept one is
-          still only a draft, and nothing publishes from here.
+          still only a draft, and keeping it publishes nothing.
         </p>
       </Card>
 
@@ -609,6 +614,24 @@ export default function Studio({
   // stated confidently is worse than no number. The client never sends a `count` — reading the
   // ceiling is to *state* it; applying it stays the server's job.
   variantsMax = null,
+  // Every command already issued against `initialDraft`, newest first — `null` when the read
+  // failed, which is not an empty history. Read on the server beside the draft itself so the
+  // publication panel is complete on first paint: a Publish button that renders before its
+  // history has arrived is a Publish button shown without the history, for as long as the
+  // request takes.
+  publications = null,
+  // `GET /publishing` — the destination and the kill switch, or `null` when that read failed.
+  // Handed straight down; the panel is what knows the difference between "off" and "unknown".
+  publishing = null,
+  // The research run this page was pointed at, why there isn't one, and the runs that exist.
+  //
+  // **Passed through without being looked at.** Where the job id came from is `page.tsx`'s
+  // business — `?research=` today, and `draft.research_job_id` the day the schema links the
+  // two — and keeping that resolution out of here is what makes it a one-line change. `null`
+  // means the caller wired no research at all, which is why the panel then does not render:
+  // it is not "there is no research", and a panel saying so on a page that never asked would
+  // be a claim about the database made by a component that made no request.
+  research = null,
 }: {
   templates: Template[];
   assets: Asset[] | null;
@@ -616,6 +639,9 @@ export default function Studio({
   initialDraft?: Draft | null;
   missing?: string | null;
   variantsMax?: number | null;
+  publications?: Publication[] | null;
+  publishing?: PublishingTarget | null;
+  research?: ResearchView | null;
 }) {
   const [idea, setIdea] = useState("");
   const [picked, setPicked] = useState<Picked>({ hook: null, structure: null, visual: null });
@@ -700,7 +726,13 @@ export default function Studio({
         <span><strong className="font-medium text-text">{approved.length}</strong> approved templates</span>
         <span><strong className="font-medium text-text">{drafts?.length ?? "—"}</strong> drafts</span>
         <span>{draft ? `draft #${draft.id} open` : "new composition"}</span>
-        <span className="ml-auto">Nothing publishes from here</span>
+        {/* This line used to read "Nothing publishes from here", which was the truth for as
+            long as publishing happened in Zernio by hand. The publication panel below makes it
+            false, and a status bar contradicting a button a few hundred pixels under it is
+            exactly the defect this codebase keeps finding — something on screen that is not
+            what happens. What survived the change is the guarantee, which is narrower and
+            still absolute: automation prepares, a person commands. */}
+        <span className="ml-auto">Nothing publishes without you saying so</span>
       </div>
 
       <div className="mt-10 grid gap-10 lg:grid-cols-[22rem_minmax(0,1fr)]">
@@ -1012,11 +1044,14 @@ export default function Studio({
           <>
             <Lineage draft={draft} assets={library} />
 
-            {draft.zernio_post_id && (
-              <p className="text-xs text-muted">
-                In Zernio as a draft ({draft.zernio_post_id}). Publishing stays a human act.
-              </p>
-            )}
+            {/* "In Zernio as a draft ({id}). Publishing stays a human act." stood here, under
+                exactly the condition that now renders the publication panel — so the two always
+                appeared together, saying the same thing with the same id. It also went false the
+                moment it mattered: an accepted schedule or publish sets `isDraft: false`, and
+                this line would have read "as a draft" directly above a history row saying the
+                post is scheduled. Deleted rather than reworded; the panel's own first paragraph
+                names the post, and one place saying where the draft is cannot disagree with
+                itself. */}
 
             <article className="whitespace-pre-wrap border-y border-border py-6 text-[15px] leading-7">
               {draft.full_text}
@@ -1120,6 +1155,35 @@ export default function Studio({
                 {draft.zernio_post_id ? "In Zernio" : "Push to Zernio as draft"}
               </Button>
             </div>
+
+            {/* Not gated on anything, unlike the publication panel below. Research is what a
+                draft's factual claims rest on, so it is read before a push and not after one —
+                and a draft with no research behind it is the state this panel most needs to be
+                able to say out loud. */}
+            {research && <ResearchPanel draftId={draft.id} research={research} />}
+
+            {/* Only once there is a post in Zernio to command. Every route behind this panel
+                updates an existing post and none of them creates one, so before a push there
+                is nothing here but a 409 waiting to happen.
+
+                Keyed on the draft id, which is what resets the panel — its history is seeded
+                into state from the prop, so generating a second draft while `?draft=N` is open
+                would otherwise leave the first draft's commands on screen under the second
+                draft's id. The most dangerous possible thing for this panel to show.
+
+                `publications` describes the draft the page was read with. A draft written in
+                this session has no commands against it because it has only just been written,
+                so `[]` is a fact rather than an assumption — and it is only ever reached for a
+                draft whose id is not the one the server fetched history for. */}
+            {draft.zernio_post_id && (
+              <PublishPanel
+                key={draft.id}
+                draft={draft}
+                publishing={publishing}
+                publications={draft.id === initialDraft?.id ? publications : []}
+                onDraft={setDraft}
+              />
+            )}
           </>
         ) : missing ? (
           /* "We looked for that draft and it is not there" — never the empty state below.
@@ -1149,9 +1213,10 @@ export default function Studio({
             <p className="mt-2 max-w-2xl text-muted">
               Write an idea, choose a hook, a structure and a visual — or let Suggest choose them
               — and Generate writes the post and renders its picture here, stamped with the
-              templates that produced it. Or open one of the drafts listed on the left. Nothing
-              publishes from here: a draft reaches Zernio only when you push it, and goes live
-              only when a human publishes it there.
+              templates that produced it. Or open one of the drafts listed on the left. Writing
+              a draft publishes nothing: it reaches Zernio only when you push it, and goes live
+              only when a person schedules or publishes it — here, after confirming what that
+              commits to, or in Zernio by hand.
             </p>
           </Card>
         )}
