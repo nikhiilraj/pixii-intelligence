@@ -184,16 +184,25 @@ def _resolve(host: str, port: int) -> list[str]:
 def _check_address(raw: str, url: httpx.URL) -> None:
     """One resolved address, and anything tunnelled inside it, against the public internet.
 
-    **`is_global` alone decides every case here** — measured, not assumed: deleting
-    `is_private` or `is_loopback` from this expression fails no test, because CPython
-    defines `is_global` as *not* private in the first place, and 100.64.0.0/10 (carrier
-    NAT) is the only common address the named flags miss and `is_global` catches.
+    **Both halves of this expression are load-bearing.** Measured, not assumed — and the
+    measurement corrected an earlier version of this comment which claimed `is_global` alone
+    decided every case. It does not:
 
-    The named flags stay anyway, and that is a deliberate choice rather than an oversight.
-    `is_global` is derived from the IANA special-purpose registry and its membership has
-    changed between Python releases; this is the one predicate in the app where a quiet
-    upstream redefinition would open a hole rather than break a feature. They also record
-    what this refuses without making a reader go and read `ipaddress`.
+    * Keep only `not is_global` and multicast walks through. `ip_address('224.0.0.1').is_global`
+      is **True**, and so is `ff02::1`. `is_multicast` is the sole thing refusing them.
+    * Drop `not is_global` and carrier-grade NAT walks through. `100.64.0.0/10` is neither
+      private nor loopback nor anything else named here, and `is_global` is False for it.
+
+    What *is* true is that deleting any single named flag fails no test, because the named
+    flags overlap each other — loopback and link-local are both inside `is_private` for IPv4.
+    That redundancy is why the earlier claim looked right when spot-checked one flag at a
+    time, and it is exactly the reading that would have invited deleting the flag doing the
+    work.
+
+    The overlap is kept deliberately for a second reason: `is_global` is derived from the
+    IANA special-purpose registry and its membership has changed between Python releases.
+    This is the one predicate in the app where a quiet upstream redefinition opens a hole
+    rather than breaking a feature.
     """
     try:
         resolved = ipaddress.ip_address(raw)
