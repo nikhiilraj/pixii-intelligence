@@ -11,7 +11,7 @@ from app.config import settings
 from app.llm import LLM
 from app.models.draft import Draft
 from app.models.post import Post
-from app.models.stage import GenerationStage
+from app.models.stage import GenerationStage, advance
 from app.models.template import Template, TemplateKind
 from app.output_schema import validate as validate_output
 from app.prompts.tracing import new_correlation_id, traced_call
@@ -586,6 +586,16 @@ def _findings_dict(findings: list[gates.Finding] | tuple[gates.Finding, ...]) ->
 
 
 def _research_findings(planned: list, dossier: Any | None) -> tuple[list[str], list[str]]:
+    """The dossier's own verdicts, plus every planned claim it failed to settle.
+
+    **This checks the plan, and only the plan.** A factual assertion the model invented while
+    writing was never a `PlannedClaim`, so nothing here looks at it; and a `none`-mode draft
+    has no dossier at all, so the early return below checks nothing whatsoever. Both holes are
+    closed by `app.verification`, which reads the finished candidate instead — see its module
+    docstring. The two are complementary and both feed the same gate: this one asks "did
+    research settle what it was asked to", that one asks "can the post's own sentences be
+    stood behind".
+    """
     from app.models.research import DISPUTED, REFUTED, SUPPORTED, UNSUPPORTED
 
     if dossier is None:
@@ -626,7 +636,7 @@ def generate_reviewed_draft(
     Both renderers, for the reason `_renderer_for` gives: the visual can be suggested here,
     and the route calling this cannot know which renderer draws it until that has happened.
     """
-    from app import editorial, research, revision, rubric
+    from app import editorial, research, revision, rubric, verification
 
     correlation = new_correlation_id()
     hook = _resolve(session, TemplateKind.HOOK, hook_id)
@@ -777,13 +787,63 @@ def generate_reviewed_draft(
     draft.hook_text = str(written.get("hook") or "").strip()
     draft.body_text = str(written.get("body") or "").strip()
     draft.visual_values = _written_values(dict(written), visual)
-    draft.gate_results = _findings_dict(findings)
-    draft.generation_stage = GenerationStage.EVALUATING
 
-    if findings:
+    # Whether verification ran and could not be read. Tracked separately from `findings`
+    # because a verifier that answered unusably has not found a bad claim — it has failed to
+    # look — and the two must not arrive on the review screen as the same thing.
+    unverified = False
+    if not findings:
+        # **Only for a candidate that is otherwise clean.** One already carrying findings is
+        # going to `failed_review` whatever this says, and the call is billed; the rubric is
+        # skipped on exactly the same condition below, for exactly the same reason.
+        #
+        # `advance`, not an assignment, and **nothing here may set `REVISING`**: `ORDER` puts
+        # `VERIFYING` before it, so a run that recorded the revision loop as a stage could
+        # never legally reach this one. The loop above deliberately leaves the stage alone.
+        draft.generation_stage = advance(draft.generation_stage, GenerationStage.VERIFYING)
+        session.flush()
+        try:
+            review = verification.verify(
+                session,
+                llm,
+                candidate=written,
+                idea=idea,
+                dossier=found,
+                correlation_id=correlation,
+            )
+        except Exception as exc:
+            # Fail closed. A verifier nobody could read has not cleared this draft, and a
+            # draft that reached `ready` on a broken verifier is an evidence gate switched
+            # off silently — the failure this whole stage exists to make impossible.
+            unverified = True
+            draft.generation_stage = GenerationStage.FAILED_REVIEW
+            draft.generation_error = f"verifying: {type(exc).__name__}: {exc}"
+        else:
+            draft.verification_result = review.as_dict()
+            # **The union, not the verification lists alone.** Reaching here does not mean
+            # the research lists were empty: a planned claim the dossier failed to settle is
+            # in `unsupported` whether or not the post's wording echoes it closely enough to
+            # have raised a finding the first time. Passing only the new lists would drop
+            # every one of those, so the check that already worked would stop working the day
+            # this one was added.
+            findings = gates.check(
+                written,
+                template=visual,
+                recent_posts=recent,
+                asset_values=draft.asset_values,
+                unsupported_claims=[*unsupported, *review.unsupported],
+                contradicted_claims=[*contradicted, *review.contradicted],
+            )
+
+    draft.gate_results = _findings_dict(findings)
+
+    # `unverified` already recorded its own stage and reason; nothing below may overwrite it,
+    # least of all the rubric, which would be scoring wording nobody could check the facts of.
+    if not unverified and findings:
         draft.generation_stage = GenerationStage.FAILED_REVIEW
         draft.generation_error = draft.generation_error or "deterministic quality gates failed"
-    else:
+    elif not unverified:
+        draft.generation_stage = GenerationStage.EVALUATING
         try:
             report = rubric.evaluate(
                 written,

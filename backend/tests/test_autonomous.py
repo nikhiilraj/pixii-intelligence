@@ -33,6 +33,7 @@ _ANSWERS: list[tuple[str, str]] = [
     ("you choose which templates", "suggest"),
     ("you turn a post idea into an editorial brief", "brief"),
     ("you plan the argument of one post", "angle"),
+    ("you check a finished post", "verification"),
     ("you review one draft linkedin post", "rubric"),
 ]
 
@@ -87,6 +88,11 @@ class FakeLLM:
                 "beats": ["name the ambiguity", "show the editing principle"],
                 "cta": "remove one sentence that does not change the decision",
             }
+        if kind == "verification":
+            # No assertions: nothing in these topics needs checking against evidence, so
+            # verification blocks nothing. `tests/test_verification.py` is where a run
+            # that does assert something is exercised.
+            return {"assertions": []}
         if kind == "rubric":
             # No deductions: the draft is ready. A run of failed-review drafts is asserted
             # deliberately in the tests that want one, never as everything's background.
@@ -94,10 +100,11 @@ class FakeLLM:
         return self.written
 
 
-# How many model calls one topic buys, end to end: suggest, brief, angle, write, rubric.
+# How many model calls one topic buys, end to end: suggest, brief, angle, write,
+# verification, rubric.
 # Named rather than written as a literal at each assertion, because the number is a property
 # of the workflow and every test that hardcoded it would have to be found again when it moves.
-CALLS_PER_TOPIC = 5
+CALLS_PER_TOPIC = 6
 
 
 class FakeSearch:

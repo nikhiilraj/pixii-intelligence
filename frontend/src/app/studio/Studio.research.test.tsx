@@ -61,6 +61,8 @@ const DRAFT: Draft = {
   generation_stage: "ready",
   generation_error: null,
   gate_results: [],
+  // Null, not an empty review: this fixture is a draft nobody verified.
+  verification_result: null,
 };
 
 function renderStudio(research: Parameters<typeof Studio>[0]["research"]) {

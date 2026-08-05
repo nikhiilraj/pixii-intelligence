@@ -272,6 +272,10 @@ REVIEWED_WRITE = {
     ),
     "visual_values": {},
 }
+# Nothing checkable asserted, so the evidence gate has nothing to raise. This file is about
+# which renderer draws the picture; `tests/test_verification.py` is where a post that does
+# assert something is exercised.
+VERIFIED: dict = {"assertions": []}
 READY = {"deductions": []}
 REVIEWED_IDEA = "why clearer product writing matters"
 
@@ -301,7 +305,7 @@ def reviewed(session, html, image, *, chosen=None):
     absent, so pinning one and leaving two would still run a suggestion — and the chosen and
     suggested cases below would stop being different tests.
     """
-    answers = [BRIEF, ANGLE, REVIEWED_WRITE, READY]
+    answers = [BRIEF, ANGLE, REVIEWED_WRITE, VERIFIED, READY]
     if chosen is None:
         answers.insert(0, SUGGESTED)
     hook, structure, visual = chosen or (None, None, None)

@@ -64,6 +64,19 @@ class Draft(SQLModel, table=True):
     readiness_result: dict | None = Field(
         default=None, sa_column=Column(JSONB, nullable=True)
     )
+    # Every assertion the finished post makes, and which dossier claim or which words of the
+    # operator's idea stand behind it — `verification.Review.as_dict`.
+    #
+    # **Nullable, and NULL is not "nothing was asserted".** It is "this draft was never
+    # verified": a row written before this column existed, one that failed at planning or
+    # research, or one whose gates failed before verification was reached. `{"assertions": []}`
+    # is the other answer entirely — a post that was checked and asserts nothing checkable —
+    # and a `{}` default would have merged the two, which is `CLAUDE.md`'s `—`-versus-`0` rule
+    # in the place it actually bites here. Declared exactly as `readiness_result` is, next to
+    # it, because Studio reads the two together to explain why wording passed or failed.
+    verification_result: dict | None = Field(
+        default=None, sa_column=Column(JSONB, nullable=True)
+    )
     revision_rounds: int = Field(default=0, nullable=False)
     write_prompt_name: str | None = None
     write_prompt_version: str | None = None

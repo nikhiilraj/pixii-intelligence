@@ -202,6 +202,29 @@ export type Draft = {
     summary: string;
     deductions: { criterion: string; points: number; reason: string; evidence: string }[];
   } | null;
+  /** Every assertion the finished post makes, and what stands behind it —
+   *  `verification.Review.as_dict` in backend/app/verification.py.
+   *
+   *  **Required, and `null` is a state rather than an absence.** `DraftOut` sends this key on
+   *  every response, so marking it `?` would invite the `?? []` fallback that reads as "this
+   *  draft asserts nothing" — where `null` actually means nobody checked: a historical row, or
+   *  a run that stopped at a gate before verification. `{ assertions: [] }` is the other
+   *  answer, and a screen has to show the two apart. */
+  verification_result: {
+    prompt_name: string;
+    prompt_version: string;
+    /** `dossier` when research supplied the comparison set, `idea` when the operator's own
+     *  words were the whole of it. */
+    basis: "dossier" | "idea";
+    summary: string;
+    assertions: {
+      text: string;
+      kind: "factual" | "opinion" | "first_party";
+      verdict: string;
+      evidence: string;
+      blocks: boolean;
+    }[];
+  } | null;
   revision_rounds?: number;
   editorial?: {
     brief: {

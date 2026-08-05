@@ -103,6 +103,10 @@ class DraftOut(BaseModel):
     generation_error: str | None
     gate_results: list[dict]
     readiness_result: dict | None
+    # Which claim, or which words of the operator's idea, stands behind each assertion the
+    # post makes. Null means this draft was never verified — a historical row, or one that
+    # stopped before verification — which is not the same as one that asserted nothing.
+    verification_result: dict | None
     revision_rounds: int
     editorial: dict | None
 
@@ -153,6 +157,7 @@ def _out(session: SessionDep, draft: Draft) -> DraftOut:
         generation_error=draft.generation_error,
         gate_results=list(draft.gate_results),
         readiness_result=draft.readiness_result,
+        verification_result=draft.verification_result,
         revision_rounds=draft.revision_rounds,
         editorial=_editorial_lineage(session, draft),
     )
@@ -698,6 +703,11 @@ def rewrite(session: SessionDep, llm: LLMDep, draft_id: int) -> DraftOut:
         draft.generation_error = "text was regenerated and must pass the complete review flow again"
         draft.gate_results = []
         draft.readiness_result = None
+        # Cleared for the same reason as the other two: a claim-to-source review describes
+        # sentences that no longer exist, and leaving it would show a reviewer the evidence
+        # behind wording nobody can read any more. NULL is right rather than `{}` — nothing
+        # has verified these words yet, which is exactly what NULL means on this column.
+        draft.verification_result = None
     session.commit()
     session.refresh(draft)
     return _out(session, draft)

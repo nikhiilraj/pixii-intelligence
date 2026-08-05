@@ -55,6 +55,11 @@ WRITE_FACT = {
     ),
     "visual_values": {},
 }
+# What a verifier says about a post asserting nothing it has to stand behind. Queued on
+# every run below that reaches readiness: verification sits between the write and the
+# rubric, and `QueuedLLM` refuses a call it has no answer for. The runs that stop at a
+# gate never reach it, which is why only some of the queues below carry it.
+VERIFIED: dict = {"assertions": []}
 READY = {"deductions": []}
 
 
@@ -150,7 +155,7 @@ def run(session, llm, *, idea, angle, requested_mode=None, renderer=None):
 
 
 def test_no_research_still_plans_and_reaches_ready(session):
-    llm = QueuedLLM(BRIEF, ANGLE_NONE, WRITE_NONE, READY)
+    llm = QueuedLLM(BRIEF, ANGLE_NONE, WRITE_NONE, VERIFIED, READY)
     draft = run(session, llm, idea="why clearer product writing matters", angle=ANGLE_NONE)
 
     assert draft.generation_stage == "ready"
@@ -184,6 +189,7 @@ def test_factual_flow_researches_before_writing_and_persists_dossier(session, mo
         {"queries": ["Acme checkout flow field"]},
         research_answer,
         WRITE_FACT,
+        VERIFIED,
         READY,
     )
     draft = run(
@@ -197,7 +203,14 @@ def test_factual_flow_researches_before_writing_and_persists_dossier(session, mo
     assert draft.generation_stage == "ready"
     assert draft.research_job_id is not None
     assert draft.gate_results == []
-    assert "Sources:" in llm.calls[-2][1]
+    # The dossier reached the *writer*. Found by which prompt was sent rather than by counting
+    # back from the end of the call list: verification now sits between the write and the
+    # rubric, and an index quietly starts asserting about a different prompt every time a
+    # stage is added between them.
+    write = next(
+        user for system, user in llm.calls if system.startswith("You write a source-disciplined")
+    )
+    assert "Sources:" in write
 
 
 def test_research_floor_is_never_silently_lowered(session):
@@ -295,7 +308,7 @@ def test_revision_is_bounded_and_keeps_a_failed_review_state(session):
 def test_visual_failure_preserves_reviewed_written_content(session):
     draft = run(
         session,
-        QueuedLLM(BRIEF, ANGLE_NONE, WRITE_NONE, READY),
+        QueuedLLM(BRIEF, ANGLE_NONE, WRITE_NONE, VERIFIED, READY),
         idea="why clearer product writing matters",
         angle=ANGLE_NONE,
         renderer=Renderer(RuntimeError("render unavailable")),
@@ -309,7 +322,7 @@ def test_visual_failure_preserves_reviewed_written_content(session):
 
 def test_workflow_api_returns_persisted_lineage_and_blocks_failed_push(session):
     hook, structure, visual = templates(session)
-    llm = QueuedLLM(BRIEF, ANGLE_NONE, WRITE_NONE, READY)
+    llm = QueuedLLM(BRIEF, ANGLE_NONE, WRITE_NONE, VERIFIED, READY)
     app.dependency_overrides[get_session] = lambda: session
     app.dependency_overrides[get_llm] = lambda: llm
     app.dependency_overrides[get_search] = Search

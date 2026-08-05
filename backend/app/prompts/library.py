@@ -14,6 +14,7 @@ from app.prompts.editorial import PROMPTS as EDITORIAL_PROMPTS
 from app.prompts.registry import Prompt
 from app.prompts.revision import PROMPTS as REVISION_PROMPTS
 from app.prompts.rubric import PROMPTS as RUBRIC_PROMPTS
+from app.prompts.verification import PROMPTS as VERIFICATION_PROMPTS
 
 WRITE = Prompt(
     name="draft.write",
@@ -277,4 +278,5 @@ ALL: tuple[Prompt, ...] = (
     *EDITORIAL_PROMPTS,
     *RUBRIC_PROMPTS,
     *REVISION_PROMPTS,
+    *VERIFICATION_PROMPTS,
 )

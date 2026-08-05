@@ -83,6 +83,10 @@ class WorkflowLLM(FakeLLM):
             "beats": ["name the ambiguity", "show the editing principle"],
             "cta": "remove one sentence that changes no decision",
         },
+        # No assertions: the post says nothing this file's tests need checked against
+        # evidence, so verification finds nothing to block. A test about verification
+        # answers this one itself — `tests/test_verification.py` does.
+        "you check a finished post": {"assertions": []},
         # No deductions: ready. A test wanting a failed review says so itself.
         "you review one draft linkedin post": {"deductions": []},
     }
@@ -108,10 +112,10 @@ class WorkflowLLM(FakeLLM):
 
 
 # Completions one reviewed draft buys when its three templates are named: brief, angle, write,
-# rubric. No suggest call — `retopic` and `/drafts/variants` both choose the templates
-# themselves. Named rather than repeated, because it is a property of the workflow and moves
-# with it.
-WORKFLOW_CALLS = 4
+# verification, rubric. No suggest call — `retopic` and `/drafts/variants` both choose the
+# templates themselves. Named rather than repeated, because it is a property of the workflow
+# and moves with it.
+WORKFLOW_CALLS = 5
 
 
 class NoSearch:
@@ -1407,10 +1411,11 @@ def test_the_variants_endpoint_reports_the_spend_for_the_whole_batch(client, ses
 
     body = variants_of(client)
 
-    # Four completions per variant — brief, angle, write, rubric — and one render each. No
-    # suggest call: this route names all three templates itself. Three renders is what says
-    # every variant reached the end rather than stopping at a failed review.
-    assert (body["llm_calls"], body["image_calls"]) == (12, 3)
+    # `WORKFLOW_CALLS` completions per variant — brief, angle, write, verification, rubric —
+    # and one render each. No suggest call: this route names all three templates itself.
+    # Three renders is what says every variant reached the end rather than stopping at a
+    # failed review.
+    assert (body["llm_calls"], body["image_calls"]) == (3 * WORKFLOW_CALLS, 3)
     # Zero searches, honestly: `VARIANT_IDEA` resolves to `none`, which never reaches a
     # provider. The key is reported rather than omitted because a factual idea here would
     # buy real searches — which was not true before this route ran the workflow.

@@ -100,8 +100,9 @@ The directed Studio endpoint is `POST /drafts/workflow`:
 ```text
 idea → editorial brief → angle + planned claims → research-depth floor
      → optional Firecrawl/Brave search + fetched/cited dossier → source-disciplined write
-     → deterministic gates → bounded revision → editorial-readiness evaluation
-     → persisted review state → visual render → human review → optional Zernio draft
+     → deterministic gates → bounded revision → claim verification against the dossier
+     → editorial-readiness evaluation → persisted review state → visual render
+     → human review → optional Zernio draft
 ```
 
 - `none` still builds the brief and plan, but makes no web request. `light` and `deep` must
@@ -114,6 +115,12 @@ idea → editorial brief → angle + planned claims → research-depth floor
 - Unsupported and contradicted dossier claims are blocking evidence findings and are never sent
   to the wording revision loop. Correctable writing findings use at most two revision rounds and
   three revision calls, including the single schema-repair attempt already defined by that loop.
+- Every assertion the finished post makes is then checked against the dossier's cited claims,
+  or — in `none` mode, which has no dossier — against the words of the idea itself. An
+  assertion nothing supports, or one the sources refute or disagree about, is a blocking
+  evidence finding. Opinions and statements about our own work need no citation. Voice
+  exemplars are never evidence: verification is never shown them. What was checked, and
+  what stood behind it, is persisted on the draft.
 - A gate or readiness failure is stored as `failed_review`, with findings/feedback. A visual
   failure stores `visual_error` while preserving the reviewed words.
 - Drafts store nullable links to the brief, angle plan and research job, plus correlation ID,
