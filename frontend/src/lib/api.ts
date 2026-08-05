@@ -99,6 +99,60 @@ export function assetSrc(asset: Asset): string {
 
 export type LineageEntry = { family: string; version: number; name: string } | null;
 
+/** Every state a draft's generation can be in — the frontend half of the contract in
+ *  backend/app/models/stage.py.
+ *
+ *  Written out as a value, not just a union type, so a test can compare it against the
+ *  backend's own list. A type alone disappears at compile time and proves nothing about what
+ *  the server actually sends; `test_stage.py::test_the_declared_stages_are_exactly_the_enums`
+ *  holds the other end. Order matches the enum's declaration order deliberately — the pair is
+ *  compared element by element, so adding a stage to one side fails on the other. */
+export const STAGES = [
+  // Nothing reviewed this draft — legacy `POST /drafts`. Not actionable, which is the point.
+  "unreviewed",
+  // In flight.
+  "planning",
+  "researching",
+  "drafting",
+  "verifying",
+  "revising",
+  "evaluating",
+  "rendering",
+  // Terminal.
+  "ready",
+  "failed",
+  "failed_review",
+] as const;
+
+export type GenerationStage = (typeof STAGES)[number];
+
+/** Whether a human's review may act on this draft — push, schedule or publish it.
+ *
+ *  One predicate, mirroring `models/stage.review_ready`, because the alternative was in
+ *  Studio: `stage === "failed" || stage === "failed_review"` written out at each button. The
+ *  server is still the only thing that enforces it; this decides what a control looks like. */
+export function reviewReady(stage: GenerationStage): boolean {
+  return stage === "ready";
+}
+
+/** Whether Retry may start a new attempt from this draft. Both failures, nothing else. */
+export function retryable(stage: GenerationStage): boolean {
+  return stage === "failed" || stage === "failed_review";
+}
+
+/** Whether a workflow is still working on this draft — what Studio polls against. */
+export function inFlight(stage: GenerationStage): boolean {
+  return (
+    stage === "planning" ||
+    stage === "researching" ||
+    stage === "drafting" ||
+    stage === "verifying" ||
+    stage === "revising" ||
+    stage === "evaluating" ||
+    stage === "rendering"
+  );
+}
+
 export type Draft = {
   id: number;
   idea: string;
@@ -121,16 +175,16 @@ export type Draft = {
   // that may omit it can publish words nobody approved.
   revision: number;
   lineage: { hook: LineageEntry; structure: LineageEntry; visual: LineageEntry };
-  generation_stage?:
-    | "planning"
-    | "researching"
-    | "drafting"
-    | "evaluating"
-    | "ready"
-    | "failed"
-    | "failed_review";
-  generation_error?: string | null;
-  gate_results?: { gate: string; detail: string }[];
+  /** Where the draft is in the review workflow — `GenerationStage` in
+   *  backend/app/models/stage.py, and `STAGES` below is this file's half of that contract.
+   *
+   *  **Required, not optional.** `DraftOut` has always filled these five fields on every
+   *  response; marking them `?` here made every consumer write a `?? "historical"` fallback,
+   *  and that fallback is a lie about a `POST /drafts` row created a second ago. A genuinely
+   *  historical draft is one whose `editorial` is null, which is a different question. */
+  generation_stage: GenerationStage;
+  generation_error: string | null;
+  gate_results: { gate: string; detail: string }[];
   readiness_result?: {
     rubric_version: string;
     prompt_name: string;

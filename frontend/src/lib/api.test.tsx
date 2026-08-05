@@ -4,7 +4,16 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import ScoreboardPage from "@/app/scoreboard/page";
-import { calls, getJson, postJson, type ApiFailure } from "@/lib/api";
+import {
+  calls,
+  getJson,
+  inFlight,
+  postJson,
+  retryable,
+  reviewReady,
+  STAGES,
+  type ApiFailure,
+} from "@/lib/api";
 
 /** A response the way the backend actually answers: a JSON body with `detail`. */
 function jsonResponse(status: number, body: unknown): Response {
@@ -286,5 +295,52 @@ describe("a stocked library with no published post", () => {
     expect(screen.getByText(/Nothing here has enough posts behind it to read yet/)).toBeInTheDocument();
     expect(screen.getByText(/withholds averages/)).toBeInTheDocument();
     expect(screen.queryByText("13.7")).not.toBeInTheDocument();
+  });
+});
+
+/* The backend half of this contract is
+ * `backend/tests/test_stage.py::test_the_declared_stages_are_exactly_the_enums`, which pins
+ * `GenerationStage` against its own independently written literal list. Both sides compare
+ * against a hand-written list rather than against each other, so adding a stage to one side
+ * fails on that side — which is the drift the pair exists to catch. Keep the two lists in the
+ * same order; they are compared element by element. */
+describe("the generation stage contract", () => {
+  it("declares exactly the stages backend/app/models/stage.py declares", () => {
+    expect([...STAGES]).toEqual([
+      "unreviewed",
+      "planning",
+      "researching",
+      "drafting",
+      "verifying",
+      "revising",
+      "evaluating",
+      "rendering",
+      "ready",
+      "failed",
+      "failed_review",
+    ]);
+  });
+
+  it("treats only ready as review-ready, so nothing unreviewed can be acted on", () => {
+    for (const stage of STAGES) expect(reviewReady(stage)).toBe(stage === "ready");
+  });
+
+  it("treats only the two failures as retryable", () => {
+    for (const stage of STAGES) {
+      expect(retryable(stage)).toBe(stage === "failed" || stage === "failed_review");
+    }
+  });
+
+  it("partitions every stage into in-flight or not, with unreviewed not in flight", () => {
+    expect(inFlight("unreviewed")).toBe(false);
+    expect(STAGES.filter(inFlight)).toEqual([
+      "planning",
+      "researching",
+      "drafting",
+      "verifying",
+      "revising",
+      "evaluating",
+      "rendering",
+    ]);
   });
 });

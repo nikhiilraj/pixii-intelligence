@@ -495,7 +495,11 @@ function Lineage({ draft, assets }: { draft: Draft; assets: Asset[] | null }) {
 
 function EditorialWorkflow({ draft }: { draft: Draft }) {
   const editorial = draft.editorial;
-  const label = (draft.generation_stage ?? "historical").replaceAll("_", " ");
+  // No `?? "historical"`. `generation_stage` is on every `DraftOut` and is required in
+  // `Draft`, so the fallback could only ever fire for a response that does not exist — and
+  // when it did fire it labelled a legacy `POST /drafts` row created a second ago as
+  // historical. Whether a draft is genuinely pre-migration is `editorial === null`, below.
+  const label = draft.generation_stage.replaceAll("_", " ");
   return (
     <Card className="space-y-4 p-4 text-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">

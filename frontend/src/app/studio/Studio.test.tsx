@@ -139,6 +139,12 @@ const DRAFT: Draft = {
   // the fixture too — `DraftOut.revision` has no default and neither does this.
   revision: 1,
   lineage: { hook: null, structure: null, visual: null },
+  // Present on every `DraftOut`, so present on every fixture — these are required, not
+  // optional: a fixture free to omit them lets a component ship a `?? "historical"`
+  // fallback that no real response ever exercises.
+  generation_stage: "ready",
+  generation_error: null,
+  gate_results: [],
 };
 
 function typeIdea() {

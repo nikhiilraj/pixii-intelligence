@@ -91,6 +91,12 @@ function draft(overrides: Partial<Draft> = {}): Draft {
       // The draft is on v1 of a family whose newest row is v3. See the header comment.
       visual: { family: VISUAL_FAMILY, version: 1, name: "stat-hero" },
     },
+    // Present on every `DraftOut`, so present on every fixture — these are required, not
+      // optional: a fixture free to omit them lets a component ship a `?? "historical"`
+      // fallback that no real response ever exercises.
+      generation_stage: "ready",
+      generation_error: null,
+    gate_results: [],
     ...overrides,
   };
 }

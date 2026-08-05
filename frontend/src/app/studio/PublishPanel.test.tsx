@@ -41,6 +41,12 @@ const DRAFT: Draft = {
   zernio_post_id: "6a695286ead2fabfa56f3c27",
   revision: 3,
   lineage: { hook: null, structure: null, visual: null },
+  // Present on every `DraftOut`, so present on every fixture. These are required rather
+  // than optional in `Draft`: a fixture that may omit them lets a component ship a
+  // `?? "historical"` fallback that no real response ever exercises.
+  generation_stage: "ready",
+  generation_error: null,
+  gate_results: [],
 };
 
 function publication(overrides: Partial<Publication> = {}): Publication {

@@ -24,6 +24,7 @@ from app.generation import (
 from app.main import app
 from app.models.draft import Draft
 from app.models.post import Post, Verdict
+from app.models.stage import GenerationStage
 from app.models.template import TemplateKind, TemplateStatus
 from app.publishing import PushFailed
 from app.templates import approve, create_template, edit_template, retire
@@ -1009,6 +1010,12 @@ def test_a_refused_push_is_a_502_carrying_zernios_reason(client, session):
     library(session)
     with_fakes()
     draft = client.post("/drafts", json={"idea": IDEA}).json()
+    # `POST /drafts` is the deprecated unreviewed path, so the push boundary would refuse this
+    # with a 409 before Zernio was ever called — and the refusal under test is Zernio's. Marked
+    # review-ready by hand so the request gets far enough to be refused for the right reason.
+    stored = session.get(Draft, draft["id"])
+    stored.generation_stage = GenerationStage.READY
+    session.commit()
 
     class Refusing:
         # The draft carries a rendered visual, so the push uploads before it creates. The

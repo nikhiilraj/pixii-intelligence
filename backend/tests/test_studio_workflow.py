@@ -332,9 +332,18 @@ def test_workflow_api_returns_persisted_lineage_and_blocks_failed_push(session):
 
 
 def test_historical_draft_api_has_null_editorial_lineage(session):
+    """A row from before the editorial migration still opens, and says it is `ready`.
+
+    `generation_stage` is set explicitly here rather than left to default, and that is what
+    makes this a test about a *historical* draft: the migration backfilled every existing row
+    to `ready`, where the column's default for anything created since is `unreviewed`. A
+    hand-built draft that took the default would be modelling a new legacy-path row instead,
+    which is a different state and reads differently in Studio.
+    """
     hook, structure, visual = templates(session)
     draft = Draft(
         idea="historical",
+        generation_stage="ready",
         hook_family=hook.family_id,
         hook_version=hook.version,
         structure_family=structure.family_id,

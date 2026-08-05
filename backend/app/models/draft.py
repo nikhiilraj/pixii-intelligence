@@ -4,6 +4,8 @@ from sqlalchemy import Column, LargeBinary
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
+from app.models.stage import GenerationStage
+
 
 class Draft(SQLModel, table=True):
     """A generated post, stamped at creation with what produced it.
@@ -42,9 +44,21 @@ class Draft(SQLModel, table=True):
     )
     correlation_id: str | None = Field(default=None, index=True)
 
-    # Honest workflow/review state. Historical rows are migrated to `ready`; a new row moves
-    # through planning/researching/drafting/evaluating and can stop at failed_review.
-    generation_stage: str = Field(default="ready", index=True, nullable=False)
+    # Honest workflow/review state — `models/stage.GenerationStage`, and the predicates there
+    # are the only place "may a human act on this" is decided.
+    #
+    # **The default is `unreviewed`, and it used to be `ready`.** A default of `ready` meant a
+    # row nothing had reviewed was pushable the moment it was constructed, which is what made
+    # variants, retopic, the autonomous run and legacy `POST /drafts` into four separate
+    # bypasses of the review boundary. The reviewed workflow sets `planning` and moves from
+    # there; anything that does not say where it came from is not vouched for.
+    #
+    # Still a plain `str` column and not an enum type: rows migrated to `ready` before this
+    # existed have to stay readable, and `stage_of` answers `None` for a value it cannot name
+    # rather than raising on read. Changing the Python default does not touch stored rows.
+    generation_stage: str = Field(
+        default=GenerationStage.UNREVIEWED, index=True, nullable=False
+    )
     generation_error: str | None = None
     gate_results: list = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
     readiness_result: dict | None = Field(

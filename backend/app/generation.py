@@ -11,6 +11,7 @@ from app.config import settings
 from app.llm import LLM
 from app.models.draft import Draft
 from app.models.post import Post
+from app.models.stage import GenerationStage
 from app.models.template import Template, TemplateKind
 from app.output_schema import validate as validate_output
 from app.prompts.tracing import new_correlation_id, traced_call
@@ -644,7 +645,7 @@ def generate_reviewed_draft(
         visual_version=visual.version,
         asset_values=chosen_assets(visual, asset_values or {}),
         correlation_id=correlation,
-        generation_stage="planning",
+        generation_stage=GenerationStage.PLANNING,
         write_prompt_name=_EDITORIAL_WRITE.name,
         write_prompt_version=_EDITORIAL_WRITE.version,
     )
@@ -662,7 +663,7 @@ def generate_reviewed_draft(
         draft.editorial_brief_id = brief.id
         draft.angle_plan_id = plan.id
     except Exception as exc:  # a stored failure is recoverable from Studio
-        draft.generation_stage = "failed"
+        draft.generation_stage = GenerationStage.FAILED
         draft.generation_error = f"planning: {type(exc).__name__}: {exc}"
         session.add(draft)
         session.flush()
@@ -670,7 +671,7 @@ def generate_reviewed_draft(
 
     found: research.ResearchDossier | None = None
     if brief.research_mode != research.NONE:
-        draft.generation_stage = "researching"
+        draft.generation_stage = GenerationStage.RESEARCHING
         session.flush()
         try:
             research_args: dict[str, Any] = {
@@ -689,13 +690,13 @@ def generate_reviewed_draft(
                 .order_by(col(research.ResearchJob.id).desc())
             ).first()
             draft.research_job_id = job.id if job else None
-            draft.generation_stage = "failed"
+            draft.generation_stage = GenerationStage.FAILED
             draft.generation_error = f"researching: {type(exc).__name__}: {exc}"
             session.add(draft)
             session.flush()
             return draft
 
-    draft.generation_stage = "drafting"
+    draft.generation_stage = GenerationStage.DRAFTING
     message = _editorial_context(
         brief=brief,
         plan=plan,
@@ -726,7 +727,7 @@ def generate_reviewed_draft(
         )
         validate_output(written, _EDITORIAL_WRITE.output_schema)
     except Exception as exc:
-        draft.generation_stage = "failed"
+        draft.generation_stage = GenerationStage.FAILED
         draft.generation_error = f"drafting: {type(exc).__name__}: {exc}"
         session.add(draft)
         session.flush()
@@ -769,10 +770,10 @@ def generate_reviewed_draft(
     draft.body_text = str(written.get("body") or "").strip()
     draft.visual_values = _written_values(dict(written), visual)
     draft.gate_results = _findings_dict(findings)
-    draft.generation_stage = "evaluating"
+    draft.generation_stage = GenerationStage.EVALUATING
 
     if findings:
-        draft.generation_stage = "failed_review"
+        draft.generation_stage = GenerationStage.FAILED_REVIEW
         draft.generation_error = draft.generation_error or "deterministic quality gates failed"
     else:
         try:
@@ -788,14 +789,14 @@ def generate_reviewed_draft(
             )
             draft.readiness_result = _review_dict(report)
             draft.generation_stage = (
-                "ready"
+                GenerationStage.READY
                 if report.readiness is rubric.Readiness.READY_FOR_EDITORIAL_REVIEW
-                else "failed_review"
+                else GenerationStage.FAILED_REVIEW
             )
-            if draft.generation_stage == "failed_review":
+            if draft.generation_stage == GenerationStage.FAILED_REVIEW:
                 draft.generation_error = "editorial-readiness evaluation requires revision"
         except Exception as exc:
-            draft.generation_stage = "failed_review"
+            draft.generation_stage = GenerationStage.FAILED_REVIEW
             draft.generation_error = f"evaluating: {type(exc).__name__}: {exc}"
 
     _draw_visual(session, draft, visual, renderer)

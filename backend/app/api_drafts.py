@@ -34,6 +34,7 @@ from app.models.draft import Draft
 from app.models.editorial import AnglePlan, EditorialBrief, PlannedClaim
 from app.models.post import Post
 from app.models.publication import CANCEL_SCHEDULE, PUBLISH_NOW, SCHEDULE, Publication
+from app.models.stage import GenerationStage, retryable, review_ready
 from app.models.template import Template
 from app.notify import notify
 from app.publishing import PushFailed, push_draft
@@ -343,7 +344,7 @@ def retry_draft(
 ) -> DraftOut:
     """Retry a failed workflow as a new attempt, preserving the failed row for audit."""
     source = _load(session, draft_id)
-    if source.generation_stage not in {"failed", "failed_review"}:
+    if not retryable(source.generation_stage):
         raise HTTPException(status_code=409, detail="only a failed workflow can be retried")
     hook = generated_from(session, source.hook_family, source.hook_version)
     structure = generated_from(session, source.structure_family, source.structure_version)
@@ -607,7 +608,7 @@ def rewrite(session: SessionDep, llm: LLMDep, draft_id: int) -> DraftOut:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     draft.edited()
     if draft.editorial_brief_id is not None:
-        draft.generation_stage = "failed_review"
+        draft.generation_stage = GenerationStage.FAILED_REVIEW
         draft.generation_error = "text was regenerated and must pass the complete review flow again"
         draft.gate_results = []
         draft.readiness_result = None
@@ -689,7 +690,7 @@ def push(session: SessionDep, zernio: ZernioDep, draft_id: int) -> DraftOut:
     second post, and the underlying request carries a stable idempotency key.
     """
     draft = _load(session, draft_id)
-    if draft.generation_stage in {"failed", "failed_review"}:
+    if not review_ready(draft.generation_stage):
         raise HTTPException(
             status_code=409,
             detail=(
