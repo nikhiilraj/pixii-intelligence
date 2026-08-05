@@ -96,15 +96,16 @@ The directed Studio endpoint is `POST /drafts/workflow`:
 
 ```text
 idea → editorial brief → angle + planned claims → research-depth floor
-     → optional Brave search + fetched/cited dossier → source-disciplined write
+     → optional Firecrawl/Brave search + fetched/cited dossier → source-disciplined write
      → deterministic gates → bounded revision → editorial-readiness evaluation
      → persisted review state → visual render → human review → optional Zernio draft
 ```
 
 - `none` still builds the brief and plan, but makes no web request. `light` and `deep` must
   finish research before writing. An explicit mode below the detected floor is refused.
-- `BRAVE_SEARCH_API_KEY` enables factual research. Without it, `light`/`deep` stop at a visible
-  failed research state; they never fall back to `none`.
+- `FIRECRAWL_API_KEY` enables factual research and is preferred when configured;
+  `BRAVE_SEARCH_API_KEY` is the fallback. Without either, `light`/`deep` stop at a visible failed
+  research state; they never fall back to `none`.
 - Model JSON is checked against the registered output schema. Missing or mistyped write fields
   produce a persisted, recoverable drafting failure.
 - Unsupported and contradicted dossier claims are blocking evidence findings and are never sent
@@ -293,10 +294,10 @@ This pass stays local except for generation or rendering calls and does not push
    `stat-card`; an `image_url` slot needs an asset selected.
 3. Generate an opinion-only draft and confirm Studio shows `none`, a floor reason, a brief,
    angle, planned claims, passed gates, readiness result, text, visual and template versions.
-4. Generate a factual draft with Brave configured. Confirm `light` or `deep` is shown, sources
-   are linked, citations support the factual wording, and the research job persists after reload.
-5. Temporarily unset `BRAVE_SEARCH_API_KEY`, retry a factual idea, and confirm it stops in a
-   visible failed research state without writing factual copy. Restore the key and use Retry.
+4. Generate a factual draft with Firecrawl configured. Confirm `light` or `deep` is shown,
+   sources are linked, citations support the factual wording, and the research job persists.
+5. Temporarily unset both search keys, retry a factual idea, and confirm it stops in a visible
+   failed research state without writing factual copy. Restore the key and use Retry.
 6. Regenerate the text and verify its lineage does not change and it is visibly marked for
    review again. Redraw the visual and verify a render failure leaves the written post intact.
 7. Open a draft created before the migration and confirm it loads with a historical-lineage note.
