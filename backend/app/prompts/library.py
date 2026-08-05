@@ -10,7 +10,9 @@ because a trace row naming `1.0.0` has to mean the same words next month as it d
 too and the move is mechanical, but it is a separate file with a separate owner this wave.
 """
 
+from app.prompts.editorial import PROMPTS as EDITORIAL_PROMPTS
 from app.prompts.registry import Prompt
+from app.prompts.rubric import PROMPTS as RUBRIC_PROMPTS
 
 WRITE = Prompt(
     name="draft.write",
@@ -215,4 +217,21 @@ Return ONLY JSON of this shape, with no commentary:
 # the module: an import-time side effect that silently registers nothing — a renamed module, a
 # failed import swallowed somewhere — would surface as `UnknownPrompt` mid-generation instead
 # of at the line that forgot to add it here.
-ALL: tuple[Prompt, ...] = (WRITE, SUGGEST, PROPOSE_TOPICS, RESEARCH_QUERIES, RESEARCH_CLAIMS)
+# Aggregated rather than defined in one file, and that is a wave-1 decision worth keeping.
+# Three slices needed to register prompts at once against a single working tree, where a
+# shared file is last-writer-wins and the loser vanishes silently. Each slice writes its own
+# module and exports `PROMPTS`; this line is the only place they meet.
+#
+# The invariants in `tests/test_prompts.py` run over `ALL`, so a prompt is not registered
+# until it appears here — which is exactly the point. Adding a module to this tuple is what
+# subjects it to the "Return ONLY JSON", semantic-version and schema checks, and any prompt
+# that cannot pass them does not get in.
+ALL: tuple[Prompt, ...] = (
+    WRITE,
+    SUGGEST,
+    PROPOSE_TOPICS,
+    RESEARCH_QUERIES,
+    RESEARCH_CLAIMS,
+    *EDITORIAL_PROMPTS,
+    *RUBRIC_PROMPTS,
+)

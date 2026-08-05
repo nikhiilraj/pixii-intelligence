@@ -220,3 +220,39 @@ def test_the_topics_prompt_requires_an_idea_on_every_topic():
     item = schema["properties"]["topics"]["items"]
     assert item["required"] == ["idea"]
     assert set(item["properties"]) == {"idea", "why"}
+
+
+def test_every_prompt_module_is_aggregated_into_the_registry():
+    """A prompt module that exists but is not in `library.ALL` is registered nowhere.
+
+    This one is here because a mutation caught its absence. `app/prompts/editorial.py` and
+    `app/prompts/rubric.py` were written by separate agents against one working tree —
+    `library.py` is last-writer-wins, so each exports its own `PROMPTS` and the aggregation
+    is a single line elsewhere. Deleting either from that line failed **no test**: the
+    owning modules resolve prompts out of their own tuple, so they kept working while their
+    prompts quietly stopped being subject to every invariant below and stopped being
+    reachable by `prompts.get`.
+
+    Discovered by walking the package rather than listing the modules, because the failure
+    this guards against is a *new* module nobody remembered to aggregate — a hardcoded list
+    would need the same edit that was forgotten.
+    """
+    import importlib
+    import pkgutil
+
+    import app.prompts as package
+
+    registered = {(p.name, p.version) for p in prompts.ALL}
+    missing: list[str] = []
+    for info in pkgutil.iter_modules(package.__path__):
+        if info.name in {"registry", "library", "tracing"}:
+            continue
+        module = importlib.import_module(f"app.prompts.{info.name}")
+        for prompt in getattr(module, "PROMPTS", ()):
+            if (prompt.name, prompt.version) not in registered:
+                missing.append(f"app/prompts/{info.name}.py: {prompt.name} {prompt.version}")
+
+    assert not missing, (
+        "these prompts exist but are not in library.ALL, so no invariant here applies to "
+        f"them and prompts.get cannot find them: {missing}"
+    )
