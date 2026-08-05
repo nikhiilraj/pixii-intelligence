@@ -127,6 +127,32 @@ def test_visual_values_must_be_an_object_and_hold_renderable_values():
     assert any(f.gate == "schema" and "headline" in f.detail for f in findings)
 
 
+def test_a_boolean_is_not_a_renderable_slot_value():
+    """`bool` subclasses `int`, so it slips through a plain number check.
+
+    It then fills the slot with the word "True" and the completeness gate agrees the slot
+    is filled — two gates silent, and "True" printed on the published visual.
+    """
+    visual = a_visual([{"name": "headline", "type": "text"}])
+    findings = check(
+        a_candidate(visual_values={"headline": True}), template=visual, recent_posts=[]
+    )
+    assert any(f.gate == "schema" and "headline" in f.detail for f in findings)
+
+
+def test_gates_refuse_a_template_that_is_not_the_visual():
+    """A hook carries no slots, so every gate here would pass on one and report nothing.
+
+    A clean result meaning "this gate did not run" is the shape `CLAUDE.md` names: six
+    assertions checking for a 404 against routes that did not exist.
+    """
+    hook = Template(
+        family_id="fam-2", version=1, kind=TemplateKind.HOOK, name="ai-time-value", slots=[]
+    )
+    with pytest.raises(ValueError, match="VISUAL"):
+        check(a_candidate(), template=hook, recent_posts=[])
+
+
 def test_visual_values_is_required_when_the_template_declares_writable_slots():
     with_slot = a_visual([{"name": "headline", "type": "text"}])
     findings = check(

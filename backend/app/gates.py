@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Any
 
-from app.models.template import Template
+from app.models.template import Template, TemplateKind
 
 # Every gate name this module can emit. A caller routing on `finding.gate` — and the
 # tests — key on these, so a typo in one of the five gate functions is a name that is not
@@ -167,7 +167,20 @@ def check(
     `generation.lesson_lines` states about `lessons`: a default lets a caller quietly stop
     passing them with nothing failing. A caller with no recent corpus passes `[]` and says
     so at the call site.
+
+    Raises `ValueError` if handed anything but a VISUAL template — see below.
     """
+    if template.kind is not TemplateKind.VISUAL:
+        # A HOOK or STRUCTURE carries no slots, so every gate here would pass on one and
+        # report nothing — a clean result that means "this gate did not run", which is the
+        # failure `CLAUDE.md` describes as six assertions checking for a 404 against routes
+        # that did not exist. `generation._resolve` refuses a wrong-kind template the same
+        # way. This is a caller defect, not a candidate defect, so it is not a `Finding`:
+        # a finding would land on a review screen as something a writer could fix.
+        raise ValueError(
+            f"gates need the VISUAL template; {template.name} is a {template.kind.value}"
+        )
+
     assets = asset_values or {}
 
     # A model that answered with a list, or with a bare string, is a schema finding — not
@@ -252,6 +265,11 @@ def _schema(candidate: Mapping[str, Any], template: Template) -> list[Finding]:
         for name, value in supplied.items():
             # A slot renders as text. A dict or a list would reach the markup as
             # `{'a': 1}`, which renders successfully and reads as debris.
+            #
+            # `bool` is excluded explicitly because it *subclasses* `int`: without that
+            # term `True` passes as a number here, `str(True)` fills the slot as the word
+            # "True", and the completeness gate below then agrees the slot is filled. Two
+            # gates stay silent and the visual publishes with "True" in it.
             if not isinstance(value, str | int | float) or isinstance(value, bool):
                 findings.append(
                     Finding(
