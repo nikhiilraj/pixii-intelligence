@@ -165,6 +165,14 @@ class Budget:
 
 # What each mode is allowed to spend. `none` is zeroed rather than absent: a run in that mode
 # reaches no loop at all, and a budget of zero is what makes that readable in the row.
+#
+# ponytail: `deep` is `light` with larger numbers. §12 asks for more than that — primary-source
+# preference expressed as a *policy* rather than a line in the query prompt, and a second pass
+# that goes looking for what would contradict what the first pass found. Both need a claim loop
+# that can search again from what it has just read, which is a second round trip per claim and a
+# job that outlives one call. The ceiling is here and the upgrade path is the queue: when a run
+# can be resumed, iterate `plan → search → extract` until the queries stop returning new hosts,
+# and give `deep` a contradiction pass that searches each claim's negation.
 BUDGETS = {
     NONE: Budget(max_queries=0, max_fetches=0, max_seconds=0.0),
     LIGHT: Budget(max_queries=2, max_fetches=4, max_seconds=45.0),
@@ -754,6 +762,7 @@ def run_research(
     # NULL meaning "nobody counted". A caller who needs the number after an exception owns one
     # and passes it, which is the arrangement `run_autonomous` documents.
     meter = meter or SpendMeter()
+    spent_before = meter.llm_calls
     counted = meter.watch(llm)
 
     job = ResearchJob(
@@ -788,7 +797,12 @@ def run_research(
         # the most useful thing a dossier can say.
     finally:
         job.finished_at = datetime.now(UTC)
-        job.llm_calls = meter.llm_calls
+        # The **delta**, not the meter's total. A `SpendMeter` is one object per request and
+        # the caller owns it — `api_drafts` builds one and buys completions through it before
+        # anything here runs — so writing the total would put another caller's spend on this
+        # row. This column says what *this job* cost. `SpendMeter.spend()` is still the place
+        # that answers what the request cost, and neither replaces the other.
+        job.llm_calls = meter.llm_calls - spent_before
         session.add(job)
         session.flush()
 

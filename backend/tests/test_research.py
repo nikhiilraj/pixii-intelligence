@@ -1020,6 +1020,26 @@ def test_the_paid_calls_are_counted_through_the_existing_meter(session):
     assert session.get(ResearchJob, result.job_id).llm_calls == 2
 
 
+def test_the_row_reports_what_this_job_cost_and_not_what_the_request_cost(session):
+    """A meter is per request and the caller owns it, so the total is not this job's number.
+
+    `api_drafts` builds one meter and buys completions through it before anything research
+    does. Writing `meter.llm_calls` would put those on this row — a wrong number in the one
+    column the NULL-versus-`0` argument is built on, and every test that passes a fresh meter
+    would have gone on agreeing with it.
+    """
+    from app.autonomous import SpendMeter
+
+    meter = SpendMeter()
+    meter.watch(FakeLLM({"already": "bought"})).complete_json("system", "user")
+
+    result = light_run(session, meter=meter)
+
+    assert meter.llm_calls == 3
+    assert session.get(ResearchJob, result.job_id).llm_calls == 2
+    assert result.spend.llm_calls == 2
+
+
 # --- the dossier is a record, not a workspace ---------------------------------------------------
 
 
