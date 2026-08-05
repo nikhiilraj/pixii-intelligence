@@ -1169,11 +1169,21 @@ export default function Studio({
               {settled.failure?.message ?? "unknown error"}). That is a failed request and not a
               structure that records none — every approved hook is listed below, ungrouped.
             </p>
-          ) : groups.length < 2 ? (
+          ) : groups[0].label === null ? (
+            /* The ungrouped case, read off the heading rather than off a count of groups.
+               `groups.length < 2` stood here and was wrong in the state the README's own smoke
+               test walks into: one approved hook, a structure that records it, and the "every
+               other" group is empty and filtered out — one group, labelled, under a sentence
+               claiming nothing was recorded. `hookGroups` returns either a single `label: null`
+               list or a labelled partition, so the heading is the exact discriminator. */
             <p className="mt-3 text-caption text-muted">
               This structure records no pairing that resolves to an approved hook — either
-              extraction recorded none, or the hooks it named have since been retired. All{" "}
-              {of("hook").length} approved hooks are listed, ungrouped.
+              extraction recorded none, or the hooks it named have since been retired.
+              {/* Only where there are hooks to be listed. "All 0 approved hooks are listed" is
+                  true and useless, and the page already carries its own warning for a library
+                  with nothing approved in it. */}
+              {of("hook").length > 0 &&
+                ` All ${of("hook").length} approved hooks are listed, ungrouped.`}
             </p>
           ) : (
             <p className="mt-3 text-caption text-muted">

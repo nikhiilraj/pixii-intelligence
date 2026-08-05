@@ -267,6 +267,20 @@ describe("the pairing beside the picker", () => {
     expect(screen.getByRole("button", { name: /generate draft/i })).toBeInTheDocument();
   });
 
+  it("still says the list is grouped when the pairing covers every approved hook", async () => {
+    /* One group survives here, because the "every other approved hook" group is empty and is
+     * filtered out — and a caption counting groups therefore read "this structure records no
+     * pairing" directly above a heading saying it does. Reachable on the path the README's own
+     * smoke test walks: approve one hook and one structure that records it. */
+    stub(() => Promise.resolve(json(200, HOOKS)));
+    suggest();
+
+    await waitFor(() => {
+      expect(screen.getByText(/grouped by what extraction recorded/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/records no pairing/i)).not.toBeInTheDocument();
+  });
+
   it("does not claim an empty pairing while the read is still out", async () => {
     /* The state that would otherwise be indistinguishable from an empty one, which is why the
      * structure id is held beside the answer. On a slow API the caption would flash a sentence

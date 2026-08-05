@@ -139,7 +139,12 @@ export function SelectLabel({
   return (
     <SelectPrimitive.Label
       className={cn(
-        "px-2 py-1.5 pl-6 font-mono text-caption uppercase tracking-label text-muted",
+        // `py-1.5 pr-2 pl-6`, mirroring `SelectItem`'s own `py-1 pr-2 pl-6`, rather than
+        // `px-2 … pl-6`: the second sets padding-left twice and leaves which one wins to
+        // whether `cn` merges Tailwind classes or merely concatenates them. No test in this
+        // suite can see the result, which is exactly the kind of misalignment worth not
+        // leaving to a library's merge order.
+        "py-1.5 pr-2 pl-6 font-mono text-caption uppercase tracking-label text-muted",
         className,
       )}
       {...props}

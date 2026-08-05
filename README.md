@@ -613,7 +613,7 @@ drafts:      6, every one `ready` and every one `editorial: null`
 research:    0 jobs
 daily runs:  0
 verdicts:    0
-tests:       1196 backend · 471 frontend
+tests:       1196 backend · 472 frontend
 ```
 
 The two zeros in the middle are the ones worth reading. **The reviewed workflow has never
