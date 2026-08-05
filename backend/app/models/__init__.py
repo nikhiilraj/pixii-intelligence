@@ -11,18 +11,23 @@ from app.models.generation_trace import GenerationTrace
 from app.models.metric import MetricSnapshot
 from app.models.post import Post
 from app.models.publication import Publication
+from app.models.research import Citation, Claim, ResearchJob, ResearchSource
 from app.models.template import Template, TemplateKind, TemplateStatus
 
 __all__ = [
     "DAILY_SLOT",
     "Asset",
     "AssetKind",
+    "Citation",
+    "Claim",
     "DailyRun",
     "Draft",
     "GenerationTrace",
     "MetricSnapshot",
     "Post",
     "Publication",
+    "ResearchJob",
+    "ResearchSource",
     "Template",
     "TemplateKind",
     "TemplateStatus",
