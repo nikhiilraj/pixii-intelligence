@@ -1020,6 +1020,40 @@ def test_the_paid_calls_are_counted_through_the_existing_meter(session):
     assert session.get(ResearchJob, result.job_id).llm_calls == 2
 
 
+def test_the_searches_are_counted_on_the_meter_as_well_as_in_the_row(session):
+    """Two numbers for one thing, and they answer different questions.
+
+    `queries_run` is a row and rolls back with the caller's transaction. The meter is the
+    caller's and no transaction can undo it — the arrangement `SpendMeter`'s docstring
+    describes, extended to the one paid call this slice added.
+    """
+    from app.autonomous import SpendMeter
+
+    meter = SpendMeter()
+    result = light_run(session, meter=meter, llm=FakeLLM(QUERIES_ANSWER, claims_answer()))
+
+    assert meter.search_calls == 2
+    assert session.get(ResearchJob, result.job_id).queries_run == 2
+    # And `spend()` is untouched: no draft endpoint can reach a search, so a key there could
+    # only ever say zero.
+    assert set(meter.spend()) == {"llm_calls", "image_calls"}
+
+
+def test_a_search_paid_for_by_a_run_that_died_is_still_counted(session):
+    """The case the row cannot answer, which is why the meter exists at all."""
+    from app.autonomous import SpendMeter
+
+    class ExplodingFetch:
+        def __call__(self, url: str):
+            raise RuntimeError("the fetcher fell over")
+
+    meter = SpendMeter()
+    with pytest.raises(RuntimeError, match="fell over"):
+        light_run(session, meter=meter, fetcher=ExplodingFetch())
+
+    assert meter.search_calls == 2
+
+
 def test_the_row_reports_what_this_job_cost_and_not_what_the_request_cost(session):
     """A meter is per request and the caller owns it, so the total is not this job's number.
 

@@ -764,6 +764,11 @@ def run_research(
     meter = meter or SpendMeter()
     spent_before = meter.llm_calls
     counted = meter.watch(llm)
+    # The searches go through the meter too. `research_job.queries_run` records what one job
+    # issued, but it is a row: it rolls back with the caller's transaction, and a run that
+    # raised leaves no row at all. The meter is the caller's, no transaction can undo it, and
+    # the searches a dead run paid for are exactly the ones worth having a number for.
+    searched = meter.watch(search)
 
     job = ResearchJob(
         question=question,
@@ -781,7 +786,7 @@ def run_research(
 
     try:
         if resolved.mode != NONE:
-            _investigate(session, counted, search, job, budget, fetcher, clock)
+            _investigate(session, counted, searched, job, budget, fetcher, clock)
     except Exception as exc:
         # The row is written whether or not the run succeeded, and the exception is re-raised
         # unchanged — `traced_call`'s rule, for the same reason: a run that died is the one

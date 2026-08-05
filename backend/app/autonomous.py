@@ -75,13 +75,28 @@ class SpendMeter:
     def __init__(self) -> None:
         self.llm_calls = 0
         self.image_calls = 0
+        # Web searches, bought through `research.SearchProvider`. Read off the attribute, not
+        # out of `spend()` — see there for why that omission is deliberate.
+        self.search_calls = 0
 
     def watch(self, adapter: _Adapter) -> _Adapter:
         """The same adapter, counting. Typed as what it wraps because that is what it is."""
         return cast(_Adapter, _Metered(self, adapter))
 
     def spend(self) -> dict[str, int]:
-        """What has been bought so far, in the shape both the run response and the 502 use."""
+        """What has been bought so far, in the shape both the run response and the 502 use.
+
+        **`search_calls` is counted on the meter and deliberately not reported here.** This
+        dict is the shape `RetopicOut` and `VariantsOut` declare, and no draft endpoint can
+        reach a search: `/drafts/retopic` and `/drafts/variants` wrap an LLM and a renderer
+        and never a search adapter. A `search_calls` key in those responses could therefore
+        only ever say zero — the structurally-always-zero field `_Metered`'s docstring rejects
+        for the mirror-image reason, one field over.
+
+        A research caller reads `meter.search_calls` directly, and `research_job.queries_run`
+        is where a *job's* searches are recorded. The two are not redundant: this counter is
+        owned by the request and survives a rollback, and that row does not.
+        """
         return {"llm_calls": self.llm_calls, "image_calls": self.image_calls}
 
 
@@ -92,7 +107,9 @@ class _Metered:
     `image_calls` — the field says how many images the run asked a renderer for, not which
     vendor billed for them; counting only Azure's `generate` would ship a number that is
     structurally always zero at the one endpoint that reports it, since `autonomous_run` is
-    injected an HTML renderer and can never reach the image path.
+    injected an HTML renderer and can never reach the image path. `search` is a paid web
+    search through `research.SearchProvider`, counted here for the same reason as the rest:
+    the number has to outlive a run that raised, and the row recording it does not.
 
     Delegation goes through `__getattr__` rather than declared methods on purpose:
     `rendering.render_visual` picks its path with `hasattr(renderer, "screenshot")`, so a
@@ -104,6 +121,7 @@ class _Metered:
         "complete_json": "llm_calls",
         "screenshot": "image_calls",
         "generate": "image_calls",
+        "search": "search_calls",
     }
 
     def __init__(self, meter: SpendMeter, adapter: Any) -> None:
