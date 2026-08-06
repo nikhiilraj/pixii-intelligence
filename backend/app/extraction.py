@@ -12,16 +12,47 @@ from app.config import settings
 from app.generation import render_template
 from app.llm import LLM
 from app.models.post import Post
-from app.models.template import Template, TemplateKind
+from app.models.template import Template, TemplateKind, TemplateStatus
 from app.prompts.tracing import new_correlation_id, traced_call
 from app.rendering import DEFAULT_HEIGHT, DEFAULT_WIDTH, SLOT, HtmlRenderer
-from app.templates import create_template, usable_templates
+from app.templates import (
+    approve,
+    create_template,
+    edit_template,
+    latest_versions,
+    usable_templates,
+)
 
 log = logging.getLogger(__name__)
 
-# How many of the strongest posts the model is shown. Enough to see a pattern repeat,
-# few enough that the weak tail cannot dilute it.
-DEFAULT_SAMPLE_SIZE = 12
+# Filtered provenance at or above which a hook or a structure is written APPROVED rather than
+# PROPOSED.
+#
+# Not a ranking. Nothing is called best and nothing is sorted; the only question asked is
+# whether the corpus repeats a shape often enough that it is a pattern rather than a
+# transcription of one post — hook provenance averaged 1.09 posts per template under the old
+# twelve-post sample, so anything above 1 separates the two.
+#
+# **5 is a guess, and it has never been run against a real corpus.** The design names the read
+# that earns it (`docs/superpowers/specs/2026-08-06-corpus-wide-extraction-design.md`): open
+# three posts a pattern claims to cover and ask whether the pattern describes *those posts*.
+# It may well move afterwards.
+#
+# Deliberately not `settings.min_sample_size`, which also happens to be 5. That one counts
+# published drafts for metrics attribution; two unrelated fives sharing one name is a silent
+# bug the day either of them moves.
+APPROVE_AT_COVERAGE = 5
+
+# The model is told to return at most 10, and this is what makes that true rather than
+# hoped-for. Minting a family per proposal is what put 42 hook families in the database; an
+# unbounded batch is that defect with a wider sample behind it. Truncation is never silent —
+# see the warning in `propose_hooks`.
+MAX_HOOK_PROPOSALS = 10
+
+# The same bound on structures, and a separate constant rather than a shared one: the two
+# prompts each state their own limit, and a single number would silently change what the other
+# asks for the day one of them moves. Truncation is never silent — see `propose_structures`.
+MAX_STRUCTURE_PROPOSALS = 10
 
 # Fewer than a hook sample: every entry here is a full image in the request, and a layout
 # repeats visibly across far fewer examples than a sentence pattern does.
@@ -43,8 +74,8 @@ HOOK_CHARS = 220
 # file sends is then a fact about the file, and the trace row a call writes cannot name a
 # prompt some other line chose. `prompts/extraction.py` carries the texts and the brand rules
 # they interpolate.
-_HOOKS = prompts.get("extraction.hooks", "1.0.0")
-_STRUCTURES = prompts.get("extraction.structures", "1.0.0")
+_HOOKS = prompts.get("extraction.hooks", "2.0.0")
+_STRUCTURES = prompts.get("extraction.structures", "2.0.0")
 _VISUALS = prompts.get("extraction.visuals", "1.0.0")
 
 # Whole posts, since a structure is about the shape of the entire thing. The corpus
@@ -76,7 +107,7 @@ def _hook_of(content: str) -> str:
 def _strongest_posts(
     session: Session,
     platform: str,
-    sample_size: int,
+    sample_size: int | None,
     cohort: Cohort,
     require_content: bool = True,
 ) -> list[Post]:
@@ -84,6 +115,12 @@ def _strongest_posts(
 
     Every exclusion is in the query, before the limit, so a post that cannot be evidence
     never costs a real post its slot.
+
+    **`sample_size=None` is whole-corpus mode: no ordering and no limit.** The name still
+    reads as the ranked mode because `_visual_sample` still asks for it — hooks and structures
+    both pass None. In the None case it is every non-excluded post of the cohort, in whatever
+    order Postgres returns them. "What is common across the corpus" and "what do the strongest
+    posts do" are different questions, and ranking the sample only answers the second one.
     """
     account = settings.voice_account if cohort is Cohort.VOICE else settings.inspiration_account
     statement = (
@@ -112,7 +149,11 @@ def _strongest_posts(
         # A NULL published_at fails this comparison and is excluded too: an undated post
         # cannot be shown to be current.
         statement = statement.where(col(Post.published_at) >= settings.voice_since)
-    statement = statement.order_by(col(Post.engaged_actions).desc()).limit(sample_size)
+    if sample_size is not None:
+        # Ordering and limit are one decision, not two: an unlimited query has nothing to
+        # rank *for*, and a ranked query without a limit still hands the model a "strongest
+        # first" claim that whole-corpus extraction must not make.
+        statement = statement.order_by(col(Post.engaged_actions).desc()).limit(sample_size)
     return list(session.exec(statement).all())
 
 
@@ -435,43 +476,122 @@ def _must_render(session: Session, template: Template, renderer: HtmlRenderer) -
     render_template(session, template, values, renderer)
 
 
-def _build_prompt(posts: list[Post]) -> str:
-    lines = [
-        "Posts, strongest first. 'engaged' is likes + comments + shares + saves — the "
-        "measure that matters. Weight the top of this list most heavily.",
-        "",
-    ]
+def _build_prompt(posts: list[Post], families: list[Template]) -> str:
+    """Every post's opening, unordered and with no engagement figure attached, then the
+    families a pattern may be reconciled into.
+
+    Both removals are load-bearing rather than tidying. The old preamble said "strongest
+    first" and "weight the top of this list most heavily"; with no `order_by` in the query
+    the first is simply false, and the second would put the ranking back into the user
+    message the moment SQL stopped doing it — leaving engagement steering extraction from a
+    place nobody would think to grep. `engaged` is gone from the per-post line for the same
+    reason: it cannot answer "what repeats across the corpus", which is the only question
+    this prompt now asks.
+
+    The family list is the same mechanism `_structure_prompt` uses to let a structure cite a
+    hook by name, pointed at the hook's own kind — with the id alongside the name, because
+    the id is what `(family_id, version)` lineage resolves through and two runs can easily
+    give one shape two names.
+    """
+    lines = ["Every post in the corpus, in no particular order.", ""]
     for post in posts:
-        lines.append(f"id: {post.zernio_id} | engaged: {post.engaged_actions}")
+        lines.append(f"id: {post.zernio_id}")
         lines.append(f"hook: {_hook_of(post.content)}")
         lines.append("")
+    lines.append(
+        "Hook families that already have names. If one of your patterns is the same shape as "
+        "one of these, return its family_id rather than inventing a new name:"
+    )
+    lines.extend(f"- {family.name} | family_id: {family.family_id}" for family in families)
+    if not families:
+        lines.append("(none yet — every pattern you return starts a new family)")
     return "\n".join(lines)
 
 
 def _to_template(
-    session: Session, proposal: dict, known_ids: set[str], cohort: Cohort
+    session: Session,
+    proposal: dict,
+    known_ids: set[str],
+    cohort: Cohort,
+    families: dict[str, Template],
 ) -> Template:
     name = (proposal.get("name") or "").strip()
     pattern = (proposal.get("pattern") or "").strip()
     if not name or not pattern:
-        raise ExtractionError(f"proposal missing name or pattern: {proposal!r}")
+        # `_RejectedProposal`, not `ExtractionError`, and the distinction is not cosmetic.
+        # `ExtractionError` is the *batch* contract: `api_templates.py:144` turns it into a
+        # 502, which is right for "the model returned no hooks list" and wrong for "one
+        # proposal of ten is blank". Both are caught by the broad `except` in
+        # `propose_hooks` today, so raising the wrong one costs nothing until someone
+        # narrows that catch — and the comment in `propose_visuals` records that being
+        # narrowed twice, each time taking the whole batch down with it.
+        raise _RejectedProposal(f"proposal missing name or pattern: {proposal!r}")
 
     # Keep only ids the model was actually shown — provenance has to be checkable.
     provenance = [pid for pid in proposal.get("source_post_ids") or [] if pid in known_ids]
+    if not provenance:
+        # A pattern that covers nothing the model was shown is not a pattern, and since the
+        # prompt now *requires* `source_post_ids`, accepting one anyway would make the schema
+        # a stricter description than the code — the mirror of the reason 1.0.0's schema
+        # demands so little. It also keeps a zero-coverage row out of the count below.
+        #
+        # **Checked before the family lookup, and the order is deliberate.** Reconciling first
+        # would write a version 2 replacing a family's real provenance with an empty one;
+        # dropping the proposal costs that family a version it can get back on the next run.
+        raise _RejectedProposal(f"{name}: no cited post id was in the sample: {proposal!r}")
 
-    return create_template(
-        session,
-        kind=TemplateKind.HOOK,
-        name=name,
-        body={
-            "pattern": pattern,
-            "tone": (proposal.get("tone") or "").strip(),
-            "rationale": (proposal.get("rationale") or "").strip(),
-            "cohort": cohort.value,
-        },
-        slots=proposal.get("slots") or [],
-        provenance=provenance,
+    body = {
+        "pattern": pattern,
+        "tone": (proposal.get("tone") or "").strip(),
+        "rationale": (proposal.get("rationale") or "").strip(),
+        "cohort": cohort.value,
+    }
+    slots = proposal.get("slots") or []
+    # Counted off the *filtered* list, never off what the model claimed. Provenance is the
+    # approval gate now, so five invented ids would auto-approve a template covering nothing —
+    # and invented ids are measured rather than feared: all three VISUAL citations in the
+    # database today join to no post row.
+    covered = len(provenance) >= APPROVE_AT_COVERAGE
+
+    # `str(...)`, not a cast the type-checker asked for: `families.get` on a list or dict
+    # raises `TypeError: unhashable type`, which is not a `_RejectedProposal` — the same trap
+    # `_to_visual` records paying for on `pid in sizes`.
+    existing = families.get(str(proposal.get("family_id") or ""))
+    if existing is None:
+        # No id cited, or one naming nothing. The unknown-id case creates rather than drops,
+        # and that is a decision rather than a fallthrough: the model invented a *name for the
+        # family*, not the pattern or its coverage, and dropping the proposal would throw away
+        # evidence over a bad label. A duplicate family the next run can merge by citing the
+        # right id is the cheaper mistake. It is not how a retired family comes back — a
+        # retired family is in `families`, so it reaches `edit_template` and raises below.
+        return create_template(
+            session,
+            kind=TemplateKind.HOOK,
+            name=name,
+            body=body,
+            slots=slots,
+            provenance=provenance,
+            status=TemplateStatus.APPROVED if covered else TemplateStatus.PROPOSED,
+        )
+
+    # Raises `RetiredTemplateError` when the family was retired, and nothing here catches it:
+    # the per-proposal catch in `propose_hooks` logs and drops it, which is the whole handling
+    # a retired family needs. Anything that fell back to `create_template` here would revive it
+    # under a new id, silently, which is exactly what retiring it said not to do.
+    revised = edit_template(
+        session, existing, name=name, body=body, slots=slots, provenance=provenance
     )
+    if covered and revised.status is TemplateStatus.PROPOSED:
+        # Explicit, because `edit_template` copies the status of the row it revises
+        # (`templates.py:69`) — so without this a family that landed at coverage 3 stays
+        # PROPOSED forever, even when a later run finds it covering forty posts. Coverage
+        # growing as posts arrive is the entire point of reading the whole corpus.
+        #
+        # Promotion only. APPROVED is never touched whatever coverage does, and nothing here
+        # demotes or retires: a run that finds less than the last one is evidence about that
+        # run, not grounds for pulling a template out of the library.
+        approve(session, revised)
+    return revised
 
 
 def propose_hooks(
@@ -479,7 +599,6 @@ def propose_hooks(
     llm: LLM,
     *,
     platform: str = "linkedin",
-    sample_size: int = DEFAULT_SAMPLE_SIZE,
     cohort: Cohort = Cohort.VOICE,
     # Minted here when the caller does not supply one, so a trace row always groups the
     # calls of one extraction rather than sitting alone. `POST /templates/extract` runs one
@@ -487,25 +606,63 @@ def propose_hooks(
     # that makes "everything one extract route bought" answerable the day it runs two.
     correlation_id: str | None = None,
 ) -> list[Template]:
-    """Propose hook templates from the strongest posts. Proposals only — a human approves.
+    """Propose hook patterns from every non-excluded post of the cohort.
 
-    Ranked by engaged actions, so the model learns from posts people responded to rather
-    than posts that merely reached far. `cohort` selects whose posts are read; a hook is a
+    The whole corpus, unranked, and the model is asked what *recurs* across it rather than
+    what the strongest twelve posts do. `cohort` selects whose posts are read; a hook is a
     borrowable shape, so a creator's posts can teach one.
+
+    **`sample_size` is gone rather than defaulted, and that is deliberate.** There is no
+    smaller sample to ask for, and a parameter that silently does nothing is the failure
+    this file's comments exist to prevent.
+
+    **A pattern the model recognises as an existing family gains a version of that family
+    rather than a sibling of it.** The families that already have names go into the request
+    with their ids, and a proposal citing one is written through `edit_template`. Minting a
+    family per proposal is the whole explanation for 42 hook families drawn from roughly 12
+    posts, and nothing in this path used to look an existing template up at all.
+
+    A pattern covering `APPROVE_AT_COVERAGE` posts or more is written APPROVED — including a
+    revision of a family that was PROPOSED when the last run left it, which is a promotion
+    `edit_template` cannot make on its own. The rest arrive PROPOSED for an optional human
+    look. Nothing here demotes or retires anything: the append-only write is what protects
+    "nothing is lost", not the click.
     """
     # Coerced at the boundary: Cohort is a StrEnum, so a bare "voice" compares equal to
     # Cohort.VOICE but fails the identity checks below and has no .value — it would route
     # silently to the wrong cohort. Normalising here keeps everything downstream an enum.
     cohort = Cohort(cohort)
-    posts = _strongest_posts(session, platform, sample_size, cohort)
+    posts = _strongest_posts(session, platform, None, cohort)
     if not posts:
         return []
+
+    # Two lists out of one query, and they are deliberately different sets.
+    #
+    # `families` is what a cited id is resolved against and keeps RETIRED rows: that is what
+    # sends a proposal citing a retired family into `edit_template`, which raises and drops it.
+    # Leaving them out would route the same proposal to `create_template` and revive the family
+    # under a new id — the one thing retiring it forbade.
+    #
+    # `offered` is what the model is shown and drops them, for the reason `usable_templates`
+    # gives: a withdrawn template is not offered. Advertising an id whose every citation is
+    # discarded would lose a real pattern on every run.
+    #
+    # ponytail: cohort-blind, unlike the sample, which never mixes cohorts. A VOICE run and an
+    # INSPIRATION run see the same families, so a family cited by both ends up with whichever
+    # cohort and provenance ran last rather than the union — `edit_template` replaces both
+    # fields wholesale. Tolerable because a hook is a borrowable shape either way, and because
+    # `generation._exemplars` enforces the voice rule independently of what a template claims.
+    # Filtering on `body["cohort"]` here would be worse than the flip it fixes: the 42 legacy
+    # families this reconciliation exists to collapse were written before that key existed, so
+    # the filter would hide exactly them. Scope families per cohort once every row carries one.
+    families = {t.family_id: t for t in latest_versions(session, TemplateKind.HOOK)}
+    offered = [t for t in families.values() if t.status is not TemplateStatus.RETIRED]
 
     result = traced_call(
         session,
         llm,
         _HOOKS,
-        _build_prompt(posts),
+        _build_prompt(posts, offered),
         correlation_id=correlation_id or new_correlation_id(),
         # The posts the proposal is grounded in, so a template a human later approves can be
         # traced back to the sample that produced it. Zernio ids, joined, because that is what
@@ -513,6 +670,12 @@ def propose_hooks(
         # against — a different identifier here would not join to anything.
         input_artifact_ids={
             "posts": ",".join(p.zernio_id for p in posts),
+            # The families the model was allowed to reconcile into, for the reason
+            # `propose_structures` records the hook list it showed: a template that gained a
+            # version gained it because this call named its family, so which list it was shown
+            # is part of how that version came about. `(family_id, version)`, never the id
+            # alone — the id does not say which version of the family the model was reading.
+            "families": ",".join(f"{t.family_id}/{t.version}" for t in offered),
             "cohort": cohort.value,
             "platform": platform,
         },
@@ -522,63 +685,179 @@ def propose_hooks(
         raise ExtractionError(f"expected a 'hooks' list, got keys {sorted(result)}")
 
     known_ids = {p.zernio_id for p in posts}
-    return [_to_template(session, proposal, known_ids, cohort) for proposal in proposals]
+    kept: list[Template] = []
+    if len(proposals) > MAX_HOOK_PROPOSALS:
+        # Never silently. A truncated batch that reads as a complete one is how a partial
+        # answer gets mistaken for the whole picture. "considered", not "kept": rejections
+        # among the first MAX_HOOK_PROPOSALS mean fewer than that may end up in `kept`.
+        log.warning(
+            "model returned %d hooks; considered the first %d",
+            len(proposals),
+            MAX_HOOK_PROPOSALS,
+        )
+    for proposal in proposals[:MAX_HOOK_PROPOSALS]:
+        try:
+            template = _to_template(session, proposal, known_ids, cohort, families)
+        except Exception as exc:  # noqa: BLE001
+            # Deliberately broad, and for the reason `propose_visuals` records paying for
+            # twice: every "no" to "can this proposal be stored?" is equivalent, and the
+            # cost of missing one exception type is every *other* proposal in the batch.
+            # A model that returns a bare string where an object belongs raises
+            # `AttributeError` inside `_to_template`, not `_RejectedProposal`.
+            #
+            # The type is logged alongside the message because the catch is this broad: a
+            # `_RejectedProposal` from a malformed response and an `AttributeError` from a
+            # real bug in `_to_template` would otherwise read identically in the log.
+            log.warning("hook proposal rejected: %s: %s", type(exc).__name__, exc)
+            continue
+        kept.append(template)
+        # What this batch wrote is visible to the rest of it, and that is not bookkeeping.
+        # Two proposals may cite one family; against the snapshot taken before the loop the
+        # second would revise the *old* row, and `edit_template` copies that row's status — so
+        # a second proposal at coverage 1 would write a PROPOSED version straight over the
+        # APPROVED one the first just earned. Nothing here may demote anything.
+        families[template.family_id] = template
+    return kept
 
 
-def _structure_prompt(posts: list[Post], hooks: list[Template], focus: str = "") -> str:
-    lines = [
-        "Posts, strongest first. 'engaged' is likes + comments + shares + saves — the "
-        "measure that matters. Weight the top of this list most heavily.",
-        "",
-    ]
+def _structure_prompt(
+    posts: list[Post], hooks: list[Template], families: list[Template], focus: str = ""
+) -> str:
+    """Every post in full, unordered and with no engagement figure attached, then the hooks a
+    structure may pair with and the families it may be reconciled into.
+
+    Both removals are the ones `_build_prompt` records for hooks, for the same reasons: with no
+    `order_by` in the query "strongest first" is simply false, and "weight the top of this list
+    most heavily" would leave engagement steering extraction from the user message after SQL
+    stopped doing it. The focus paragraph carried the same claim in its own words ("even if they
+    are not the strongest performers") and loses it too — a phrase in a branch is still a phrase
+    in the prompt.
+
+    **The hooks are listed with their family ids, and that is a fix rather than a tidy.** This
+    list used to carry names alone and `_to_structure` resolved `compatible_hooks` through them.
+    A hook's name is no longer stable: `_to_template` writes `edit_template(name=...)` from the
+    proposal, so version 2 of a family can be called something else, and a name-keyed lookup
+    would silently pair a structure with nothing the first time that happened. Stored structures
+    were never at risk — `compatible_hook_families` has always held ids.
+
+    Two lists of ids in one prompt, so they are labelled apart — and which list gets the bare
+    label is deliberate. `family_id` means *the family this proposal may be a new version of*
+    in `_build_prompt`, and it has to mean the same thing here or one concept carries opposite
+    labels in two prompts a model reads back to back. So the reconciliation list keeps it and
+    the hooks are qualified, even though the hook list is the one that was already here. A
+    structure citing a hook's id as its own `family_id` would reach `families.get`, miss, and
+    mint a new family every run — the exact defect this reconciliation exists to close, and
+    invisible: nothing downstream can tell that id from a real miss.
+    """
+    lines = ["Every post in the corpus, in no particular order.", ""]
     for post in posts:
-        lines.append(f"id: {post.zernio_id} | engaged: {post.engaged_actions}")
+        lines.append(f"id: {post.zernio_id}")
         lines.append(post.content.strip()[:POST_CHARS])
         lines.append("---")
     lines.append("")
     if focus:
         lines.append(
             f"Describe the structure for the '{focus}' post type specifically. Ground it in "
-            f"whichever of the posts above are of that type, even if they are not the "
-            f"strongest performers — say so in the rationale if the evidence is thin."
+            f"whichever of the posts above are of that type, however few there are — say so in "
+            f"the rationale if the evidence is thin."
         )
         lines.append("")
-    lines.append("Available hook templates you may cite in compatible_hooks:")
-    lines.extend(f"- {hook.name}" for hook in hooks)
+    lines.append(
+        "Hook templates you may pair with in compatible_hooks. Cite the hook family_id, never "
+        "the name, and never as your own family_id:"
+    )
+    lines.extend(f"- {hook.name} | hook family_id: {hook.family_id}" for hook in hooks)
     if not hooks:
         lines.append("(none yet — return an empty compatible_hooks list)")
+    lines.append("")
+    lines.append(
+        "Structure families that already have names. If one of your structures is the same "
+        "shape as one of these, return its family_id rather than inventing a new name:"
+    )
+    lines.extend(f"- {family.name} | family_id: {family.family_id}" for family in families)
+    if not families:
+        lines.append("(none yet — every structure you return starts a new family)")
     return "\n".join(lines)
 
 
 def _to_structure(
-    session: Session, proposal: dict, hooks_by_name: dict[str, str], cohort: Cohort
+    session: Session,
+    proposal: dict,
+    hook_families: set[str],
+    known_ids: set[str],
+    cohort: Cohort,
+    families: dict[str, Template],
 ) -> Template:
     name = (proposal.get("name") or "").strip()
     sections = proposal.get("sections") or []
     if not name or not sections:
-        raise ExtractionError(f"structure missing name or sections: {proposal!r}")
+        # `_RejectedProposal`, not `ExtractionError` — see `_to_template` for why the two
+        # are not interchangeable.
+        raise _RejectedProposal(f"structure missing name or sections: {proposal!r}")
+
+    # Keep only ids the model was actually shown — provenance has to be checkable, the
+    # same filter `_to_template` applies. "Exists in the database" is not the test: a real
+    # post held out of this sample is one the pattern was never derived from, and it fails
+    # only this check.
+    provenance = [pid for pid in proposal.get("source_post_ids") or [] if pid in known_ids]
+    if not provenance:
+        # Every one of the 15 structures in the library cites nothing, because 1.0.0's example
+        # JSON never showed `source_post_ids` and its schema never required it. 2.0.0 does
+        # both, and this line is what makes that true rather than documentation: `traced_call`
+        # does not validate a response against the schema, so accepting an uncited structure
+        # anyway would keep minting exactly those rows under a prompt that says it cannot.
+        #
+        # **Checked before the family lookup, for the reason `_to_template` records:**
+        # reconciling first would write a version 2 replacing a family's real provenance with
+        # an empty one.
+        raise _RejectedProposal(f"{name}: no cited post id was in the sample: {proposal!r}")
 
     # Only hooks that actually exist — a structure pointing at an invented hook would
     # break generation the first time anyone selected it.
-    families = [
-        hooks_by_name[cited]
-        for cited in proposal.get("compatible_hooks") or []
-        if cited in hooks_by_name
+    #
+    # Matched on `family_id`, never on the name, and that is a fix. Reconciliation made a
+    # hook's name mutable: `_to_template` writes `edit_template(name=...)` from the model's
+    # proposal, so version 2 of a family can be called something else. A name-keyed lookup
+    # would resolve to nothing the first time that happened, and silently — the stored row
+    # holds family ids, so a structure that paired with nothing reads exactly like one that
+    # cited no hooks. `_structure_prompt` lists the ids to match.
+    cited_hooks = [
+        cited for cited in proposal.get("compatible_hooks") or [] if cited in hook_families
     ]
 
-    return create_template(
-        session,
-        kind=TemplateKind.STRUCTURE,
-        name=name,
-        body={
-            "post_type": (proposal.get("post_type") or name).strip(),
-            "sections": sections,
-            "compatible_hook_families": families,
-            "rationale": (proposal.get("rationale") or "").strip(),
-            "cohort": cohort.value,
-        },
-        provenance=[p for p in proposal.get("source_post_ids") or []],
-    )
+    body = {
+        "post_type": (proposal.get("post_type") or name).strip(),
+        "sections": sections,
+        "compatible_hook_families": cited_hooks,
+        "rationale": (proposal.get("rationale") or "").strip(),
+        "cohort": cohort.value,
+    }
+    # Counted off the *filtered* list, never off what the model claimed — see `_to_template`.
+    covered = len(provenance) >= APPROVE_AT_COVERAGE
+
+    # `str(...)` for the reason `_to_template` records: `families.get` on a list or dict raises
+    # `TypeError: unhashable type`, which is not a `_RejectedProposal`.
+    existing = families.get(str(proposal.get("family_id") or ""))
+    if existing is None:
+        return create_template(
+            session,
+            kind=TemplateKind.STRUCTURE,
+            name=name,
+            body=body,
+            provenance=provenance,
+            status=TemplateStatus.APPROVED if covered else TemplateStatus.PROPOSED,
+        )
+
+    # Raises `RetiredTemplateError` when the family was retired, and nothing here catches it —
+    # the per-proposal catch in `propose_structures` logs and drops it, which is the whole
+    # handling a retired family needs. See `_to_template`.
+    revised = edit_template(session, existing, name=name, body=body, provenance=provenance)
+    if covered and revised.status is TemplateStatus.PROPOSED:
+        # Explicit, because `edit_template` copies the status of the row it revises
+        # (`templates.py:69`). Promotion only: APPROVED is never touched and nothing here
+        # demotes or retires. Again, `_to_template` carries the full reasoning.
+        approve(session, revised)
+    return revised
 
 
 def propose_structures(
@@ -586,32 +865,53 @@ def propose_structures(
     llm: LLM,
     *,
     platform: str = "linkedin",
-    sample_size: int = DEFAULT_SAMPLE_SIZE,
     focus: str = "",
     cohort: Cohort = Cohort.VOICE,
     correlation_id: str | None = None,
 ) -> list[Template]:
-    """Propose post structures from the strongest posts. Proposals only — a human approves.
+    """Propose post structures from every non-excluded post of the cohort, in full text.
 
-    `focus` names a post type to describe specifically. Without it the model reports the
-    shapes the corpus actually rewards, which may not include a type you want covered.
-    `cohort` selects whose posts are read; a structure is a borrowable shape, so a
+    Whole posts rather than openings, because a structure is about the shape of the entire
+    thing. `cohort` selects whose posts are read; a structure is a borrowable shape, so a
     creator's posts can teach one.
+
+    **`sample_size` is gone rather than defaulted.** Its docstring sold it as the way to reach
+    post types below the engagement cutoff; there is no cutoff left to reach below, and a
+    parameter that silently does nothing is the failure this file's comments exist to prevent.
+    `focus` stays and still works — naming a post type to describe is a real request, and the
+    only one the deleted parameter was ever standing in for.
+
+    Reconciliation, coverage and promotion are `propose_hooks`' exactly, pointed at STRUCTURE;
+    the reasoning for each is written out there and beside `_to_template` rather than repeated.
+    The one thing that is new here: every structure now arrives with a non-empty provenance,
+    where all 15 in the library today cite nothing at all.
     """
     # Coerced at the boundary: Cohort is a StrEnum, so a bare "voice" compares equal to
     # Cohort.VOICE but fails the identity checks below and has no .value — it would route
     # silently to the wrong cohort. Normalising here keeps everything downstream an enum.
     cohort = Cohort(cohort)
-    posts = _strongest_posts(session, platform, sample_size, cohort)
+    posts = _strongest_posts(session, platform, None, cohort)
     if not posts:
         return []
 
     hooks = usable_templates(session, TemplateKind.HOOK)
+
+    # Two lists out of one query, deliberately different sets, for the reason `propose_hooks`
+    # writes out in full: `families` keeps RETIRED rows so a proposal citing one reaches
+    # `edit_template` and is dropped rather than reviving the family under a new id, and
+    # `offered` drops them because a withdrawn template is not advertised.
+    #
+    # ponytail: cohort-blind, unlike the sample. Same trade `propose_hooks` records and the same
+    # upgrade path — scope families per cohort once every row carries a `body["cohort"]`, which
+    # the 15 legacy structures this reconciliation exists to collapse do not.
+    families = {t.family_id: t for t in latest_versions(session, TemplateKind.STRUCTURE)}
+    offered = [t for t in families.values() if t.status is not TemplateStatus.RETIRED]
+
     result = traced_call(
         session,
         llm,
         _STRUCTURES,
-        _structure_prompt(posts, hooks, focus),
+        _structure_prompt(posts, hooks, offered, focus),
         correlation_id=correlation_id or new_correlation_id(),
         input_artifact_ids={
             "posts": ",".join(p.zernio_id for p in posts),
@@ -619,6 +919,9 @@ def propose_structures(
             # pairing a later draft is generated through, so which list it was shown is part
             # of how that pairing came about.
             "hooks": ",".join(f"{h.family_id}/{h.version}" for h in hooks),
+            # And the structure families it was allowed to reconcile into — `(family_id,
+            # version)`, never the id alone, exactly as `propose_hooks` records its own.
+            "families": ",".join(f"{t.family_id}/{t.version}" for t in offered),
             "cohort": cohort.value,
             "platform": platform,
             "focus": focus,
@@ -628,8 +931,34 @@ def propose_structures(
     if not isinstance(proposals, list):
         raise ExtractionError(f"expected a 'structures' list, got keys {sorted(result)}")
 
-    hooks_by_name = {hook.name: hook.family_id for hook in hooks}
-    return [_to_structure(session, proposal, hooks_by_name, cohort) for proposal in proposals]
+    hook_families = {hook.family_id for hook in hooks}
+    known_ids = {p.zernio_id for p in posts}
+    kept: list[Template] = []
+    if len(proposals) > MAX_STRUCTURE_PROPOSALS:
+        # Never silently, for the reason `propose_hooks` and `propose_visuals` both record: a
+        # truncated batch that reads as a complete one is how a partial answer gets mistaken
+        # for the whole picture.
+        log.warning(
+            "model returned %d structures; considered the first %d",
+            len(proposals),
+            MAX_STRUCTURE_PROPOSALS,
+        )
+    for proposal in proposals[:MAX_STRUCTURE_PROPOSALS]:
+        try:
+            template = _to_structure(
+                session, proposal, hook_families, known_ids, cohort, families
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Broad for the same reason as `propose_hooks` above: one unusable proposal
+            # costs only itself. The type is logged because the catch is this broad.
+            log.warning("structure proposal rejected: %s: %s", type(exc).__name__, exc)
+            continue
+        kept.append(template)
+        # What this batch wrote is visible to the rest of it — the auto-demotion
+        # `propose_hooks` documents: two proposals citing one family, and against a snapshot
+        # taken before the loop the second writes PROPOSED over the APPROVED the first earned.
+        families[template.family_id] = template
+    return kept
 
 
 def compatible_hooks(session: Session, structure: Template) -> list[Template]:

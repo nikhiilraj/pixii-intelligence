@@ -158,7 +158,15 @@ def test_the_extraction_endpoint_can_be_pointed_at_the_inspiration_cohort(sessio
     session.flush()
 
     app.dependency_overrides[get_llm] = lambda: _FakeLLM(
-        {"hooks": [{"name": "borrowed", "pattern": "{a} turned into {b}"}]}
+        {
+            "hooks": [
+                {
+                    "name": "borrowed",
+                    "pattern": "{a} turned into {b}",
+                    "source_post_ids": ["theirs"],
+                }
+            ]
+        }
     )
     client = client_with(session)
 
@@ -189,6 +197,68 @@ def test_a_model_that_returns_the_wrong_shape_is_reported_not_silently_ignored(s
 
     assert response.status_code == 502
     app.dependency_overrides.clear()
+
+
+def test_one_unusable_proposal_does_not_turn_the_whole_batch_into_a_502(session):
+    """The 502 above is the *batch* contract; a single bad proposal is not a batch failure.
+
+    Route-level rather than unit-level because that is where the difference was paid: the
+    extract route maps `ExtractionError` to 502, so a per-proposal error raised as one lost
+    every sibling and returned nothing to the reviewer. Hooks only — the route's error
+    handling is identical for structures, and the per-kind logic is covered in
+    `test_extraction.py` and `test_structures.py`.
+    """
+    from app.deps import get_llm
+    from app.models.post import Post
+
+    session.add(
+        Post(
+            zernio_id="win-1",
+            platform="linkedin",
+            content="A hook.",
+            engaged_actions=185,
+            account_username=settings.voice_account,
+            published_at=datetime(2026, 6, 1),
+        )
+    )
+    session.flush()
+    app.dependency_overrides[get_llm] = lambda: _FakeLLM(
+        {
+            "hooks": [
+                {"name": "patternless"},
+                {
+                    "name": "transformation",
+                    "pattern": "{a} turned into {b}",
+                    "source_post_ids": ["win-1"],
+                },
+            ]
+        }
+    )
+
+    response = client_with(session).post("/templates/extract/hooks")
+
+    assert response.status_code == 201
+    assert [t["name"] for t in response.json()] == ["transformation"]
+    app.dependency_overrides.clear()
+
+
+def test_the_structures_route_offers_focus_and_no_sample_size():
+    """`sample_size` was deleted, and the contract is the only place a deletion is visible.
+
+    FastAPI ignores an unknown query parameter rather than refusing it, so a caller still
+    sending `?sample_size=27` gets a 201 and no hint that the number meant nothing — which is
+    exactly the silent no-op the parameter was deleted for. The published contract is what
+    tells them, so it is what this pins; re-adding the parameter fails here.
+
+    `focus` is asserted in the same breath because the two are easy to delete together: it is
+    a real request the sample size was only ever standing in for, and `test_structures.py`
+    covers that it reaches the prompt.
+    """
+    parameters = app.openapi()["paths"]["/templates/extract/structures"]["post"]["parameters"]
+    names = {p["name"] for p in parameters}
+
+    assert "sample_size" not in names
+    assert "focus" in names
 
 
 class _FakeLLM:

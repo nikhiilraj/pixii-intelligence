@@ -49,6 +49,61 @@ Return ONLY JSON of this shape, with no commentary:
   ]
 }"""
 
+# The instruction inverted, not reworded. 1.0.0 asks the model to abstract a shape out of the
+# twelve strongest posts; this asks what *recurs* across every post in the corpus. That is a
+# different question, so it is a major version and 1.0.0 stays registered — every trace row and
+# every template already proposed still names the words that actually produced it.
+#
+# Both removals from the sample show up here. There is no "strongest first" because the sample
+# is no longer ordered, and there is no engagement figure because engagement cannot answer
+# "what repeats". The last rule is not decoration either: a model handed 274 posts and asked
+# for ten patterns will offer to rank them unless told the order means nothing.
+#
+# The `family_id` rule is the half of reconciliation that lives in the prompt: the families that
+# already have names go into the user message, and a pattern that is the same shape as one of
+# them comes back carrying its id instead of a new name. Without it the write path has nothing
+# to reconcile *on* — which is how roughly 12 posts produced 42 hook families.
+HOOKS_TEXT_V2 = """\
+You find the hook patterns that recur across a body of social posts.
+
+A hook is the opening — the first line or two that decides whether someone keeps reading.
+Your job is to find the *repeatable shape* underneath specific wording, so it can be reused
+for different subject matter.
+
+You are given every post in the corpus, in no particular order. Report the shapes that
+genuinely **recur** across them. A shape that appears once is not a pattern, it is one post.
+
+Rules:
+- Return at most 10 patterns. Fewer, sharper patterns beat many overlapping ones.
+- For each pattern, list the id of EVERY post it covers, not one example. A pattern citing a
+  single post is a transcription of that post.
+- Only cite a post the pattern actually describes. A longer list is not a better one, and a
+  pattern stretched loosely over thirty posts is worse than an honest one over five.
+- Never cite an id you were not given.
+- You are also given the hook families that already have names, with their ids. If one of
+  your patterns is the same shape as one of those, return that family's family_id and
+  describe the pattern as you find it now. Leave family_id out only for a shape none of
+  them covers.
+- Express each pattern with {slot_name} placeholders for the parts that change.
+- Describe tone concretely (casing, rhythm, whether it leads with a number), not as praise.
+- Do not rank the patterns and do not call any of them best. The order you return them in
+  carries no meaning.
+
+Return ONLY JSON of this shape, with no commentary:
+{
+  "hooks": [
+    {
+      "name": "short-kebab-name",
+      "family_id": "an existing family's id, omitted when the pattern is a new one",
+      "pattern": "{slot} literal text {slot}",
+      "tone": "concrete description",
+      "slots": [{"name": "slot", "example": "a real example"}],
+      "source_post_ids": ["id", "..."],
+      "rationale": "what makes this recur, one sentence"
+    }
+  ]
+}"""
+
 STRUCTURES_TEXT = """\
 You extract reusable post structures from social posts that already performed well.
 
@@ -76,6 +131,64 @@ Return ONLY JSON of this shape, with no commentary:
       "sections": [{"name": "hook", "guidance": "what this section must do"}],
       "compatible_hooks": ["hook-template-name"],
       "rationale": "one sentence"
+    }
+  ]
+}"""
+
+# The same inversion `HOOKS_TEXT_V2` records, applied to structures, so a major version for the
+# same reason: 1.0.0 asks the model to describe what the strongest posts do, this asks what
+# shape *recurs* across every post. 1.0.0 stays registered — the 15 structures already in the
+# library came out of those words.
+#
+# Two changes are specific to structures rather than carried across. `source_post_ids` is asked
+# for in the example JSON at all, which 1.0.0 never did: that omission is the whole reason all
+# 15 rows cite nothing, since a field the shape does not show is a field the model does not
+# send. And `compatible_hooks` asks for a family_id where 1.0.0 asked for a name — a hook that
+# gains a version takes the name the model gave it, so names stopped being stable identifiers
+# the day extraction started reconciling.
+STRUCTURES_TEXT_V2 = """\
+You find the post structures that recur across a body of social posts.
+
+A structure is the ordered shape of a whole post — what the beginning, middle and end each
+do — independent of the subject matter. It is what gives a draft a shape to follow.
+
+You are given every post in the corpus, in full and in no particular order. Report the shapes
+that genuinely **recur** across them. A shape that appears once is not a pattern, it is one
+post.
+
+Rules:
+- Return at most 10 structures. Two or three sharply different ones beat many similar ones.
+- For each structure, list the id of EVERY post it covers, not one example. A structure
+  citing a single post is a transcription of that post.
+- Only cite a post the structure actually describes. A longer list is not a better one, and a
+  shape stretched loosely over thirty posts is worse than an honest one over five.
+- Never cite an id you were not given.
+- You are also given the structure families that already have names, with their ids. If one of
+  your structures is the same shape as one of those, return that family's family_id and
+  describe the structure as you find it now. Leave family_id out only for a shape none of
+  them covers.
+- Give each section a short name and concrete guidance on what belongs there. Guidance must
+  be actionable ("state the cost in dollars"), never vague ("be engaging").
+- Sections are ordered: beginning first, end last.
+- Name the post type you are describing, e.g. "offer-reward" (a post that gives something
+  away in exchange for a comment or follow) or "deep-research" (a post presenting original
+  findings or a teardown).
+- In "compatible_hooks", give the family_id of hooks from the supplied list, never their
+  names. If none fit, return an empty list.
+- Do not rank the structures and do not call any of them best. The order you return them in
+  carries no meaning.
+
+Return ONLY JSON of this shape, with no commentary:
+{
+  "structures": [
+    {
+      "name": "short-kebab-name",
+      "family_id": "an existing family's id, omitted when the structure is a new one",
+      "post_type": "offer-reward",
+      "sections": [{"name": "hook", "guidance": "what this section must do"}],
+      "compatible_hooks": ["a hook family_id from the list you were given"],
+      "source_post_ids": ["id", "..."],
+      "rationale": "what makes this recur, one sentence"
     }
   ]
 }"""
@@ -178,6 +291,45 @@ HOOKS = Prompt(
     },
 )
 
+HOOKS_V2 = Prompt(
+    name="extraction.hooks",
+    version="2.0.0",
+    text=HOOKS_TEXT_V2,
+    output_schema={
+        "type": "object",
+        "required": ["hooks"],
+        "properties": {
+            "hooks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    # `source_post_ids` joins `name` and `pattern` here where 1.0.0 left it
+                    # optional, and it is not a tightening for its own sake: `_to_template`
+                    # now rejects a proposal whose citations do not survive the filter, and
+                    # coverage decides whether the template arrives approved. A schema that
+                    # still called the field optional would describe a laxer prompt than the
+                    # one that is sent — the mirror of the reason 1.0.0 demands so little.
+                    "required": ["name", "pattern", "source_post_ids"],
+                    "properties": {
+                        "name": {"type": "string"},
+                        # Offered, never demanded: the first run has no family to cite, and
+                        # `traced_call` does not validate a response against this schema
+                        # anyway — the schema documents the prompt and `_to_template` is what
+                        # enforces it. A required field here would describe a promise nothing
+                        # keeps.
+                        "family_id": {"type": "string"},
+                        "pattern": {"type": "string"},
+                        "tone": {"type": "string"},
+                        "slots": {"type": "array", "items": {"type": "object"}},
+                        "source_post_ids": {"type": "array", "items": {"type": "string"}},
+                        "rationale": {"type": "string"},
+                    },
+                },
+            }
+        },
+    },
+)
+
 STRUCTURES = Prompt(
     name="extraction.structures",
     version="1.0.0",
@@ -195,6 +347,47 @@ STRUCTURES = Prompt(
                         "name": {"type": "string"},
                         "post_type": {"type": "string"},
                         "sections": {"type": "array", "items": {"type": "object"}},
+                        "compatible_hooks": {"type": "array", "items": {"type": "string"}},
+                        "rationale": {"type": "string"},
+                        "source_post_ids": {"type": "array", "items": {"type": "string"}},
+                    },
+                },
+            }
+        },
+    },
+)
+
+STRUCTURES_V2 = Prompt(
+    name="extraction.structures",
+    version="2.0.0",
+    text=STRUCTURES_TEXT_V2,
+    output_schema={
+        "type": "object",
+        "required": ["structures"],
+        "properties": {
+            "structures": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    # `source_post_ids` joins `name` and `sections`, and this is the change
+                    # that ends structure provenance being empty in every row. It is safe to
+                    # demand only because `_to_structure` filters the citations to ids the
+                    # model was shown first: coverage decides whether the template arrives
+                    # approved, so an unfiltered list of invented ids would auto-approve a
+                    # structure covering nothing.
+                    "required": ["name", "sections", "source_post_ids"],
+                    "properties": {
+                        "name": {"type": "string"},
+                        # Offered, never demanded, for the reason `HOOKS_V2` records: the
+                        # first run has no family to cite, and `traced_call` does not validate
+                        # a response against this schema anyway — `_to_structure` is what
+                        # enforces it.
+                        "family_id": {"type": "string"},
+                        "post_type": {"type": "string"},
+                        "sections": {"type": "array", "items": {"type": "object"}},
+                        # Hook *family ids* now, where 1.0.0 carried names. The type is the
+                        # same and the meaning is not, which is half of why this is a major
+                        # version rather than a reworded 1.0.1.
                         "compatible_hooks": {"type": "array", "items": {"type": "string"}},
                         "rationale": {"type": "string"},
                         "source_post_ids": {"type": "array", "items": {"type": "string"}},
@@ -235,4 +428,4 @@ VISUALS = Prompt(
     },
 )
 
-PROMPTS: tuple[Prompt, ...] = (HOOKS, STRUCTURES, VISUALS)
+PROMPTS: tuple[Prompt, ...] = (HOOKS, HOOKS_V2, STRUCTURES, STRUCTURES_V2, VISUALS)

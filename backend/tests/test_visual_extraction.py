@@ -94,14 +94,22 @@ def add_post(session, zid, engaged, *, media=None, content="Body.", author=None)
 
 
 def test_sample_is_image_posts_strongest_first(session):
+    """Read off the `id:` lines, never off `.index()` into the whole prompt.
+
+    The `.index("strong") < .index("weak")` version of this assertion was decoration: the
+    prompt's own preamble opens "Post images, strongest first", so `index("strong")` found
+    that word and the test passed with the `order_by` deleted (measured — corpus-wide hook
+    extraction removed the ordering for hooks and nothing here failed). Visuals keep their
+    ranked top-5 sample deliberately, so this is the assertion that has to be real.
+    """
     add_post(session, "weak", 10, media=(png(), ".png"))
     add_post(session, "strong", 900, media=(png(), ".png"))
     llm = FakeLLM()
 
     propose_visuals(session, llm, FakeRenderer())
 
-    assert "strong" in (llm.user or "")
-    assert (llm.user or "").index("strong") < (llm.user or "").index("weak")
+    cited = [line.split()[1] for line in (llm.user or "").splitlines() if line.startswith("id:")]
+    assert cited == ["strong", "weak"]
     assert len(llm.images) == 2
 
 

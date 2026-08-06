@@ -101,24 +101,129 @@ def test_a_registered_prompt_still_hashes_to_what_it_did_before_the_move(name, d
 
 
 @pytest.mark.parametrize(
-    ("pinned", "name"),
+    ("pinned", "name", "version"),
     [
-        (_WRITE, "draft.write"),
-        (_SUGGEST, "draft.suggest_templates"),
-        (_TOPICS, "topics.propose"),
-        (_HOOKS, "extraction.hooks"),
-        (_STRUCTURES, "extraction.structures"),
-        (_VISUALS, "extraction.visuals"),
+        (_WRITE, "draft.write", "1.0.0"),
+        (_SUGGEST, "draft.suggest_templates", "1.0.0"),
+        (_TOPICS, "topics.propose", "1.0.0"),
+        # Hooks moved to 2.0.0 when extraction started reading the whole corpus. The version
+        # is carried in the parameters rather than assumed, so a call site that quietly slips
+        # back to the abstract-these-twelve-posts prompt fails here.
+        (_HOOKS, "extraction.hooks", "2.0.0"),
+        # Structures followed hooks to 2.0.0, for the same inversion and one more: 1.0.0's
+        # example JSON never showed `source_post_ids`, which is why all 15 structures in the
+        # library cite nothing.
+        (_STRUCTURES, "extraction.structures", "2.0.0"),
+        (_VISUALS, "extraction.visuals", "1.0.0"),
     ],
 )
-def test_the_call_sites_send_the_registered_prompt_and_not_a_copy(pinned, name):
+def test_the_call_sites_send_the_registered_prompt_and_not_a_copy(pinned, name, version):
     """`generation`, `autonomous` and `extraction` hold the registry's own object, not a copy.
 
     Together with the pinned texts above, this is what makes the byte-identity claim reach the
     model rather than stopping at the registry: the constant these modules pass to
     `complete_json` *is* the row the pin covers.
     """
-    assert pinned is prompts.get(name, "1.0.0")
+    assert pinned is prompts.get(name, version)
+
+
+def test_the_superseded_hook_prompt_is_still_registered_and_still_its_old_self():
+    """A new major version adds a row; it never edits the one already traced.
+
+    Every `GenerationTrace` written before this change names `extraction.hooks` `1.0.0`, and
+    every hook template proposed so far came out of those words. Dropping the row would make
+    each of them name a prompt that no longer exists — the `(family_id, version)` rule, one
+    layer up.
+    """
+    old = prompts.get("extraction.hooks", "1.0.0")
+    new = prompts.get("extraction.hooks", "2.0.0")
+
+    assert old is not new
+    assert "Weight the top" not in new.text and "strongest" not in new.text
+    assert "recur" in new.text
+    # Required in 2.0.0 and optional in 1.0.0. Coverage is the approval gate now, so a
+    # proposal with no citations has nothing to be approved on.
+    assert "source_post_ids" in new.output_schema["properties"]["hooks"]["items"]["required"]
+    assert (
+        "source_post_ids" not in old.output_schema["properties"]["hooks"]["items"]["required"]
+    )
+
+
+def test_the_hook_prompt_offers_family_id_without_demanding_it():
+    """Optional in the schema, and the code is what enforces it either way.
+
+    `traced_call` never validates a response against `output_schema` — the schema is
+    documentation — so a required `family_id` would describe a promise nothing keeps, and the
+    first run has no family to cite anyway. What makes it real is `_to_template`: a cited id
+    that exists is revised, and one that does not is created under a new family.
+    """
+    prompt = prompts.get("extraction.hooks", "2.0.0")
+    item = prompt.output_schema["properties"]["hooks"]["items"]
+
+    assert "family_id" in item["properties"]
+    assert "family_id" not in item["required"]
+    # In the words as well as the schema: the schema is not sent to the model.
+    assert "family_id" in prompt.text
+
+
+def test_the_superseded_structure_prompt_is_still_registered_and_still_its_old_self():
+    """A new major version adds a row; it never edits the one already traced.
+
+    Every structure in the library was proposed by `extraction.structures` 1.0.0, and every
+    trace row written so far names it. The digest above pins those words byte for byte; this
+    pins that 2.0.0 is a different row rather than an edit of them.
+    """
+    old = prompts.get("extraction.structures", "1.0.0")
+    new = prompts.get("extraction.structures", "2.0.0")
+
+    assert old is not new
+    assert "strongest" not in new.text
+    assert "recur" in new.text
+
+
+def test_the_structure_prompt_asks_for_provenance_in_the_shape_as_well_as_the_schema():
+    """The fix for 15 structures citing nothing, and the schema is only half of it.
+
+    1.0.0 declared `source_post_ids` as a property and never required it — but the reason the
+    model never sent one is simpler and lives in the text: the example JSON did not show the
+    field. `traced_call` does not validate a response against `output_schema` at all, so the
+    words are what the model actually reads.
+    """
+    old = prompts.get("extraction.structures", "1.0.0")
+    new = prompts.get("extraction.structures", "2.0.0")
+    item = new.output_schema["properties"]["structures"]["items"]
+
+    assert "source_post_ids" in item["required"]
+    assert "source_post_ids" not in old.text
+    assert "source_post_ids" in new.text
+
+
+def test_the_structure_prompt_asks_for_hooks_by_family_id_and_not_by_name():
+    """Reconciliation made a hook's name mutable, so a name is no longer an identifier.
+
+    `_to_template` writes `edit_template(name=...)` from the proposal, so version 2 of a hook
+    family can be called something else. A prompt still asking for "hook-template-name" would
+    produce citations `_to_structure` resolves to nothing — silently, since the stored row
+    holds ids and an unmatched citation reads exactly like no citation.
+    """
+    old = prompts.get("extraction.structures", "1.0.0")
+    new = prompts.get("extraction.structures", "2.0.0")
+
+    assert "hook-template-name" in old.text
+    assert "hook-template-name" not in new.text
+    assert "family_id of hooks" in new.text
+
+
+def test_the_structure_prompt_offers_family_id_without_demanding_it():
+    """Optional in the schema, and `_to_structure` is what enforces it either way — the
+    reason `HOOKS_V2` gives: the first run has no family to cite."""
+    item = prompts.get("extraction.structures", "2.0.0").output_schema["properties"][
+        "structures"
+    ]["items"]
+
+    assert "family_id" in item["properties"]
+    assert "family_id" not in item["required"]
+    assert "family_id" in prompts.get("extraction.structures", "2.0.0").text
 
 
 def test_the_json_shape_stays_inside_the_prompt_text():

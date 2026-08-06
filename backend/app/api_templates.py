@@ -6,7 +6,6 @@ from sqlmodel import col, select
 from app.assets import UnresolvableAsset
 from app.deps import HtmlRendererDep, ImageRendererDep, LLMDep, SessionDep
 from app.extraction import (
-    DEFAULT_SAMPLE_SIZE,
     Cohort,
     ExtractionError,
     compatible_hooks,
@@ -133,11 +132,15 @@ def extract_hooks(
     platform: str = "linkedin",
     cohort: Cohort = Cohort.VOICE,
 ) -> list[Template]:
-    """Ask the model for hook patterns from the strongest posts.
+    """Ask the model which hook patterns recur across every non-excluded post of the cohort.
 
-    Everything it returns arrives as a proposal — a human still approves before any of it
-    can be used for generation. `cohort=inspiration` reads other creators' posts instead
-    of Monte's; the resulting hooks are still only shapes, never a voice.
+    **This no longer returns proposals only.** A pattern whose filtered provenance covers
+    `extraction.APPROVE_AT_COVERAGE` posts or more arrives APPROVED and is immediately usable
+    for generation; the rest arrive PROPOSED for an optional look. Coverage is a property of
+    the corpus, not a ranking — nothing here is called best and nothing is sorted.
+
+    `cohort=inspiration` reads other creators' posts instead of Monte's; the resulting hooks
+    are still only shapes, never a voice.
     """
     try:
         proposals = propose_hooks(session, llm, platform=platform, cohort=cohort)
@@ -155,23 +158,27 @@ def extract_structures(
     session: SessionDep,
     llm: LLMDep,
     platform: str = "linkedin",
-    sample_size: int = DEFAULT_SAMPLE_SIZE,
     focus: str = "",
     cohort: Cohort = Cohort.VOICE,
 ) -> list[Template]:
-    """Ask the model for post structures from the strongest posts. Proposals only.
+    """Ask the model which post structures recur across every non-excluded post of the cohort.
 
-    `sample_size` widens the evidence base. Post types that consistently underperform
-    (research posts, in this corpus) sit below the default cutoff, so deriving a structure
-    for one requires deliberately looking further down the ranking. `cohort=inspiration`
-    reads other creators' posts instead of Monte's.
+    **This no longer returns proposals only**, on the same terms as `extract_hooks`: a structure
+    whose filtered provenance covers `extraction.APPROVE_AT_COVERAGE` posts or more arrives
+    APPROVED, the rest PROPOSED.
+
+    **`sample_size` is gone rather than deprecated.** It sold itself as the way to reach post
+    types below the engagement cutoff; the whole corpus is read now, so there is nothing to
+    reach below and a parameter that silently did nothing is what this codebase's comments
+    exist to prevent. `focus` names a post type to describe specifically and still works —
+    it is the request `sample_size` was ever standing in for. `cohort=inspiration` reads other
+    creators' posts instead of Monte's.
     """
     try:
         proposals = propose_structures(
             session,
             llm,
             platform=platform,
-            sample_size=sample_size,
             focus=focus,
             cohort=cohort,
         )

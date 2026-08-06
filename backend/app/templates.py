@@ -22,8 +22,16 @@ def create_template(
 ) -> Template:
     """Author version 1 of a new template family.
 
-    Defaults to proposed: extraction proposes and a human approves, and nothing enters
-    the usable library unvetted.
+    Defaults to proposed, and every hand-authored caller takes that default: nothing enters
+    the usable library unvetted by accident.
+
+    **Hook and structure extraction now pass APPROVED explicitly when a pattern's filtered
+    provenance covers `extraction.APPROVE_AT_COVERAGE` posts or more**, so "a human approves
+    everything" is no longer true of this function and the old docstring saying so was the
+    kind of comment this codebase treats as a bug. What that gate protected — nothing is lost — is
+    bought by the append-only write, not by the click; the 48 unreviewed proposals sitting in
+    Studio are what a review gate with a backlog actually protects. See design decision 3 in
+    `docs/superpowers/specs/2026-08-06-corpus-wide-extraction-design.md`.
     """
     template = Template(
         family_id=uuid.uuid4().hex,
