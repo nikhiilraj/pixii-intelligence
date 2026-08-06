@@ -12,11 +12,18 @@ from app.extraction import (
     Cohort,
     ExtractionError,
     propose_hooks,
+    uncovered_posts,
 )
 from app.models.generation_trace import GenerationTrace
 from app.models.post import Post
 from app.models.template import Template, TemplateKind, TemplateStatus
-from app.templates import create_template, latest_versions, retire, usable_templates
+from app.templates import (
+    create_template,
+    edit_template,
+    latest_versions,
+    retire,
+    usable_templates,
+)
 
 
 class FakeLLM:
@@ -878,3 +885,91 @@ def test_a_failed_extraction_call_is_recorded_with_its_error(session):
     assert trace.error == "RuntimeError: vision endpoint unavailable"
     assert trace.output_hash is None
     assert trace.latency_ms is not None
+
+
+# --- The uncovered set: what the live library speaks for, and what it does not ---------------
+#
+# The first real corpus-wide run produced 19 templates citing 92 distinct posts and left 144 of
+# 236 uncovered. Whether that is because those posts share no shape, or because a model handed
+# 274 posts at once stopped labelling early, is only answerable by running over the leftovers
+# and seeing what comes back.
+
+
+def test_a_post_the_newest_version_dropped_is_uncovered_again(session):
+    """Counting every row would hide exactly the gap this exists to show.
+
+    A v1 that cited a post and a v2 that dropped it means the *current* library does not cover
+    that post. Resolving through `latest_versions` is what makes that true; a query over every
+    template row credits the superseded v1 and reports the post as covered — the
+    `(family_id, version)` mistake this codebase has already paid for several times.
+    """
+    ids = _corpus(session, 3)
+    family = existing_family(session, provenance=[ids[0]])
+    edit_template(session, family, provenance=[ids[1]])
+
+    left = {post.zernio_id for post in uncovered_posts(session, TemplateKind.HOOK)}
+
+    assert left == {ids[0], ids[2]}
+
+
+def test_a_retired_familys_citations_do_not_cover_anything(session):
+    """A withdrawn template is not the library speaking for a post.
+
+    Same set `propose_hooks` calls `offered`: newest version, minus RETIRED. Counting a retired
+    family's provenance would report a post as covered by something generation may not use.
+    """
+    ids = _corpus(session, 2)
+    retire(session, existing_family(session, provenance=[ids[0]]))
+
+    left = {post.zernio_id for post in uncovered_posts(session, TemplateKind.HOOK)}
+
+    assert left == set(ids)
+
+
+def test_coverage_is_asked_per_kind(session):
+    """A hook citing a post says nothing about whether a structure describes it."""
+    ids = _corpus(session, 2)
+    existing_family(session, provenance=ids)
+
+    assert uncovered_posts(session, TemplateKind.HOOK) == []
+    assert {p.zernio_id for p in uncovered_posts(session, TemplateKind.STRUCTURE)} == set(ids)
+
+
+def test_an_uncovered_run_shows_the_model_only_the_posts_nothing_covers(session):
+    ids = _corpus(session, 3)
+    existing_family(session, provenance=[ids[0], ids[1]])
+
+    llm = FakeLLM(hooks_citing(ids[2]))
+    propose_hooks(session, llm, uncovered_only=True)
+
+    # The prompt, not the return value: a flag that narrowed nothing would still return one
+    # template here, because the canned proposal cites a post that is in either sample.
+    assert "Hook number 2." in llm.user
+    assert "Hook number 0." not in llm.user
+    assert "Hook number 1." not in llm.user
+
+
+def test_an_empty_uncovered_set_returns_no_proposals_and_does_not_call_the_model(session):
+    """The loop terminating normally, and the state the operator is trying to reach.
+
+    Not an error: nothing is left for extraction to look at, which is the answer. Asserted on
+    the model never being called as well as on the empty list — a run that paid for a
+    completion over an empty sample would still return `[]`.
+    """
+    ids = _corpus(session, 2)
+    existing_family(session, provenance=ids)
+
+    llm = FakeLLM(hooks_citing(*ids))
+
+    assert propose_hooks(session, llm, uncovered_only=True) == []
+    assert llm.user is None
+
+
+def test_the_uncovered_count_falls_after_a_run_that_covers_new_posts(session):
+    """The number has to move, or it is decoration on a page beside a button."""
+    ids = _corpus(session, 3)
+    assert len(uncovered_posts(session, TemplateKind.HOOK)) == 3
+
+    propose_hooks(session, FakeLLM(hooks_citing(ids[0], ids[1])))
+
+    assert {p.zernio_id for p in uncovered_posts(session, TemplateKind.HOOK)} == {ids[2]}

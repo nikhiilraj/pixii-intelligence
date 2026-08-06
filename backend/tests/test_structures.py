@@ -742,3 +742,34 @@ def test_the_trace_records_the_families_the_model_could_reconcile_into(session):
     (trace,) = session.exec(select(GenerationTrace)).all()
     assert trace.input_artifact_ids["families"] == f"{family.family_id}/1"
     assert (trace.prompt_name, trace.prompt_version) == ("extraction.structures", "2.0.0")
+
+
+def test_an_uncovered_run_shows_the_model_only_the_posts_no_structure_describes(session):
+    """The leftover loop, asked of structures.
+
+    Deliberately a separate set from the hooks one: a post a hook speaks for may still have no
+    structure describing it, so a shared "covered" set would silently shrink this sample by
+    whatever hook extraction happened to have found.
+    """
+    ids = _corpus(session, 3)
+    existing_family(session, provenance=[ids[0], ids[1]])
+
+    llm = FakeLLM(structures_citing(ids[2]))
+    propose_structures(session, llm, uncovered_only=True)
+
+    # The prompt, not the return value: a flag that narrowed nothing still returns one
+    # structure here, because the canned proposal cites a post that is in either sample.
+    assert "Post body number 2." in llm.user
+    assert "Post body number 0." not in llm.user
+    assert "Post body number 1." not in llm.user
+
+
+def test_a_corpus_every_structure_already_describes_returns_nothing_and_calls_no_model(session):
+    """The loop terminating normally — no proposals, and never a raise."""
+    ids = _corpus(session, 2)
+    existing_family(session, provenance=ids)
+
+    llm = FakeLLM(structures_citing(*ids))
+
+    assert propose_structures(session, llm, uncovered_only=True) == []
+    assert llm.user is None

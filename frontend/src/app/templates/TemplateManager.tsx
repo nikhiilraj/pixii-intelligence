@@ -15,7 +15,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { postBlob, postJson, type Cohort, type Template, type TemplateKind } from "@/lib/api";
+import {
+  postBlob,
+  postJson,
+  type Cohort,
+  type Template,
+  type TemplateKind,
+  type UncoveredCounts,
+} from "@/lib/api";
 
 import TemplatePreview from "./TemplatePreview";
 
@@ -61,9 +68,22 @@ function cohortOf(template: Template): string | null {
  *  The structures path used to carry `sample_size=27` as well. That parameter is gone from the
  *  route: extraction reads the whole corpus, so there is no smaller sample to ask for. Left in
  *  place it would still have been *sent* — FastAPI ignores an unknown query parameter rather
- *  than refusing it — and a number this page appeared to choose would have decided nothing. */
-export function extractPath(what: "hooks" | "structures" | "visuals", cohort: Cohort): string {
-  return `/templates/extract/${what}?${new URLSearchParams({ cohort })}`;
+ *  than refusing it — and a number this page appeared to choose would have decided nothing.
+ *
+ *  `uncoveredOnly` narrows the run to the posts no live template of that kind cites — the count
+ *  rendered beside the buttons. It is **omitted** rather than sent as `false`, for the reason
+ *  the deleted `sample_size` records: a route that lost the parameter would ignore
+ *  `uncovered_only=false` exactly as it ignores an unknown one, so sending it would prove
+ *  nothing about the other end. The visuals button never passes it — that sample is five
+ *  images, not the corpus. */
+export function extractPath(
+  what: "hooks" | "structures" | "visuals",
+  cohort: Cohort,
+  uncoveredOnly = false,
+): string {
+  const query = new URLSearchParams({ cohort });
+  if (uncoveredOnly) query.set("uncovered_only", "true");
+  return `/templates/extract/${what}?${query}`;
 }
 
 const BLANK_BODY: Record<TemplateKind, string> = {
@@ -166,16 +186,53 @@ function producedBy(template: Template): { raw: string; example: string } {
   };
 }
 
+/** How many posts of one cohort no live template of `kind` covers, worded for a reader.
+ *
+ *  **A measured zero prints `0`.** It says extraction looked across the corpus and nothing was
+ *  left over — the leftover loop terminating, which is the state this number exists to reach.
+ *  That is not the never-collected absence the `—` rule is about: those are columns the database
+ *  never filled (a hand-authored template's provenance, an unmeasured `impressions`), and this
+ *  count is computed fresh from rows that exist on every read. `{n || "—"}` here would turn the
+ *  answer into a shrug, and it would look entirely correct on screen.
+ *
+ *  `—` belongs to exactly one case: `counts` is undefined because `GET /templates/uncovered`
+ *  failed, so no number was collected at all. */
+function UncoveredCount({
+  kind,
+  counts,
+}: {
+  kind: "hook" | "structure";
+  counts: Record<"hook" | "structure", number> | undefined;
+}) {
+  const count = counts?.[kind];
+  return (
+    <span className="text-xs text-muted">
+      no {kind} covers{" "}
+      <span className="font-mono tabular-nums">
+        {/* Singular below, for the reason the row's coverage line is: "1 posts" beside a number
+            someone is about to act on reads as a rounding. */}
+        {count === undefined ? "—" : `${count} post${count === 1 ? "" : "s"}`}
+      </span>
+    </span>
+  );
+}
+
 export default function TemplateManager({
   initial,
+  uncovered,
   defaultMode = "list",
 }: {
   initial: Template[];
+  /** `GET /templates/uncovered`, or undefined when that read failed — see `UncoveredCount`.
+   *  Read off the server component rather than fetched here: `send` already calls
+   *  `router.refresh()`, so the counts fall after an extract run with no wiring of their own. */
+  uncovered?: UncoveredCounts;
   defaultMode?: "review" | "list";
 }) {
   const router = useRouter();
   const [kind, setKind] = useState<TemplateKind>("hook");
   const [cohort, setCohort] = useState<Cohort>("voice");
+  const [leftoversOnly, setLeftoversOnly] = useState(false);
   const [name, setName] = useState("");
   const [body, setBody] = useState(BLANK_BODY.hook);
   const [editing, setEditing] = useState<Template | null>(null);
@@ -488,18 +545,24 @@ export default function TemplateManager({
           </Select>
           <Button
             variant="outline"
-            onClick={() => send(extractPath("hooks", cohort))}
+            onClick={() => send(extractPath("hooks", cohort, leftoversOnly))}
             disabled={busy}
           >
             {busy ? "Working…" : "Extract hooks from top posts"}
           </Button>
+          <UncoveredCount kind="hook" counts={uncovered?.[cohort]} />
           <Button
             variant="outline"
-            onClick={() => send(extractPath("structures", cohort))}
+            onClick={() => send(extractPath("structures", cohort, leftoversOnly))}
             disabled={busy}
           >
             Extract structures
           </Button>
+          <UncoveredCount kind="structure" counts={uncovered?.[cohort]} />
+          {/* No flag on this one, and that is the decision rather than an oversight: visual
+              extraction reads the strongest five posts that carry a still image, so "the posts
+              nothing covers" is a set it never looks at — 59 of 274 posts have an image at all.
+              `GET /templates/uncovered` reports no visual count for the same reason. */}
           <Button
             variant="outline"
             onClick={() => send(extractPath("visuals", cohort))}
@@ -507,6 +570,26 @@ export default function TemplateManager({
           >
             Extract visual layouts
           </Button>
+          {/* `basis-full`, so the checkbox and the sentence start a row of their own rather than
+              wrapping into the gap after whichever button happens to end the line. */}
+          <label className="flex basis-full items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={leftoversOnly}
+              onChange={(event) => setLeftoversOnly(event.target.checked)}
+              disabled={busy}
+              className="size-4 accent-accent"
+            />
+            <span>
+              Read only the posts nothing covers yet
+              <span className="ml-1 text-muted">
+                — the counts above. Everything else about the run is unchanged, so it is the same
+                extraction over the leftovers; run it until two rounds return nothing new. Expect
+                less back than a full pass gives: a shape appearing once is refused, so a run over
+                three stragglers can correctly return nothing. Visual layouts ignore this.
+              </span>
+            </span>
+          </label>
           <span className="text-xs text-muted">
             Proposes patterns from the strongest posts in the chosen cohort. Visual extraction
             takes longer because every proposal is test-rendered. Nothing becomes usable until

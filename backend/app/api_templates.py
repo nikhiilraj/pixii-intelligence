@@ -12,6 +12,7 @@ from app.extraction import (
     propose_hooks,
     propose_structures,
     propose_visuals,
+    uncovered_posts,
 )
 from app.generation import render_template
 from app.llm import LLMResponseError
@@ -125,12 +126,48 @@ def list_versions(session: SessionDep, template_id: int) -> list[Template]:
     return list(session.exec(statement).all())
 
 
+@router.get("/uncovered")
+def uncovered_counts(session: SessionDep, platform: str = "linkedin") -> dict[str, dict[str, int]]:
+    """How many posts of each cohort no live template of each kind speaks for.
+
+    `{"voice": {"hook": 144, "structure": 144}, "inspiration": {...}}`. The first real
+    corpus-wide run left 144 of 236 posts cited by nothing, and nobody could see that number
+    without writing SQL. It is what the `uncovered_only` extract runs are aimed at, and the
+    thing that tells an operator when to stop running them.
+
+    **A count of a corpus fact, and deliberately nothing more.** No ordering, no "best", no
+    sort control anywhere downstream — `Never rank` — and no per-template breakdown, which
+    would be a league table of coverage in a thin disguise.
+
+    **Both cohorts in one response, rather than a `cohort` parameter.** The chosen cohort is
+    client state on a page whose data is read by a server component, so a parameter would mean
+    the page fetching again on every change of a select; four integers cost less than that. The
+    page re-reads after an extract run because `send()` refreshes the route, which is what makes
+    the number fall.
+
+    **VISUAL is absent on purpose.** Visual extraction reads the strongest five posts that have
+    a still image, so a corpus-wide uncovered count would describe a set that route never looks
+    at — 59 of 274 posts carry an image at all. Adding it here would be a number nothing can act
+    on. See "Why visuals are out" in the corpus-wide extraction design.
+    """
+    return {
+        cohort.value: {
+            kind.value: len(
+                uncovered_posts(session, kind, platform=platform, cohort=cohort)
+            )
+            for kind in (TemplateKind.HOOK, TemplateKind.STRUCTURE)
+        }
+        for cohort in Cohort
+    }
+
+
 @router.post("/extract/hooks", status_code=201)
 def extract_hooks(
     session: SessionDep,
     llm: LLMDep,
     platform: str = "linkedin",
     cohort: Cohort = Cohort.VOICE,
+    uncovered_only: bool = False,
 ) -> list[Template]:
     """Ask the model which hook patterns recur across every non-excluded post of the cohort.
 
@@ -141,9 +178,15 @@ def extract_hooks(
 
     `cohort=inspiration` reads other creators' posts instead of Monte's; the resulting hooks
     are still only shapes, never a voice.
+
+    `uncovered_only=true` narrows the sample to the posts no live hook cites — the count
+    `GET /templates/uncovered` reports — and changes nothing downstream. An empty uncovered set
+    answers `201` with `[]` rather than an error: that is the loop terminating normally.
     """
     try:
-        proposals = propose_hooks(session, llm, platform=platform, cohort=cohort)
+        proposals = propose_hooks(
+            session, llm, platform=platform, cohort=cohort, uncovered_only=uncovered_only
+        )
     except (ExtractionError, LLMResponseError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -160,6 +203,7 @@ def extract_structures(
     platform: str = "linkedin",
     focus: str = "",
     cohort: Cohort = Cohort.VOICE,
+    uncovered_only: bool = False,
 ) -> list[Template]:
     """Ask the model which post structures recur across every non-excluded post of the cohort.
 
@@ -173,6 +217,9 @@ def extract_structures(
     exist to prevent. `focus` names a post type to describe specifically and still works —
     it is the request `sample_size` was ever standing in for. `cohort=inspiration` reads other
     creators' posts instead of Monte's.
+
+    `uncovered_only=true` is `extract_hooks`' flag asked of structures — the posts no live
+    structure cites, which is a different set from the one hooks leave behind.
     """
     try:
         proposals = propose_structures(
@@ -181,6 +228,7 @@ def extract_structures(
             platform=platform,
             focus=focus,
             cohort=cohort,
+            uncovered_only=uncovered_only,
         )
     except (ExtractionError, LLMResponseError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

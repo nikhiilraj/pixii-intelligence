@@ -1,14 +1,22 @@
 import Link from "next/link";
 
 import { ApiFailureNotice } from "@/components/api-failure";
-import { getJson, type Template } from "@/lib/api";
+import { getJson, type Template, type UncoveredCounts } from "@/lib/api";
 
 import TemplateManager from "./TemplateManager";
 
 export const dynamic = "force-dynamic";
 
 export default async function TemplatesPage() {
-  const templates = await getJson<Template[]>("/templates");
+  /* Two reads, and only the first can empty the page. A failed `/templates/uncovered` is passed
+     through as `undefined`, which renders `—` beside the extract buttons — the count was never
+     collected, so no number is claimed — while the library itself still lists and reviews. The
+     count is read here rather than in the client component because `send` already calls
+     `router.refresh()`, so it falls after an extract run with no polling of its own. */
+  const [templates, uncovered] = await Promise.all([
+    getJson<Template[]>("/templates"),
+    getJson<UncoveredCounts>("/templates/uncovered"),
+  ]);
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-16">
@@ -28,7 +36,11 @@ export default async function TemplatesPage() {
       </p>
 
       {templates.ok ? (
-        <TemplateManager initial={templates.data} defaultMode="review" />
+        <TemplateManager
+          initial={templates.data}
+          uncovered={uncovered.ok ? uncovered.data : undefined}
+          defaultMode="review"
+        />
       ) : (
         <ApiFailureNotice failure={templates} className="mt-8" />
       )}

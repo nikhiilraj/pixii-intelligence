@@ -489,3 +489,104 @@ describe("an empty library", () => {
     expect(screen.getByRole("button", { name: /extract hooks/i })).toBeInTheDocument();
   });
 });
+
+/* The leftover loop. The first corpus-wide run produced 19 templates citing 92 distinct posts
+   and left 144 of 236 covered by nothing, and reading that number meant writing SQL. It sits
+   beside the controls that act on it, per kind, because the extract routes are per kind.
+
+   Every one of these counts is a MEASURED zero when it is zero — extraction looked and there
+   was nothing left over, which is the loop terminating. Printing `—` for it would be the
+   absence-as-measurement rule read backwards, and it would look correct. The dash belongs to
+   one case only: the count was never read at all, because that request failed. */
+describe("the uncovered-post count beside the extract controls", () => {
+  const COUNTS = {
+    voice: { hook: 144, structure: 12 },
+    inspiration: { hook: 7, structure: 3 },
+  } as const;
+
+  it("names the kind each count belongs to, from the cohort that is selected", () => {
+    render(<TemplateManager initial={LIBRARY} uncovered={COUNTS} />);
+
+    // Per kind and by name, not "144 appears somewhere": rendering the hook count beside the
+    // structures button is a mutation a looser assertion cannot see. The two numbers differ
+    // between the cohorts as well, so reading `inspiration` while showing "voice" fails here.
+    expect(screen.getByText(/^no hook covers/)).toHaveTextContent("no hook covers 144 posts");
+    expect(screen.getByText(/^no structure covers/)).toHaveTextContent(
+      "no structure covers 12 posts",
+    );
+  });
+
+  it("prints a measured zero as zero, because it is the answer the loop is run for", () => {
+    render(
+      <TemplateManager
+        initial={LIBRARY}
+        uncovered={{ voice: { hook: 0, structure: 1 }, inspiration: { hook: 0, structure: 0 } }}
+      />,
+    );
+
+    expect(screen.getByText(/^no hook covers/)).toHaveTextContent("no hook covers 0 posts");
+    expect(screen.queryByText(/no hook covers —/)).toBeNull();
+    // Singular, for the same reason the coverage row is: "1 posts" beside a decision reads as
+    // a rounding.
+    expect(screen.getByText(/^no structure covers/)).toHaveTextContent(
+      "no structure covers 1 post",
+    );
+  });
+
+  it("prints a dash when the count was never read", () => {
+    // `page.tsx` passes nothing when `GET /templates/uncovered` fails. That is the one case
+    // the dash is for — no number was collected, as against a number that came back zero.
+    render(<TemplateManager initial={LIBRARY} />);
+
+    expect(screen.getByText(/^no hook covers/)).toHaveTextContent("no hook covers —");
+    expect(screen.queryByText(/no hook covers 0/)).toBeNull();
+  });
+
+  it("narrows the run to the leftovers only while the box is ticked", async () => {
+    const fetchStub = stubApi();
+    render(<TemplateManager initial={LIBRARY} uncovered={COUNTS} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /extract hooks/i }));
+    await waitFor(() => expect(fetchStub).toHaveBeenCalled());
+    expect(requests(fetchStub)).toEqual([
+      { path: "/templates/extract/hooks?cohort=voice", method: "POST", body: undefined },
+    ]);
+
+    fireEvent.click(screen.getByLabelText(/only the posts nothing covers/i));
+    fireEvent.click(screen.getByRole("button", { name: /extract structures/i }));
+
+    await waitFor(() => expect(fetchStub).toHaveBeenCalledTimes(2));
+    expect(requests(fetchStub)[1]).toEqual({
+      path: "/templates/extract/structures?cohort=voice&uncovered_only=true",
+      method: "POST",
+      body: undefined,
+    });
+  });
+
+  it("never narrows the visual run, whose sample is five images and not the corpus", async () => {
+    const fetchStub = stubApi();
+    render(<TemplateManager initial={LIBRARY} uncovered={COUNTS} />);
+
+    fireEvent.click(screen.getByLabelText(/only the posts nothing covers/i));
+    fireEvent.click(screen.getByRole("button", { name: /extract visual layouts/i }));
+
+    await waitFor(() => expect(fetchStub).toHaveBeenCalled());
+    expect(requests(fetchStub)).toEqual([
+      { path: "/templates/extract/visuals?cohort=voice", method: "POST", body: undefined },
+    ]);
+  });
+
+  it("puts the flag in the query only when it is on", () => {
+    // On `extractPath` for the reason the cohort mapping is: it is the one function both
+    // buttons call, so there is no second copy of the query-building for a mutation to hide in.
+    // Omitted rather than sent as `false`: FastAPI defaults it, and a route that lost the
+    // parameter would silently ignore `uncovered_only=false` in exactly the same way.
+    expect(extractPath("hooks", "voice", true)).toBe(
+      "/templates/extract/hooks?cohort=voice&uncovered_only=true",
+    );
+    expect(extractPath("hooks", "voice", false)).toBe("/templates/extract/hooks?cohort=voice");
+    expect(extractPath("structures", "inspiration", true)).toBe(
+      "/templates/extract/structures?cohort=inspiration&uncovered_only=true",
+    );
+  });
+});

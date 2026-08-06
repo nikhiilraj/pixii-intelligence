@@ -70,6 +70,20 @@ export type Template = {
   notes: string;
 };
 
+/** `GET /templates/uncovered` — how many posts of each cohort no live template of each kind
+ *  speaks for. "Live" is the newest version of every non-retired family.
+ *
+ *  **Every value is a measured count, so `0` renders as `0`.** It means extraction looked and
+ *  found nothing left over — the loop terminated — which is the opposite of the never-collected
+ *  absence `—` stands for elsewhere in this file. `{n || "—"}` over one of these is the
+ *  absence-as-measurement rule read backwards, and it looks entirely correct on screen.
+ *
+ *  `visual` is deliberately not a key: visual extraction reads the strongest five posts that
+ *  carry an image, so a corpus-wide count would describe a set that route never reads.
+ *
+ *  A count, and never a ranking — nothing sorts by it and no template is named by it. */
+export type UncoveredCounts = Record<Cohort, Record<"hook" | "structure", number>>;
+
 // `AssetKind` in backend/app/models/asset.py. A kind is a filter, not a permission.
 export type AssetKind = "logo" | "product" | "screenshot" | "brand" | "photo";
 

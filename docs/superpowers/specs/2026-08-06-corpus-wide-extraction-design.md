@@ -194,7 +194,7 @@ prevent. `focus` stays — naming a post type to describe is still a real reques
 | Per-post incremental matcher | The corpus stops fitting in one call |
 | Embeddings / clustering | An LLM call demonstrably mis-groups patterns |
 | An automatic re-run trigger | Someone forgets the button and it costs something. `post` has no `created_at`, so "posts since last extraction" would need new state |
-| An `unmatched` bucket in the schema | Something reads it. Derivable as `all_ids - union(provenance)` |
+| ~~An `unmatched` bucket in the schema~~ | **Built.** Something reads it: the first real run left 144 of 236 posts cited by nothing, and `extraction.uncovered_posts` derives the set as promised — `all_ids - union(provenance)` over the newest version of each non-retired family, never over every row. `GET /templates/uncovered` counts it per cohort and kind beside the extract controls, and `uncovered_only` points a run at it. Still not in the *schema*: it is derived per request, so no column and no table |
 | Post-selection UI | Never — `excluded_from_extraction` already does this, and persists |
 | Holdout validation (extract from 80%, check coverage on 20%) | The one-time read below stops being trusted |
 | Any ranking or sort-by-performance control | Never. `Never rank` |

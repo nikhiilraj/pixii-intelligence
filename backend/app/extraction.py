@@ -157,6 +157,50 @@ def _strongest_posts(
     return list(session.exec(statement).all())
 
 
+def uncovered_posts(
+    session: Session,
+    kind: TemplateKind,
+    *,
+    platform: str = "linkedin",
+    cohort: Cohort = Cohort.VOICE,
+) -> list[Post]:
+    """The cohort's posts that no live template of this kind cites.
+
+    "Live" is the newest version of every non-RETIRED family — the set `propose_hooks` calls
+    `offered`, resolved through `latest_versions`. **Counting every template row instead would
+    be wrong in one specific way:** a v1 that cited a post and a v2 that dropped it means the
+    current library does not cover that post, and the superseded v1 would report it as covered,
+    hiding exactly the gap this exists to show. That is the `(family_id, version)` mistake this
+    codebase has paid for several times. RETIRED families are dropped for the reason `offered`
+    drops them: a withdrawn template is not the library speaking for anything.
+
+    Read as a count beside the extract controls, and as the sample of an `uncovered_only` run.
+    Both are the same question — what is the library still not speaking for — so they are one
+    function rather than a query and a filter that can drift apart.
+
+    ponytail: two queries and a set difference in Python, not SQL. 236 posts against ~20
+    templates; push the difference into the query when the corpus stops fitting in memory.
+
+    ponytail: cohort-blind on the template side, exactly as `propose_hooks` records for
+    `families` and for the same reason — the legacy families this reconciliation exists to
+    collapse were written before `body["cohort"]` existed, so filtering on it would hide them.
+    Harmless here because provenance holds per-post ids: a family read from the inspiration
+    cohort cites inspiration posts, which are not in a voice sample to subtract from.
+    """
+    cohort = Cohort(cohort)
+    covered = {
+        zernio_id
+        for template in latest_versions(session, kind)
+        if template.status is not TemplateStatus.RETIRED
+        for zernio_id in template.provenance
+    }
+    return [
+        post
+        for post in _strongest_posts(session, platform, None, cohort)
+        if post.zernio_id not in covered
+    ]
+
+
 def _visual_sample(
     session: Session, platform: str, sample_size: int, cohort: Cohort
 ) -> list[tuple[Post, bytes]]:
@@ -600,6 +644,7 @@ def propose_hooks(
     *,
     platform: str = "linkedin",
     cohort: Cohort = Cohort.VOICE,
+    uncovered_only: bool = False,
     # Minted here when the caller does not supply one, so a trace row always groups the
     # calls of one extraction rather than sitting alone. `POST /templates/extract` runs one
     # kind at a time, so one call is usually the whole operation — but the id is the seam
@@ -627,12 +672,24 @@ def propose_hooks(
     `edit_template` cannot make on its own. The rest arrive PROPOSED for an optional human
     look. Nothing here demotes or retires anything: the append-only write is what protects
     "nothing is lost", not the click.
+
+    **`uncovered_only` narrows the sample to the posts no live hook cites, and changes nothing
+    else** — same prompt, same coverage gate, same reconciliation, same families/offered split.
+    It is the leftover loop: run it, see what comes back, repeat until two rounds return nothing
+    new. Expect it to yield less than a full pass did and expect that to be correct — the prompt
+    refuses a shape that appears once, so a run over three stragglers should return nothing.
+    An empty uncovered set falls through the `not posts` return below: no proposals, no model
+    call, no raise. That is the loop terminating, and it is the state the operator wants.
     """
     # Coerced at the boundary: Cohort is a StrEnum, so a bare "voice" compares equal to
     # Cohort.VOICE but fails the identity checks below and has no .value — it would route
     # silently to the wrong cohort. Normalising here keeps everything downstream an enum.
     cohort = Cohort(cohort)
-    posts = _strongest_posts(session, platform, None, cohort)
+    posts = (
+        uncovered_posts(session, TemplateKind.HOOK, platform=platform, cohort=cohort)
+        if uncovered_only
+        else _strongest_posts(session, platform, None, cohort)
+    )
     if not posts:
         return []
 
@@ -867,6 +924,7 @@ def propose_structures(
     platform: str = "linkedin",
     focus: str = "",
     cohort: Cohort = Cohort.VOICE,
+    uncovered_only: bool = False,
     correlation_id: str | None = None,
 ) -> list[Template]:
     """Propose post structures from every non-excluded post of the cohort, in full text.
@@ -883,6 +941,8 @@ def propose_structures(
 
     Reconciliation, coverage and promotion are `propose_hooks`' exactly, pointed at STRUCTURE;
     the reasoning for each is written out there and beside `_to_template` rather than repeated.
+    `uncovered_only` is its exactly too, asked of structures rather than hooks — a post a hook
+    speaks for may still have no structure describing it, so the two sets are counted apart.
     The one thing that is new here: every structure now arrives with a non-empty provenance,
     where all 15 in the library today cite nothing at all.
     """
@@ -890,7 +950,11 @@ def propose_structures(
     # Cohort.VOICE but fails the identity checks below and has no .value — it would route
     # silently to the wrong cohort. Normalising here keeps everything downstream an enum.
     cohort = Cohort(cohort)
-    posts = _strongest_posts(session, platform, None, cohort)
+    posts = (
+        uncovered_posts(session, TemplateKind.STRUCTURE, platform=platform, cohort=cohort)
+        if uncovered_only
+        else _strongest_posts(session, platform, None, cohort)
+    )
     if not posts:
         return []
 
