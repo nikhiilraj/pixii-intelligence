@@ -75,11 +75,27 @@ have names. Reconciling ~15 templates is both cheaper and an easier judgement th
 classifying 274 posts, and it is the comparison that can notice "these two are the same
 shape" — which is how 42 hooks collapse.
 
-**5 · The first run seeds from nothing.** The 9 APPROVED templates were approved by the
-model during a test run, not by a person, so there is no ground truth to preserve or
-measure against. The 61 existing families are left untouched — append-only means they cost
-nothing, `usable_templates` already keeps PROPOSED ones out of generation, and a human can
-sweep them in Studio after seeing the first run's output.
+**5 · Every non-retired family is offered for reconciliation, not just the approved ones.**
+
+This decision was reversed during the build, and the first real run vindicated the
+reversal — recorded here rather than quietly amended, because the original reasoning was
+sound and it is worth knowing why it stopped applying.
+
+The original decision offered only APPROVED families, on the grounds that a human had
+vouched for those and not for the rest, and that showing the model 42 names would make it
+cite them and preserve the explosion. The first half evaporated: the 9 APPROVED templates
+turned out to have been approved by the model during a test run, so nobody had vouched for
+anything and "approved" carried no signal. The second half is bounded by
+`MAX_HOOK_PROPOSALS` — at most 10 proposals come out of a run whatever the model is shown,
+so offering 41 families cannot produce 41 templates.
+
+What offering all of them buys is repair. A legacy family with empty or single-post
+provenance can be folded into a new version that cites real posts, keeping its
+`family_id` and whatever lineage hangs off it. The alternative orphans it.
+
+Measured on the first real run: 7 of 19 proposals folded into existing families rather
+than minting siblings. Nothing is deleted either way — append-only, and `usable_templates`
+already keeps PROPOSED rows out of generation.
 
 **6 · Visuals out.** See the end.
 
