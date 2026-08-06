@@ -225,6 +225,37 @@ describe("the cohort a template was read from", () => {
   });
 });
 
+/* How many corpus posts a template covers — the number the one-time validation read works
+   from, and the number that now decides whether a proposal is worth approving. Reading it
+   used to mean writing SQL.
+
+   The empty case is the one with teeth. Every hand-authored template has an empty
+   `provenance`, as do the 15 structures currently in the library, and that is an absence of
+   a record rather than a measurement of zero: printing `0` would claim extraction looked and
+   found nothing. Before this, the line was rendered only when `provenance.length > 0`, so a
+   row covering nothing and a row whose coverage was never recorded were the same blank. */
+describe("the coverage count on a row", () => {
+  it("counts the posts it was read from, and prints a dash where nothing was recorded", () => {
+    render(
+      <TemplateManager
+        initial={[
+          template({ id: 20, name: "read-from-three", provenance: ["p1", "p2", "p3"] }),
+          template({ id: 21, name: "read-from-one", provenance: ["p1"] }),
+          template({ id: 22, name: "hand-authored", provenance: [] }),
+        ]}
+      />,
+    );
+
+    expect(row("read-from-three").getByText(/^coverage/)).toHaveTextContent("coverage 3 posts");
+    // Singular, because "1 posts" beside a count that decides approval reads as a rounding.
+    expect(row("read-from-one").getByText(/^coverage/)).toHaveTextContent("coverage 1 post");
+    expect(row("hand-authored").getByText(/^coverage/)).toHaveTextContent("coverage —");
+    // The anti-zero assertion, stated separately: it is the whole point of the dash and the
+    // one mutation — `: 0` in place of the dash — that leaves the page looking normal.
+    expect(row("hand-authored").queryByText(/coverage 0/)).toBeNull();
+  });
+});
+
 describe("the extraction cohort reaching the query string", () => {
   it("sends the chosen cohort in the hooks query", async () => {
     const fetchStub = stubApi();
@@ -241,18 +272,18 @@ describe("the extraction cohort reaching the query string", () => {
     ]);
   });
 
-  it("sends the sample size and the cohort in the structures query", async () => {
+  it("sends the cohort in the structures query, and nothing the route no longer reads", async () => {
     const fetchStub = stubApi();
     render(<TemplateManager initial={LIBRARY} />);
 
     fireEvent.click(screen.getByRole("button", { name: /extract structures/i }));
 
     await waitFor(() => expect(fetchStub).toHaveBeenCalled());
-    // Param order included: this endpoint already carries a param and the other does not, so a
-    // hand-concatenated `?`/`&` is the mistake the exact string catches.
+    // The exact string, so a re-added `sample_size` fails here: FastAPI ignores an unknown
+    // query parameter, so nothing else on either side of the wire would notice one.
     expect(requests(fetchStub)).toEqual([
       {
-        path: "/templates/extract/structures?sample_size=27&cohort=voice",
+        path: "/templates/extract/structures?cohort=voice",
         method: "POST",
         body: undefined,
       },
@@ -279,7 +310,7 @@ describe("the extraction cohort reaching the query string", () => {
     expect(extractPath("hooks", "voice")).toBe("/templates/extract/hooks?cohort=voice");
     expect(extractPath("hooks", "inspiration")).toBe("/templates/extract/hooks?cohort=inspiration");
     expect(extractPath("structures", "inspiration")).toBe(
-      "/templates/extract/structures?sample_size=27&cohort=inspiration",
+      "/templates/extract/structures?cohort=inspiration",
     );
     expect(extractPath("visuals", "inspiration")).toBe(
       "/templates/extract/visuals?cohort=inspiration",

@@ -97,6 +97,34 @@ afterEach(() => {
   refresh.mockReset();
 });
 
+/* The same coverage count the list row carries, on the screen where the decision is actually
+   made. It sits in the header beside the status badge, so it is read at a glance and in a
+   register where "0" is a number rather than a sentence — which is exactly why the unguarded
+   version was wrong: every hand-authored template, and all 15 structures in the library today,
+   rendered "read from 0 posts" for an absence nobody ever measured.
+
+   The prose section further down the page ("No source post was recorded for this proposal.")
+   already handled the empty case correctly, which is likely why the header line survived: the
+   screen read as though the case were covered. */
+describe("the coverage count on the proposal being reviewed", () => {
+  it("counts the posts it was read from", () => {
+    render(
+      <TemplateManager initial={[template({ provenance: ["p1", "p2"] })]} defaultMode="review" />,
+    );
+
+    expect(screen.getByText(/^read from/)).toHaveTextContent("read from 2 posts");
+  });
+
+  it("prints a dash, not a zero, where no source post was ever recorded", () => {
+    render(<TemplateManager initial={[template({ provenance: [] })]} defaultMode="review" />);
+
+    expect(screen.getByText(/^read from/)).toHaveTextContent("read from —");
+    // The anti-zero assertion, stated separately: `0` here claims extraction looked and found
+    // nothing, and coverage is becoming the gate that decides approval.
+    expect(screen.queryByText(/read from 0/)).toBeNull();
+  });
+});
+
 describe("review mode vs list mode", () => {
   it("shows the queue, not the authoring list, when defaultMode is review", () => {
     render(<TemplateManager initial={[A, B, C]} defaultMode="review" />);

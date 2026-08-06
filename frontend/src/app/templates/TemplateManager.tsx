@@ -52,19 +52,18 @@ function cohortOf(template: Template): string | null {
 
 /** The path an extract button posts to, cohort and all.
  *
- *  A function rather than two inline template strings because `cohort` is the one value on this
- *  page that reaches a query string, and the Radix trigger that sets it cannot be driven in
- *  jsdom — so this is the only place the mapping from a chosen cohort to the sent query can be
- *  asserted for both cohorts. Built with `URLSearchParams` rather than concatenated: one of
- *  these endpoints already carries a param and the other does not, so `?` vs `&` is not the
- *  same by hand. Both call sites go through it; leaving one inline would put a second copy
- *  where a mutation could hide. */
+ *  A function rather than three inline template strings because `cohort` is the one value on
+ *  this page that reaches a query string, and the Radix trigger that sets it cannot be driven
+ *  in jsdom — so this is the only place the mapping from a chosen cohort to the sent query can
+ *  be asserted for both cohorts. All three call sites go through it; leaving one inline would
+ *  put a second copy where a mutation could hide.
+ *
+ *  The structures path used to carry `sample_size=27` as well. That parameter is gone from the
+ *  route: extraction reads the whole corpus, so there is no smaller sample to ask for. Left in
+ *  place it would still have been *sent* — FastAPI ignores an unknown query parameter rather
+ *  than refusing it — and a number this page appeared to choose would have decided nothing. */
 export function extractPath(what: "hooks" | "structures" | "visuals", cohort: Cohort): string {
-  // Annotated: without it the ternary widens to a union carrying `sample_size?: undefined`,
-  // which `URLSearchParams` does not accept.
-  const params: Record<string, string> =
-    what === "structures" ? { sample_size: "27", cohort } : { cohort };
-  return `/templates/extract/${what}?${new URLSearchParams(params)}`;
+  return `/templates/extract/${what}?${new URLSearchParams({ cohort })}`;
 }
 
 const BLANK_BODY: Record<TemplateKind, string> = {
@@ -370,8 +369,16 @@ export default function TemplateManager({
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   <Badge variant={STATUS_VARIANT[current.status]}>{current.status}</Badge>
                   <CohortTag template={current} />
+                  {/* Same rule as the list row's coverage line, and it was unguarded here: this
+                      printed "read from 0 posts" for every hand-authored template and all 15
+                      structures now in the library, none of which had a source recorded rather
+                      than measured as none. The prose section below already said the true thing,
+                      which is probably why this survived — but a reader decides on the header. */}
                   <span className="text-caption text-muted">
-                    read from {current.provenance.length} post{current.provenance.length === 1 ? "" : "s"}
+                    read from{" "}
+                    {current.provenance.length > 0
+                      ? `${current.provenance.length} post${current.provenance.length === 1 ? "" : "s"}`
+                      : "—"}
                   </span>
                 </div>
 
@@ -573,11 +580,27 @@ export default function TemplateManager({
                     )}
                   </span>
                 </div>
-                {t.provenance.length > 0 && (
-                  <p className="mt-1 text-xs text-muted">
-                    from {t.provenance.length} post{t.provenance.length === 1 ? "" : "s"}
-                  </p>
-                )}
+                {/* How many corpus posts this template covers. It is on every row, including
+                    the empty one — the old `provenance.length > 0 &&` guard rendered nothing
+                    there, so a row that covers nothing and a row whose coverage was never
+                    recorded were the same blank, and reading either meant writing SQL.
+
+                    Empty provenance prints `—`, never `0`. Every hand-authored template has
+                    one, as do the 15 structures in the library today: no extraction ever
+                    recorded a source for them, which is not the same claim as "extraction
+                    looked and found no post". The units go with the number and not with the
+                    dash, because "— posts" would be that same claim in another shape.
+
+                    A count, and deliberately nothing more: no sort control, no ordering by it,
+                    no "top". ~3 samples across a 12.7× spread does not support a ranking. */}
+                <p className="mt-1 text-xs text-muted">
+                  coverage{" "}
+                  <span className="font-mono tabular-nums">
+                    {t.provenance.length > 0
+                      ? `${t.provenance.length} post${t.provenance.length === 1 ? "" : "s"}`
+                      : "—"}
+                  </span>
+                </p>
                 {preview?.id === t.id && (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
